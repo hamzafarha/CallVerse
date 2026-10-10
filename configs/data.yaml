@@ -1,0 +1,13 @@
+# CallVerse Data Generation and Preprocessing Configuration
+
+generation:
+  # Synthetic data volume, date ranges, and contact channel distributions
+
+features:
+  # Feature extraction windows, aggregations, and encoding
+
+preprocessing:
+  # Missing value strategies, normalizations, and splits
+
+validation:
+  # Schema validation and data drift threshold parameters

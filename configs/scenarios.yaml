@@ -1,0 +1,13 @@
+# CallVerse Scenarios Configuration
+
+baseline:
+  # Standard steady-state operational parameters
+
+surge:
+  # High-volume surge events, promotions, and flash sale load
+
+outage:
+  # Service outage scenarios with elevated customer churn risk
+
+understaffed:
+  # Workforce shortage and shift absence scenario configurations

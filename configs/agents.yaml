@@ -1,0 +1,13 @@
+# CallVerse Agents Configuration
+
+client:
+  # Persona profiles, sentiment drift, and customer patience thresholds
+
+advisor:
+  # Knowledge retrieval index settings, chunking, and prompt templates
+
+quality:
+  # Evaluation rubric criteria, reviewer weights, and validation rules
+
+workforce:
+  # RL action space, observation features, and routing policies

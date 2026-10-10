@@ -1,0 +1,13 @@
+# CallVerse Discrete-Event Simulation Configuration
+
+engine:
+  # SimPy simulation clock, run duration, and random seed
+
+resources:
+  # Agent desk pools, skill tiers, and capacity constraints
+
+queues:
+  # Queue discipline (FIFO, priority, skill-based) and patience limits
+
+service:
+  # Service time distribution parameters by contact topic

@@ -1,0 +1,125 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "callverse"
+version = "0.1.0"
+description = "Digital twin of an e-commerce customer-contact center"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "CallVerse Team" },
+]
+dependencies = [
+    "pydantic",
+    "pyyaml",
+    "typer",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "simpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+    "import-linter",
+    "types-PyYAML",
+]
+heavy = [
+    "torch",
+    "langgraph",
+    "stable-baselines3",
+    "fastapi",
+    "streamlit",
+    "ortools",
+]
+
+[project.scripts]
+callverse = "callverse.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/callverse"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+packages = ["callverse"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.importlinter]
+root_package = "callverse"
+
+[[tool.importlinter.contracts]]
+name = "Data layer isolation"
+type = "forbidden"
+source_modules = [
+    "callverse.data",
+]
+forbidden_modules = [
+    "callverse.agents",
+    "callverse.twin",
+    "callverse.orchestration",
+    "callverse.evaluation",
+    "callverse.api",
+    "callverse.dashboard",
+]
+
+[[tool.importlinter.contracts]]
+name = "Simulation layer isolation"
+type = "forbidden"
+source_modules = [
+    "callverse.simulation",
+]
+forbidden_modules = [
+    "callverse.agents",
+    "callverse.twin",
+    "callverse.orchestration",
+    "callverse.evaluation",
+    "callverse.api",
+    "callverse.dashboard",
+]
+
+[[tool.importlinter.contracts]]
+name = "Agents layer allowed imports"
+type = "forbidden"
+source_modules = [
+    "callverse.agents",
+]
+forbidden_modules = [
+    "callverse.twin",
+    "callverse.orchestration",
+    "callverse.evaluation",
+    "callverse.api",
+    "callverse.dashboard",
+]
+
+[[tool.importlinter.contracts]]
+name = "Twin layer allowed imports"
+type = "forbidden"
+source_modules = [
+    "callverse.twin",
+]
+forbidden_modules = [
+    "callverse.orchestration",
+    "callverse.evaluation",
+    "callverse.api",
+    "callverse.dashboard",
+]

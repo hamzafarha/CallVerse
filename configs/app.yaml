@@ -1,0 +1,13 @@
+# CallVerse Application Configuration
+
+app:
+  # General application metadata and environment settings
+
+server:
+  # REST API host, port, and worker configuration
+
+dashboard:
+  # Streamlit dashboard port and interface settings
+
+logging:
+  # Log level, handlers, and format configuration
