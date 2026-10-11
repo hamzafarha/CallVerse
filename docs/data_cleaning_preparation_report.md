@@ -399,4 +399,4 @@ Decisions on how later phases treat flagged records have **not** been made in th
 
 ## Method note
 
-All figures in this report come from the executed notebook `notebooks/03_data_cleaning_preparation.ipynb`, run top to bottom with a Jupyter kernel (Python 3.12, pandas 2.2.2, pyarrow 17.0.0) on the local Olist CSVs. It was executed both from `notebooks/` and from the project root, with no errors. No value in the notebook is copied from earlier reports; all counts are computed from the source files. Late-delivery and customer-identifier figures supersede the corresponding statements in the Phase 1B notebook and report.
+All figures in this report come from the executed notebook `notebooks/03_data_cleaning_preparation.ipynb`, run top to bottom with a Jupyter kernel (Python 3.12, pandas 2.2.2, pyarrow 17.0.0) on the local Olist CSVs. It was executed both from `notebooks/` and from the project root, with no errors. No value in the notebook is copied from earlier reports; all counts are computed from the source files. The late-delivery and customer-identifier findings were also applied to the revised Phase 1B notebook and report, so the three phases now agree.
