@@ -259,6 +259,7 @@ The notebook selects the 77 final columns and writes a catalog entry for each. I
 | Payment total preserved | Passed |
 | `item_count` empty exactly when `has_items` is `False` | Passed |
 | No negative values in the four milestone durations | Passed |
+| All yes/no columns use a boolean type (nullable where values can be unknown) | Passed |
 
 **Missing values.** 41 of the 77 columns have missing values, from three sources, none of them imputed:
 
