@@ -85,6 +85,20 @@ generation:
     # Time of day: contacts follow the hourly profile of Olist purchases (customers' online hours).
     hour_profile: olist_purchase_hours
 
+    # Intent groups for forecasting. Single intents such as payment_issue are too rare to
+    # forecast on their own (most days would have zero contacts), so they are grouped.
+    intent_groups:
+      wismo: [track_order, track_delivery, delivery_time, delivery_issue]
+      cancel_refund: [cancel_order, request_refund, refund_status]
+      post_delivery: [product_issue, wrong_item, damaged_delivery, missing_item, return_product,
+                      return_product_online, exchange_product]
+      order_admin: [change_order, request_invoice, payment_issue]
+
+    # Message sampling from Bitext (Phase 1E-e)
+    messages:
+      exclude_tags: [W]          # offensive language; excluded by default (decision: filter_for_demos)
+      reuse: balanced_cycle      # each message reused as evenly as possible within an intent
+
   # Phase 1E-d promotion and holiday calendar (version 1).
   # Olist's own campaigns are unknown. Version 1 ASSUMES campaigns ran around the public
   # Brazilian retail dates below. Events are fixed in advance from the public calendar
