@@ -3,6 +3,136 @@
 generation:
   # Synthetic data volume, date ranges, and contact channel distributions
 
+  # Phase 1E contact-generation assumptions (version 1).
+  # Olist has NO contact data: every value below is an explicit, adjustable assumption.
+  # Used by notebooks/06_contact_rate_assumptions.ipynb (expected volumes) and,
+  # later, by the contact generator (Phase 1E-e).
+  contacts:
+    version: 1
+    random_seed: 42
+
+    # Decisions agreed in Phase 1E-b
+    decisions:
+      intent_scope: order_linked_only   # 17 order-linked Bitext intents; general and store intents left out
+      language: english                 # English-language contact center; Bitext messages used as-is
+      offensive_messages: filter_for_demos  # keep a flag; exclude W-tagged messages by default
+      max_contacts_per_situation: 1     # an order can contact once per situation (several situations allowed)
+
+    # Benchmark used to sanity-check the base scenario (vendor-published, directional only):
+    # "where is my order" (WISMO) contacts typically 3-10% of orders, 3-5% considered healthy.
+    benchmarks:
+      wismo_rate_low: 0.03
+      wismo_rate_high: 0.10
+
+    # Multipliers applied to every contact probability for sensitivity analysis
+    scenarios:
+      low: 0.5
+      base: 1.0
+      high: 1.5
+
+    # One entry per order situation. Situations are defined in notebook 06 from the
+    # Phase 1D order table. "probability" = share of orders in the situation that contact
+    # support (base scenario). "intents" = how those contacts split between Bitext intents.
+    # "timing" = when the contact happens, relative to an order event (days).
+    situations:
+      overdue_never_delivered:
+        probability: 0.60
+        intents: {track_order: 0.35, track_delivery: 0.25, delivery_time: 0.20, delivery_issue: 0.20}
+        timing: {anchor: order_estimated_delivery_date, min_days: 1, max_days: 7}
+        reason: Order never arrived; most customers would ask after the promised date passes.
+      delivered_late:
+        probability: 0.35
+        intents: {track_order: 0.35, track_delivery: 0.25, delivery_time: 0.20, delivery_issue: 0.20}
+        timing: {anchor: order_estimated_delivery_date, min_days: 1, max_days: 3, before: order_delivered_customer_date}
+        reason: Promised date passed before delivery; a sizeable share asks where the order is.
+      seller_shipped_late:
+        probability: 0.05
+        intents: {track_order: 0.35, track_delivery: 0.25, delivery_time: 0.20, delivery_issue: 0.20}
+        timing: {anchor: latest_shipping_limit_date, min_days: 1, max_days: 3, before: order_delivered_carrier_date}
+        reason: Delivered on time, but tracking showed no shipment past the seller deadline.
+      on_time_tracking_check:
+        probability: 0.015
+        intents: {track_order: 0.50, track_delivery: 0.35, delivery_time: 0.15}
+        timing: {anchor: order_delivered_carrier_date, min_days: 0, max_days: 5, before: order_delivered_customer_date}
+        reason: Some customers check on in-transit orders even when nothing is wrong.
+      canceled_or_unavailable:
+        probability: 0.50
+        intents: {request_refund: 0.45, cancel_order: 0.30, refund_status: 0.25}
+        timing: {anchor: order_purchase_timestamp, min_days: 1, max_days: 7}
+        reason: Money was paid but the order failed; Olist has no cancellation date, so purchase is the anchor.
+      post_delivery_problem:
+        probability: 0.30
+        intents: {product_issue: 0.20, wrong_item: 0.15, damaged_delivery: 0.15, exchange_product: 0.15,
+                  return_product: 0.15, missing_item: 0.10, return_product_online: 0.10}
+        timing: {anchor: order_delivered_customer_date, min_days: 0, max_days: 7}
+        reason: Low review with a comment is the only Olist hint of a product problem (weak signal).
+      payment_anomaly:
+        probability: 0.30
+        intents: {payment_issue: 1.0}
+        timing: {anchor: order_purchase_timestamp, min_days: 0, max_days: 2}
+        reason: Payment total does not match the order value, or payment type is undefined (weak signal).
+      change_before_shipping:
+        probability: 0.005
+        intents: {change_order: 1.0}
+        timing: {anchor: order_purchase_timestamp, min_days: 0, max_days: 1, before: order_delivered_carrier_date}
+        reason: Base rate; any order can be changed before it ships.
+      invoice_request:
+        probability: 0.005
+        intents: {request_invoice: 1.0}
+        timing: {anchor: order_purchase_timestamp, min_days: 0, max_days: 14}
+        reason: Base rate; any order can need an invoice.
+
+    # Time of day: contacts follow the hourly profile of Olist purchases (customers' online hours).
+    hour_profile: olist_purchase_hours
+
+  # Phase 1E-d promotion and holiday calendar (version 1).
+  # Olist's own campaigns are unknown. Version 1 ASSUMES campaigns ran around the public
+  # Brazilian retail dates below. Events are fixed in advance from the public calendar
+  # (not selected from the data), so they can be used by forecasts without leakage.
+  # Promotions affect contacts only through Olist orders (no extra contact multiplier),
+  # to avoid counting the promotion effect twice.
+  calendar:
+    version: 1
+    # Retail events: window = days before the event day (lead-up) and after it.
+    # group: used to build grouped forecast features (few events occur more than twice).
+    promo_events:
+      - {name: black_friday, group: major_sale, dates: [2016-11-25, 2017-11-24], weekday: Friday, days_before: 0, days_after: 3}
+      - {name: christmas, group: gift_season, dates: [2016-12-25, 2017-12-25], weekday: null, days_before: 24, days_after: -2}
+      - {name: consumer_day, group: major_sale, dates: [2017-03-15, 2018-03-15], weekday: null, days_before: 2, days_after: 0}
+      - {name: mothers_day, group: gift_season, dates: [2017-05-14, 2018-05-13], weekday: Sunday, days_before: 7, days_after: -1}
+      - {name: valentines_day_br, group: gift_season, dates: [2017-06-12, 2018-06-12], weekday: null, days_before: 7, days_after: -1}
+      - {name: fathers_day, group: gift_season, dates: [2017-08-13, 2018-08-12], weekday: Sunday, days_before: 7, days_after: -1}
+      - {name: childrens_day, group: gift_season, dates: [2016-10-12, 2017-10-12], weekday: null, days_before: 7, days_after: -1}
+    # Brazilian national public holidays inside the Olist date range (2016-09 to 2018-10).
+    # Easter-based dates: Easter 2017-04-16 and 2018-04-01.
+    public_holidays:
+      - {date: 2016-09-07, name: independence_day}
+      - {date: 2016-10-12, name: our_lady_aparecida}
+      - {date: 2016-11-02, name: all_souls_day}
+      - {date: 2016-11-15, name: republic_day}
+      - {date: 2016-12-25, name: christmas_day}
+      - {date: 2017-01-01, name: new_year}
+      - {date: 2017-02-27, name: carnival_monday}
+      - {date: 2017-02-28, name: carnival_tuesday}
+      - {date: 2017-04-14, name: good_friday}
+      - {date: 2017-04-21, name: tiradentes}
+      - {date: 2017-05-01, name: labour_day}
+      - {date: 2017-06-15, name: corpus_christi}
+      - {date: 2017-09-07, name: independence_day}
+      - {date: 2017-10-12, name: our_lady_aparecida}
+      - {date: 2017-11-02, name: all_souls_day}
+      - {date: 2017-11-15, name: republic_day}
+      - {date: 2017-12-25, name: christmas_day}
+      - {date: 2018-01-01, name: new_year}
+      - {date: 2018-02-12, name: carnival_monday}
+      - {date: 2018-02-13, name: carnival_tuesday}
+      - {date: 2018-03-30, name: good_friday}
+      - {date: 2018-04-21, name: tiradentes}
+      - {date: 2018-05-01, name: labour_day}
+      - {date: 2018-05-31, name: corpus_christi}
+      - {date: 2018-09-07, name: independence_day}
+      - {date: 2018-10-12, name: our_lady_aparecida}
+
 features:
   # Feature extraction windows, aggregations, and encoding
 
