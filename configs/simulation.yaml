@@ -1,13 +1,61 @@
 # CallVerse Discrete-Event Simulation Configuration
+# Phase 3, version 1. Olist has no contact-center data: every value below is an
+# explicit, adjustable assumption. Benchmarks used for sanity checks are
+# vendor-published and directional only.
 
 engine:
   # SimPy simulation clock, run duration, and random seed
+  time_unit: seconds
+  random_seed: 42
+  replications: 10            # independent runs per scenario (different seeds)
+  confidence_level: 0.95      # for mean +/- confidence intervals across runs
+
+volume:
+  # Olist's public data is a sample: ~15 contacts/day would need a single agent.
+  # Arrivals are multiplied by this factor so queues and staffing are meaningful.
+  scale_factor: 25
 
 resources:
   # Agent desk pools, skill tiers, and capacity constraints
+  # Version 1: one pool, every agent handles every intent group.
+  opening_hours:
+    open_hour: 8              # contact center opens at 08:00
+    close_hour: 22            # and closes at 22:00, 7 days a week
+  staffing:
+    method: erlang_c          # agents per open hour sized from the forecast
+    service_level_target: 0.80          # share of live contacts answered ...
+    service_level_threshold_seconds: 20 # ... within this many seconds (80/20 rule)
+    max_occupancy: 0.90       # never plan agents above 90% busy
+    min_agents: 1             # at least one agent whenever the center is open
+    # Contacts arriving while closed form a backlog for the first open hours.
+    backlog_spread_hours: 2   # planned workload of the night backlog is spread over 08:00-10:00
 
 queues:
   # Queue discipline (FIFO, priority, skill-based) and patience limits
+  discipline: fifo
+  # Patience of live contacts (arrived during opening hours): exponential.
+  # No published benchmark found; checked against abandonment benchmark (<= 5%).
+  patience_mean_seconds: 180
+  # Contacts arriving while closed, or still waiting at closing time, are treated as a
+  # backlog (like messages answered the next morning): they do not abandon.
+  backlog_abandons: false
 
 service:
   # Service time distribution parameters by contact topic
+  # Lognormal handle time per intent group (mean in seconds, coefficient of variation).
+  # Benchmarks: retail AHT ~3-5.4 min; order status ~2-3 min; returns/complex 5-8 min.
+  distribution: lognormal
+  by_intent_group:
+    wismo:         {mean_seconds: 180, cv: 0.6}   # order status: 3 min
+    order_admin:   {mean_seconds: 240, cv: 0.6}   # change order, invoice, payment: 4 min
+    cancel_refund: {mean_seconds: 360, cv: 0.6}   # cancellations and refunds: 6 min
+    post_delivery: {mean_seconds: 420, cv: 0.6}   # wrong/damaged item, returns: 7 min
+
+validation:
+  # Erlang C check: constant arrivals, exponential service, no abandonment.
+  erlang_check:
+    arrival_rate_per_hour: 60
+    mean_service_seconds: 240
+    agents: 6
+    hours: 400
+    replications: 10
