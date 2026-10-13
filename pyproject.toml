@@ -36,6 +36,9 @@ heavy = [
     "fastapi",
     "streamlit",
     "ortools",
+    "lightgbm",
+    "statsmodels",
+    "prophet",
 ]
 
 [project.scripts]
