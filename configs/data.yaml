@@ -147,6 +147,56 @@ generation:
       - {date: 2018-09-07, name: independence_day}
       - {date: 2018-10-12, name: our_lady_aparecida}
 
+  # Phase 1F tickets and chat logs (version 1).
+  # Olist has no support data: every value below is an explicit, adjustable assumption.
+  # Used by src/callverse/data/tickets.py and conversations.py (scripts/build_database.py).
+  tickets:
+    version: 1
+    random_seed: 42
+    # Decisions agreed in Phase 1F
+    decisions:
+      ticket_grain: one_per_contact   # repeat contacts on an order stay linkable by order_id
+      channel: chat                   # every contact is a live chat
+      chat_method: templates          # rule-based turns filled with order facts and KB policy
+    # Handle time per intent group is drawn from configs/simulation.yaml
+    # (service.by_intent_group), so tickets and the simulation agree.
+    # Outcomes are decided by rules from the order facts at contact time
+    # (src/callverse/data/tickets.py).
+    # Carrier investigation for a parcel past its estimated date when it is more than
+    # N days late (policy) or has been in transit longer than M days. Olist has no
+    # tracking events, so long transit stands in for "no tracking movement":
+    # 25 days ~ 95th percentile of Olist carrier-to-delivery time (24.2 days).
+    investigation_after_days_late: 7
+    investigation_transit_days: 25
+    # Outcomes needing later work are resolved after
+    # this many business days (policy values from the knowledge base where they exist).
+    follow_up_business_days:
+      carrier_investigation: 5        # delivery_times_and_delays: investigation <= 5 days
+      seller_contacted: 3             # seller asked to ship a late order
+      seller_check_opened: 2          # missing item: seller confirms what was packed
+      return_label_sent: 10           # 1 day label + post + 3 days check after receipt
+      exchange_started: 10
+      replacement_or_refund_offered: 10
+      bank_details_requested: 10      # boleto refund by bank transfer
+      escalated_payments: 2
+      supervisor_callback: 1
+    # Probability that the customer asks for a supervisor after the advisor's answer.
+    supervisor_request_rate:
+      resolved_in_chat: 0.01
+      follow_up: 0.06
+    # Post-chat satisfaction survey (1 to 5). Shares for scores 1, 2, 3, 4, 5.
+    # Directional: chat CSAT benchmarks are often ~80-85% "satisfied" (4-5).
+    csat:
+      response_rate: 0.30
+      score_shares:
+        resolved_in_chat: [0.04, 0.04, 0.10, 0.27, 0.55]
+        follow_up:        [0.10, 0.10, 0.20, 0.30, 0.30]
+        escalated:        [0.25, 0.20, 0.25, 0.18, 0.12]
+
+database:
+  # SQLite store of orders, contacts, tickets and chat messages (Phase 1F).
+  path: data/callverse.db
+
 features:
   # Feature extraction windows, aggregations, and encoding
 
