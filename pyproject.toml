@@ -39,6 +39,8 @@ heavy = [
     "lightgbm",
     "statsmodels",
     "prophet",
+    "sentence-transformers",
+    "faiss-cpu",
 ]
 
 [project.scripts]

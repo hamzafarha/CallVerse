@@ -5,6 +5,24 @@ client:
 
 advisor:
   # Knowledge retrieval index settings, chunking, and prompt templates
+  knowledge_base:
+    version: 1
+    docs_dir: data/knowledge_base/docs      # hand-written Markdown, tracked in git
+    index_dir: data/knowledge_base/index    # built by scripts/build_knowledge_base.py
+    # bge-m3: multilingual (FR + EN), 1024-dim dense vectors, runs locally on CPU.
+    embedding_model: BAAI/bge-m3
+    embedding_batch_size: 16
+    max_seq_length: 512        # chunks are short sections; 512 tokens is plenty
+    # One chunk per "##" section. Longer sections are split on paragraphs.
+    max_chunk_chars: 1500
+    # Exact cosine search (FAISS IndexFlatIP on normalised vectors): the corpus is
+    # ~70 chunks, so approximate indexes would only add error.
+    top_k: 4
+    min_score: 0.0             # chunks scoring below this are dropped
+    # Below this top-1 cosine score the advisor should answer "no answer in the
+    # knowledge base". Calibrated in notebook 11: keeps 95.5% of covered questions,
+    # rejects all clearly unrelated ones (password, account, app).
+    no_answer_score: 0.57
 
 quality:
   # Evaluation rubric criteria, reviewer weights, and validation rules

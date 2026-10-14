@@ -60,6 +60,8 @@ Thumbs.db
 data/**
 !data/**/
 !data/**/.gitkeep
+# Knowledge-base documents are hand-written source; the built index stays ignored
+!data/knowledge_base/docs/*.md
 artifacts/**
 !artifacts/**/
 !artifacts/**/.gitkeep
