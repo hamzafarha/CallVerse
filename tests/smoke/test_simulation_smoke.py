@@ -3,10 +3,11 @@
 import importlib
 import pkgutil
 
-import callverse
 import pytest
-from callverse.main import app
 from typer.testing import CliRunner
+
+import callverse
+from callverse.main import app
 
 runner = CliRunner()
 
