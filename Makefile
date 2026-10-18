@@ -5,6 +5,7 @@ install:
 
 lint:
 	ruff check .
+	ruff format --check .
 
 import-lint:
 	lint-imports

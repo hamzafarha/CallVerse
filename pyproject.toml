@@ -48,6 +48,9 @@ packages = ["src/callverse"]
 line-length = 88
 target-version = "py311"
 
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*.ipynb" = ["E501", "E741"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = []
