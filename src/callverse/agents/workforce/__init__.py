@@ -1,3 +1,5 @@
-"""Workforce management, routing policies, and RL scheduling."""
+"""Workforce manager agent: real-time routing (DSO1) and shift planning (DSO3)."""
 
-# TODO(phase-3): Initialize workforce module exports
+from callverse.agents.workforce.manager import WorkforceManager
+
+__all__ = ["WorkforceManager"]

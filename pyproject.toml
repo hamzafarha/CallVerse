@@ -4,44 +4,66 @@ build-backend = "hatchling.build"
 
 [project]
 name = "callverse"
-version = "0.1.0"
-description = "Digital twin of an e-commerce customer-contact center"
+version = "1.0.0"
+description = "Multi-agent digital twin of an e-commerce customer service center"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "CallVerse Team" },
+    { name = "Hamza Farhani" },
 ]
+# Core: data layer, simulation, KPI engine, API. Enough to run the twin with the
+# offline (template / rule-based) agents.
 dependencies = [
-    "pydantic",
-    "pyyaml",
-    "typer",
-    "numpy",
-    "pandas",
-    "pyarrow",
-    "simpy",
+    "numpy>=1.26,<2.3",
+    "pandas>=2.2,<3",
+    "pyarrow>=15",
+    "scipy>=1.11",
+    "pyyaml>=6",
+    "pydantic>=2.5",
+    "typer>=0.12",
+    "simpy>=4.1",
+    "scikit-learn>=1.4",
+    "pandera>=0.20",
+    "httpx>=0.27",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "matplotlib>=3.8",
 ]
 
 [project.optional-dependencies]
+# Forecasting models (DSO4)
+forecast = [
+    "lightgbm>=4.3",
+    "statsmodels>=0.14",
+    "prophet>=1.1",
+]
+# Agents: RAG embeddings, LangGraph orchestration, RL routing, CP-SAT scheduling
+agents = [
+    "torch>=2.2",
+    "sentence-transformers>=3.0",
+    "faiss-cpu>=1.8",
+    "langgraph>=0.2",
+    "gymnasium>=0.29",
+    "stable-baselines3>=2.3",
+    "sb3-contrib>=2.3",
+    "ortools>=9.10",
+]
+# Experiment tracking and the headless notebook runner
+mlops = [
+    "mlflow>=2.12",
+    "nbclient>=0.10",
+    "nbformat>=5.9",
+    "ipykernel>=6.29",
+]
+# Optional LLM tracing backend (local JSONL tracing works without it)
+tracing = ["langfuse>=2.0"]
 dev = [
-    "pytest",
-    "ruff",
-    "mypy",
-    "import-linter",
+    "pytest>=8",
+    "ruff>=0.4",
+    "import-linter>=2.0",
     "types-PyYAML",
 ]
-heavy = [
-    "torch",
-    "langgraph",
-    "stable-baselines3",
-    "fastapi",
-    "streamlit",
-    "ortools",
-    "lightgbm",
-    "statsmodels",
-    "prophet",
-    "sentence-transformers",
-    "faiss-cpu",
-]
+all = ["callverse[forecast,agents,mlops,dev]"]
 
 [project.scripts]
 callverse = "callverse.main:app"
@@ -50,8 +72,9 @@ callverse = "callverse.main:app"
 packages = ["src/callverse"]
 
 [tool.ruff]
-line-length = 88
+line-length = 110
 target-version = "py311"
+extend-exclude = ["notebooks", "frontend"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
@@ -68,63 +91,67 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = [
+    "slow: trains or simulates for more than a few seconds",
+    "llm: needs a running Ollama server",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.importlinter]
 root_package = "callverse"
 
+# Layers, from bottom to top:
+# config/llm -> data -> forecasting/simulation -> agents -> twin -> orchestration
+# -> evaluation -> api. A layer never imports a layer above it.
 [[tool.importlinter.contracts]]
 name = "Data layer isolation"
 type = "forbidden"
-source_modules = [
-    "callverse.data",
-]
+source_modules = ["callverse.data"]
 forbidden_modules = [
+    "callverse.forecasting",
+    "callverse.simulation",
     "callverse.agents",
     "callverse.twin",
     "callverse.orchestration",
     "callverse.evaluation",
     "callverse.api",
-    "callverse.dashboard",
 ]
 
 [[tool.importlinter.contracts]]
 name = "Simulation layer isolation"
 type = "forbidden"
-source_modules = [
-    "callverse.simulation",
-]
+source_modules = ["callverse.simulation", "callverse.forecasting"]
 forbidden_modules = [
     "callverse.agents",
     "callverse.twin",
     "callverse.orchestration",
     "callverse.evaluation",
     "callverse.api",
-    "callverse.dashboard",
 ]
 
 [[tool.importlinter.contracts]]
 name = "Agents layer allowed imports"
 type = "forbidden"
-source_modules = [
-    "callverse.agents",
-]
+source_modules = ["callverse.agents"]
 forbidden_modules = [
     "callverse.twin",
     "callverse.orchestration",
     "callverse.evaluation",
     "callverse.api",
-    "callverse.dashboard",
 ]
 
 [[tool.importlinter.contracts]]
 name = "Twin layer allowed imports"
 type = "forbidden"
-source_modules = [
-    "callverse.twin",
-]
+source_modules = ["callverse.twin"]
 forbidden_modules = [
     "callverse.orchestration",
     "callverse.evaluation",
     "callverse.api",
-    "callverse.dashboard",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Evaluation never calls the API"
+type = "forbidden"
+source_modules = ["callverse.evaluation", "callverse.orchestration"]
+forbidden_modules = ["callverse.api"]

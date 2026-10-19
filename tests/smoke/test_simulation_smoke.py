@@ -4,9 +4,11 @@ import importlib
 import pkgutil
 from pathlib import Path
 
-import callverse
 import numpy as np
 import pandas as pd
+from typer.testing import CliRunner
+
+import callverse
 from callverse.main import app
 from callverse.simulation import (
     LognormalServiceModel,
@@ -15,7 +17,6 @@ from callverse.simulation import (
     load_simulation_config,
     run_simulation,
 )
-from typer.testing import CliRunner
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "simulation.yaml"
 

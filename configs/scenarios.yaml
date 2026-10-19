@@ -1,13 +1,54 @@
-# CallVerse Scenarios Configuration
+# CallVerse what-if scenarios (BO4 / DSO4).
+# Each scenario takes a real week of the synthetic history ("reality") and changes it.
+# multipliers scale the contacts of each intent group; they are explicit assumptions.
+# The forecast-driven plan is built from the LightGBM forecast of the NORMAL week
+# (unprepared) or of the scenario week (prepared = "tested first in the twin").
 
-baseline:
-  # Standard steady-state operational parameters
+defaults:
+  seeds: 10                 # replications per scenario (mean +/- 95% CI)
+  drain_days: 1             # extra simulated day so the last evening backlog is served
 
-surge:
-  # High-volume surge events, promotions, and flash sale load
+scenarios:
+  baseline:
+    label: Normal week
+    description: A normal week in May 2018, no event.
+    week_start: 2018-05-07
+    multipliers: {wismo: 1.0, cancel_refund: 1.0, post_delivery: 1.0, order_admin: 1.0}
+    absence_rate: 0.0
+    handle_time_multiplier: 1.0
 
-outage:
-  # Service outage scenarios with elevated customer churn risk
+  promo_spike:
+    label: Promo spike
+    description: >
+      Black-Friday-like campaign: orders x1.6, so every contact type rises; tracking
+      questions rise most.
+    week_start: 2018-05-07
+    multipliers: {wismo: 1.8, cancel_refund: 1.5, post_delivery: 1.4, order_admin: 1.6}
+    absence_rate: 0.0
+    handle_time_multiplier: 1.0
 
-understaffed:
-  # Workforce shortage and shift absence scenario configurations
+  delivery_delays:
+    label: Delivery delays
+    description: >
+      Carrier strike: deliveries 2 days late. "Where is my order" contacts x2.5,
+      complaints after delivery x1.3, and conversations get 10% longer.
+    week_start: 2018-05-07
+    multipliers: {wismo: 2.5, cancel_refund: 1.2, post_delivery: 1.3, order_admin: 1.0}
+    absence_rate: 0.0
+    handle_time_multiplier: 1.1
+
+  staff_shortage:
+    label: Staff shortage
+    description: Flu wave - 20% of planned agents are absent, demand is normal.
+    week_start: 2018-05-07
+    multipliers: {wismo: 1.0, cancel_refund: 1.0, post_delivery: 1.0, order_admin: 1.0}
+    absence_rate: 0.20
+    handle_time_multiplier: 1.0
+
+  black_friday_2017:
+    label: Black Friday 2017 (historical)
+    description: The real Black Friday week of the history, no change applied.
+    week_start: 2017-11-20
+    multipliers: {wismo: 1.0, cancel_refund: 1.0, post_delivery: 1.0, order_admin: 1.0}
+    absence_rate: 0.0
+    handle_time_multiplier: 1.0

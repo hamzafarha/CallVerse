@@ -1,3 +1,15 @@
-"""Automated quality assurance and rubric-based reviewer agents."""
+"""Quality analyst agent: scorecard, LLM judge (and checklist backup), judge calibration."""
 
-# TODO(phase-3): Initialize quality module exports
+from callverse.agents.quality.reviewer import QualityReviewer
+from callverse.agents.quality.rubric import CRITERIA, Scorecard, rubric
+from callverse.agents.quality.validation import agreement, load_human_labels, save_human_label
+
+__all__ = [
+    "CRITERIA",
+    "QualityReviewer",
+    "Scorecard",
+    "agreement",
+    "load_human_labels",
+    "rubric",
+    "save_human_label",
+]

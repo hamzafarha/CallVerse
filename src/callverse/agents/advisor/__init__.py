@@ -13,13 +13,18 @@ from callverse.agents.advisor.indexing import (
     load_knowledge_base_config,
     parse_document,
 )
-from callverse.agents.advisor.retrieval import KnowledgeRetriever, RetrievedChunk
+from callverse.agents.advisor.retrieval import (
+    KeywordRetriever,
+    KnowledgeRetriever,
+    RetrievedChunk,
+)
 
 __all__ = [
     "Chunk",
     "DocumentMeta",
     "Embedder",
     "KnowledgeBaseConfig",
+    "KeywordRetriever",
     "KnowledgeRetriever",
     "RetrievedChunk",
     "SentenceTransformerEmbedder",

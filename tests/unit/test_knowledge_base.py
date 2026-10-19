@@ -6,6 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from pydantic import ValidationError
+
 from callverse.agents.advisor import (
     KnowledgeBaseConfig,
     KnowledgeRetriever,
@@ -15,7 +17,6 @@ from callverse.agents.advisor import (
     load_chunks,
     parse_document,
 )
-from pydantic import ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DOCS_DIR = PROJECT_ROOT / "data" / "knowledge_base" / "docs"

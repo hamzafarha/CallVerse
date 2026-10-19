@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 import yaml
+
 from callverse.agents.advisor import build_knowledge_base, load_knowledge_base_config
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

@@ -9,7 +9,11 @@ from callverse.data.database import (
     connect,
 )
 from callverse.data.tickets import (
+    ORDER_COLUMNS as TICKET_ORDER_COLUMNS,
+)
+from callverse.data.tickets import (
     TicketConfig,
+    add_contact_facts,
     decide_outcome,
     generate_tickets,
     load_ticket_config,
@@ -19,8 +23,10 @@ from callverse.data.tickets import (
 __all__ = [
     "ORDER_COLUMNS",
     "TABLES",
+    "TICKET_ORDER_COLUMNS",
     "TableSpec",
     "TicketConfig",
+    "add_contact_facts",
     "build_chat",
     "build_database",
     "connect",

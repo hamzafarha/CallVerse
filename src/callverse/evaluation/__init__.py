@@ -1,3 +1,1 @@
-"""Evaluation pipelines and business KPI calculators."""
-
-# TODO(phase-5): Initialize evaluation module exports
+"""Evaluation: KPI engine (BO1-BO4), experiments with seeds and CIs, component metrics."""

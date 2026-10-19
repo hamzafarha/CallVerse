@@ -51,6 +51,27 @@ service:
     cancel_refund: {mean_seconds: 360, cv: 0.6}   # cancellations and refunds: 6 min
     post_delivery: {mean_seconds: 420, cv: 0.6}   # wrong/damaged item, returns: 7 min
 
+skills:
+  # Agents are not identical (version 2): each has a primary intent group where they
+  # are faster and one weak group where they are slower. Multipliers scale handle time.
+  # With all multipliers at 1.0 the twin reproduces the version-1 single pool.
+  specialist_multiplier: 0.75
+  weak_multiplier: 1.30
+  random_seed: 7
+
+costs:
+  # Directional labour costs (EUR), used for BO3 (cost per contact, overtime cost).
+  regular_hourly_eur: 12.0
+  overtime_multiplier: 1.5
+  # Directional cost of a customer who hangs up: a repeat contact plus churn risk.
+  # Used for BO4 "money saved by testing first" (labour + lost customers).
+  abandonment_cost_eur: 8.0
+
+fidelity:
+  # Twin fidelity check (DSO4): simulated vs historical logs, two-sample KS test.
+  ks_alpha: 0.05
+  sample_size: 2000
+
 validation:
   # Erlang C check: constant arrivals, exponential service, no abandonment.
   erlang_check:

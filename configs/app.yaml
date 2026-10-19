@@ -1,13 +1,30 @@
 # CallVerse Application Configuration
 
 app:
-  # General application metadata and environment settings
+  name: CallVerse
+  version: 1.0.0
+  description: Multi-agent digital twin of an e-commerce customer service center
 
 server:
-  # REST API host, port, and worker configuration
+  host: 0.0.0.0
+  port: 8000
+  # React dev server (Vite) and the Docker nginx front end
+  cors_origins:
+    - http://localhost:5173
+    - http://127.0.0.1:5173
+    - http://localhost:8080
 
-dashboard:
-  # Streamlit dashboard port and interface settings
+mlflow:
+  # Local SQLite store by default (runs in mlflow.db, artifacts in mlruns/);
+  # docker-compose points MLFLOW_TRACKING_URI at the MLflow server instead.
+  tracking_uri: sqlite:///mlflow.db
+  artifact_dir: mlruns
+  experiments:
+    forecast: callverse-forecast
+    routing: callverse-routing-ppo
+    scheduling: callverse-scheduling
+    twin: callverse-twin-scenarios
+    agents: callverse-agents
 
 logging:
-  # Log level, handlers, and format configuration
+  level: INFO

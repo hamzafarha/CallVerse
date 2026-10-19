@@ -1,3 +1,1 @@
-"""Graph orchestration coordinating multi-agent workflows."""
-
-# TODO(phase-4): Initialize orchestration module exports
+"""LangGraph orchestration of the four agents for one customer conversation."""

@@ -1,3 +1,3 @@
-"""CallVerse: Digital twin of an e-commerce customer-contact center."""
+"""CallVerse: multi-agent digital twin of an e-commerce customer service center."""
 
-# TODO(phase-0): Package entry and version initialization
+__version__ = "1.0.0"

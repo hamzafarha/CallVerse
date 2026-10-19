@@ -6,6 +6,7 @@ Version 1 sizes one agent pool per hour with the Erlang C formula.
 import math
 
 import numpy as np
+import pandas as pd
 
 
 def erlang_c_wait_probability(agents: int, offered_load: float) -> float:
@@ -100,3 +101,53 @@ def plan_hourly_staffing(
                 min_agents,
             )
     return plan
+
+
+def hourly_plan_inputs(
+    daily_counts: pd.DataFrame,
+    days: pd.DatetimeIndex,
+    hour_shares: np.ndarray,
+    scale_factor: float,
+    mean_handle_by_group: dict[str, float],
+    open_hour: int,
+    close_hour: int,
+    backlog_spread_hours: int,
+    group_multipliers: dict[str, float] | None = None,
+    handle_time_multiplier: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Expected arrivals, mean handle time and open flag for every hour of ``days``.
+
+    Contacts that arrive while the center is closed are planned as workload of the
+    first ``backlog_spread_hours`` open hours of the next morning.
+    """
+    hours_total = len(days) * 24
+    arrivals = np.zeros(hours_total)
+    work_seconds = np.zeros(hours_total)
+    selected = daily_counts[daily_counts["date"].isin(days)]
+    for row in selected.itertuples():
+        day_index = days.get_loc(row.date)
+        multiplier = (group_multipliers or {}).get(row.intent_group, 1.0)
+        hourly = row.contacts * multiplier * scale_factor * hour_shares
+        slots = slice(day_index * 24, day_index * 24 + 24)
+        arrivals[slots] += hourly
+        work_seconds[slots] += (
+            hourly * mean_handle_by_group[row.intent_group] * handle_time_multiplier
+        )
+
+    open_mask = np.array([open_hour <= h % 24 < close_hour for h in range(hours_total)])
+    planned = arrivals.copy()
+    planned_work = work_seconds.copy()
+    for day_index in range(len(days)):
+        night = [
+            h
+            for h in range(day_index * 24 - 24 + close_hour, day_index * 24 + open_hour)
+            if 0 <= h < hours_total
+        ]
+        morning = [day_index * 24 + open_hour + k for k in range(backlog_spread_hours)]
+        for hour in morning:
+            planned[hour] += arrivals[night].sum() / backlog_spread_hours
+            planned_work[hour] += work_seconds[night].sum() / backlog_spread_hours
+    mean_handle = np.divide(
+        planned_work, planned, out=np.full(hours_total, 240.0), where=planned > 0
+    )
+    return planned, mean_handle, open_mask

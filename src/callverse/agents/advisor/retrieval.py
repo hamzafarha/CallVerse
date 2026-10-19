@@ -118,3 +118,56 @@ class KnowledgeRetriever:
                     break
             results.append(hits)
         return results
+
+
+class KeywordRetriever:
+    """Keyword search (TF-IDF) over the same chunks: the DSO2 baseline.
+
+    Also the offline fallback when the bge-m3 model cannot be loaded.
+    """
+
+    model_name = "tfidf-keyword-baseline"
+
+    def __init__(self, chunks: list[Chunk], top_k: int = 4) -> None:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+
+        self.chunks = chunks
+        self.top_k = top_k
+        self.vectorizer = TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True, stop_words="english")
+        self.matrix = self.vectorizer.fit_transform([c.embedding_text() for c in chunks])
+
+    @classmethod
+    def from_config(cls, config: KnowledgeBaseConfig) -> "KeywordRetriever":
+        """Chunks from the built index, or parsed from the Markdown documents."""
+        from callverse.agents.advisor.indexing import load_chunks
+
+        chunk_file = Path(config.index_dir) / CHUNKS_FILE
+        if chunk_file.exists():
+            rows = pd.read_parquet(chunk_file).to_dict("records")
+            chunks = [Chunk(**{**row, "intents": list(row["intents"])}) for row in rows]
+        else:
+            chunks = load_chunks(config.docs_dir, config.max_chunk_chars)
+        return cls(chunks, config.top_k)
+
+    def search(
+        self, query: str, top_k: int | None = None, intent: str | None = None
+    ) -> list[RetrievedChunk]:
+        return self.search_many([query], top_k, intent)[0]
+
+    def search_many(
+        self, queries: list[str], top_k: int | None = None, intent: str | None = None
+    ) -> list[list[RetrievedChunk]]:
+        top_k = top_k or self.top_k
+        scores = (self.vectorizer.transform(queries) @ self.matrix.T).toarray()
+        results = []
+        for row in scores:
+            hits: list[RetrievedChunk] = []
+            for position in np.argsort(-row):
+                chunk = self.chunks[position]
+                if intent and intent not in chunk.intents:
+                    continue
+                hits.append(RetrievedChunk(chunk, float(row[position]), len(hits) + 1))
+                if len(hits) == top_k:
+                    break
+            results.append(hits)
+        return results

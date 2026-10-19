@@ -1,6 +1,65 @@
+# One-command deploy of the CallVerse control room:
+#   docker compose up --build          -> UI on http://localhost:8080, API on :8000, MLflow on :5000
+#   docker compose --profile llm up    -> also starts Ollama in a container
+# Pinned model versions and seeds come from .env (copy .env.example).
+
 services:
-  cli:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: ["callverse", "--help"]
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: ${MLFLOW_DB_PASSWORD:-mlflow}
+      POSTGRES_DB: mlflow
+    volumes:
+      - mlflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow"]
+      interval: 5s
+      retries: 10
+
+  mlflow:
+    image: python:3.11-slim
+    command: >
+      sh -c "pip install --no-cache-dir mlflow==3.17.1 psycopg2-binary &&
+             mlflow server --host 0.0.0.0 --port 5000
+             --backend-store-uri postgresql://mlflow:${MLFLOW_DB_PASSWORD:-mlflow}@postgres:5432/mlflow
+             --artifacts-destination /mlartifacts --serve-artifacts"
+    ports: ["5000:5000"]
+    volumes:
+      - mlflow-artifacts:/mlartifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: .
+    env_file: [.env]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+    ports: ["8000:8000"]
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./configs:/app/configs
+      - hf-cache:/root/.cache/huggingface
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [mlflow]
+
+  ui:
+    build: ./frontend
+    ports: ["8080:80"]
+    depends_on: [api]
+
+  ollama:
+    image: ollama/ollama:0.5.7
+    profiles: ["llm"]
+    ports: ["11434:11434"]
+    volumes:
+      - ollama:/root/.ollama
+
+volumes:
+  mlflow-db:
+  mlflow-artifacts:
+  hf-cache:
+  ollama:

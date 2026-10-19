@@ -1,9 +1,62 @@
 # CallVerse Agents Configuration
+# Four cooperating agents (Client, Advisor, Quality, Workforce) orchestrated by LangGraph.
+
+llm:
+  # Local LLMs served by Ollama (zero cost, no data leaves the machine).
+  provider: ollama
+  base_url: http://localhost:11434
+  # auto: use Ollama when it answers, otherwise the offline backups (templates and
+  # rule-based judge). on: fail if Ollama is down. off: always use the backups.
+  mode: auto
+  temperature: 0.2
+  seed: 42                    # fixed seed: same prompt + same model = same answer
+  timeout_seconds: 180
+  cache: true                 # identical calls are answered from artifacts/traces/llm_cache.sqlite
+  # Pinned models (the digest of each is written to artifacts/traces/llm_models.lock.json
+  # by `callverse llm-pin`). The judge is from a DIFFERENT family than the advisor so it
+  # does not share the advisor's blind spots.
+  # Two profiles (CALLVERSE_LLM_PROFILE overrides):
+  #   full: the architecture's choice (mid-size advisor), for evaluation batches.
+  #   fast: everything fits a 4 GB laptop GPU, for live demos (~10x faster).
+  profile: fast
+  profiles:
+    full:
+      client: qwen2.5:3b        # small, cheap: plays the customer
+      advisor: qwen2.5:7b       # mid-size with tool calling: answers the customer
+      judge: llama3.2:latest    # different family (Meta Llama vs Alibaba Qwen): grades
+    fast:
+      client: qwen2.5:3b
+      advisor: qwen2.5:3b       # same model as the client: no GPU model swap
+      judge: llama3.2:latest
+  # Fallback chain when a pinned model is not pulled locally
+  fallbacks:
+    advisor: [qwen2.5:3b, llama3.2:latest]
+    client: [llama3.2:latest]
+    judge: [qwen2.5:3b]
 
 client:
-  # Persona profiles, sentiment drift, and customer patience thresholds
+  # Persona profiles of the simulated customers (twin input).
+  # patience_multiplier scales the mean patience of configs/simulation.yaml.
+  personas:
+    impatient: {share: 0.25, patience_multiplier: 0.5, tone: "short, irritated, wants a fast answer"}
+    normal:    {share: 0.55, patience_multiplier: 1.0, tone: "polite and direct"}
+    patient:   {share: 0.20, patience_multiplier: 2.0, tone: "calm, friendly, gives details"}
+  # A repeat contact on the same order is more likely impatient (CRM signal).
+  repeat_contact_impatient_share: 0.6
+  max_turns: 4                # customer messages per conversation, at most
 
 advisor:
+  # Agentic RAG: Ask -> Retrieve -> LLM (+ tools) -> Reply
+  # variant rag_policy: the LLM also calls the company rules engine (recommend_resolution);
+  # variant rag: pure agentic RAG (ablation).
+  variant: rag_policy
+  max_tool_rounds: 4
+  retrieval_top_k: 3
+  # Backup (DSO2): intent classifier + approved templates filled with order facts.
+  intent_classifier:
+    model: tfidf_logreg
+    test_size: 0.2
+    random_seed: 42
   # Knowledge retrieval index settings, chunking, and prompt templates
   knowledge_base:
     version: 1
@@ -25,7 +78,66 @@ advisor:
     no_answer_score: 0.57
 
 quality:
-  # Evaluation rubric criteria, reviewer weights, and validation rules
+  # Scorecard (1 = very poor, 5 = excellent), filled by the judge for every conversation.
+  rubric:
+    compliance: "The advisor followed company policy (verified the order, gave the policy-correct action and timing, no invented promises)."
+    relevance: "The answer addressed the customer's actual request using the order facts."
+    satisfaction: "How satisfied the customer most likely is at the end of the chat."
+    sentiment: "Mood of the customer at the end (1 = angry, 3 = neutral, 5 = happy)."
+    resolution: "The problem was solved in the conversation (5) or correctly handed over with a clear next step (3)."
+  # Calibration: agreement with human grades (DSO2). Below this kappa the judge is not trusted.
+  min_quadratic_kappa: 0.4
+  human_labels_file: data/labels/human_quality_labels.csv
+  calibration_sample_size: 60
 
 workforce:
-  # RL action space, observation features, and routing policies
+  routing:
+    # MaskablePPO routing agent (DSO1, idea A). The agent that becomes free chooses
+    # one of the K oldest waiting contacts.
+    queue_slots: 10
+    abandon_penalty_seconds: 600   # one abandonment costs as much as 10 minutes of waiting
+    reward_scale_seconds: 600
+    train_period: {start: 2017-02-01, end: 2018-03-31}   # days the agent practises on
+    test_period: {start: 2018-04-01, end: 2018-08-19}    # never seen during training
+    load_multiplier: {low: 1.0, high: 1.8}  # training days are made busier than planned (peaks)
+    group_surge: [1.0, 1.6]                # and each problem type surges on its own (promo, delays)
+    absence_rate: {low: 0.05, high: 0.30}   # and some planned agents are absent
+    backlog_wait_weight: 0.1               # overnight messages count less than live chats
+    ppo:
+      total_timesteps: 300000
+      n_steps: 2048
+      batch_size: 256
+      learning_rate: 0.0003
+      gamma: 0.995
+      ent_coef: 0.01
+      net_arch: [128, 128]
+      seed: 42
+    # Backup (DSO1): priority score with weights found by random search in the twin
+    skill_score:
+      search_iterations: 40
+      search_days: 6
+      default_weights: {wait: 1.0, speed: 1.0, short_job: 0.5, impatient: 0.5}
+  scheduling:
+    # CP-SAT shift planning (DSO3, idea B), driven by the forecast.
+    shift_lengths_hours: [4, 6, 8]
+    max_days_per_week: 5
+    max_regular_hours_per_week: 40
+    min_rest_hours: 11
+    max_overtime_agents_per_hour: 4
+    max_overtime_hours_per_week: 60
+    headcount: auto                 # auto = enough agents for the peak hour + rest days
+    understaffing_penalty_eur: 200  # per missing agent-hour; makes coverage nearly hard
+    solver_time_limit_seconds: 20
+    random_seed: 42
+    # Baseline: the same number of agents every open hour, no overtime logic, sized
+    # for the busiest hour of the week (what a manager does without a planner).
+    fixed_schedule_quantile: 1.0
+    # Sensitivity: a "tuned" fixed schedule that accepts some understaffed hours.
+    fixed_tuned_quantile: 0.75
+    # Backup: Erlang C + 3 shift templates + real-time overtime rule
+    rule_templates:
+      morning: [8, 16]
+      afternoon: [14, 22]
+    overtime_rule:
+      queue_threshold: 8            # contacts waiting at the top of an hour
+      extra_agents: 2               # called in for that hour, paid as overtime

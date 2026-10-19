@@ -97,6 +97,39 @@ def order_status_at(orders: pd.DataFrame, at: pd.Series) -> pd.Series:
     )
 
 
+def add_contact_facts(
+    frame: pd.DataFrame,
+    investigation_after_days_late: int,
+    investigation_transit_days: int | None = None,
+) -> pd.DataFrame:
+    """Order facts as known when the customer writes (``opened_at``).
+
+    Adds the status at contact time, the days past the estimated date and whether
+    the parcel needs a carrier investigation. ``frame`` needs ``opened_at`` and the
+    order columns of ``ORDER_COLUMNS``. Shared by the ticket generator and the
+    advisor's order-lookup tool, so both apply the same policy.
+    """
+    if investigation_transit_days is None:  # a TicketConfig was passed
+        config = investigation_after_days_late
+        investigation_after_days_late = config.investigation_after_days_late
+        investigation_transit_days = config.investigation_transit_days
+    frame = frame.copy()
+    frame["order_status_at_contact"] = order_status_at(frame, frame["opened_at"])
+    frame["days_past_estimate"] = (
+        frame["opened_at"].dt.normalize()
+        - frame["order_estimated_delivery_date"].dt.normalize()
+    ).dt.days
+    days_in_transit = (frame["opened_at"] - frame["order_delivered_carrier_date"]).dt.days
+    frame["needs_investigation"] = frame["order_status_at_contact"].eq("shipped") & (
+        (frame["days_past_estimate"] > investigation_after_days_late)
+        | (
+            (frame["days_past_estimate"] > 0)
+            & (days_in_transit > investigation_transit_days)
+        )
+    )
+    return frame
+
+
 def wismo_outcome(row: pd.Series) -> tuple[str, str, str | None]:
     """Where-is-my-order intents: answer depends on status and lateness."""
     status = row["order_status_at_contact"]
@@ -268,23 +301,7 @@ def generate_tickets(
 
     tickets.insert(0, "ticket_id", tickets["contact_id"].str.replace("SC", "TK", n=1))
     tickets["channel"] = config.channel
-    tickets["order_status_at_contact"] = order_status_at(tickets, tickets["opened_at"])
-    tickets["days_past_estimate"] = (
-        tickets["opened_at"].dt.normalize()
-        - tickets["order_estimated_delivery_date"].dt.normalize()
-    ).dt.days
-    days_in_transit = (
-        tickets["opened_at"] - tickets["order_delivered_carrier_date"]
-    ).dt.days
-    tickets["needs_investigation"] = tickets["order_status_at_contact"].eq(
-        "shipped"
-    ) & (
-        (tickets["days_past_estimate"] > config.investigation_after_days_late)
-        | (
-            (tickets["days_past_estimate"] > 0)
-            & (days_in_transit > config.investigation_transit_days)
-        )
-    )
+    tickets = add_contact_facts(tickets, config)
 
     decisions = tickets.apply(decide_outcome, axis=1, result_type="expand")
     tickets[["outcome", "kb_chunk_id", "handed_to"]] = decisions

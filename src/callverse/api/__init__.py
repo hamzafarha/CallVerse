@@ -1,3 +1,1 @@
-"""REST API service for CallVerse simulation and control."""
-
-# TODO(phase-5): Initialize API module exports
+"""FastAPI backend (REST + WebSocket) of the CallVerse control room."""

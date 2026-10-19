@@ -197,11 +197,20 @@ database:
   # SQLite store of orders, contacts, tickets and chat messages (Phase 1F).
   path: data/callverse.db
 
-features:
-  # Feature extraction windows, aggregations, and encoding
-
-preprocessing:
-  # Missing value strategies, normalizations, and splits
+pipeline:
+  # Data preparation notebooks, executed headless in this order by `callverse data`.
+  # Each one documents its decisions; the runner saves an executed copy in
+  # artifacts/notebook_runs/ as proof of the run.
+  notebooks:
+    - 03_data_cleaning_preparation.ipynb
+    - 04_feature_engineering_analytical_dataset.ipynb
+    - 05_intent_dataset_evaluation.ipynb
+    - 06_contact_rate_assumptions.ipynb
+    - 07_promotion_calendar.ipynb
+    - 08_synthetic_contact_generation.ipynb
+  timeout_seconds: 1800
 
 validation:
-  # Schema validation and data drift threshold parameters
+  # Pandera data contracts checked after every pipeline run (src/callverse/data/validation.py)
+  min_contacts: 5000
+  min_orders: 90000

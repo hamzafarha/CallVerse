@@ -1,93 +1,88 @@
 # CallVerse
 
-CallVerse is a digital twin of an e-commerce customer-contact center. It models the complete lifecycle of customer interactions: data generation and preprocessing, demand forecasting, discrete-event simulation, multi-agent workforce and advisor policies, closed-loop evaluation, and interactive dashboards/APIs.
+**A multi-agent digital twin of an e-commerce customer service center.**
+Forecast how many customers will contact you, test staffing and routing decisions on a
+virtual call center before applying them, and let AI agents answer and grade customer
+conversations — all running locally, at zero API cost.
 
-The system is designed for high-fidelity simulation and optimization with zero budget, running locally with no network calls and no mandatory external LLM APIs.
+> Integrated project (Advanced Data Science, ESPRIT). Data: real Olist orders (99,441)
+> and Bitext customer messages; contacts, tickets and chats are generated from them
+> with explicit, documented assumptions.
 
-## Architecture & Project Pipeline
+| | |
+|---|---|
+| **Business objectives** | BO1 shorter waits · BO2 correct answers & satisfaction · BO3 lower cost at equal service · BO4 prepare for peaks by testing first |
+| **AI components** | LightGBM forecast · SimPy digital twin · MaskablePPO routing · OR-Tools CP-SAT shift planning · agentic RAG advisor (bge-m3 + FAISS + tools) · LLM-as-judge · LangGraph orchestration |
+| **Serving & MLOps** | FastAPI (REST + WebSocket) · React control room · MLflow · LLM tracing · Docker Compose · GitHub Actions |
 
-```
-Data -> Forecasting -> Discrete-Event Simulation -> Agents -> Evaluation -> API / Dashboard
-```
+## Results (from `callverse evaluate`, 10 seeds, 95% CIs)
 
-- **Data**: Synthetic call-center generator, contact schemas, preprocessing, and validation.
-- **Forecasting**: Arrival and demand modeling (baselines, feature pipelines, multi-horizon predictors).
-- **Simulation**: SimPy-based discrete-event queueing system (events, customers, resources, policies, scenarios).
-- **Twin**: Digital twin state management, replay, and calibration against historical traces.
-- **Agents**: Client simulator, advisor copilot (RAG/tools), quality reviewer, and workforce RL manager (routing/scheduling).
-- **Evaluation**: Closed-loop business KPIs, forecast metrics, advisor quality metrics, and experimentation harness.
-- **API & Dashboard**: FastAPI services and Streamlit analytics control room.
+| Objective | Main idea vs baseline | Result |
+|---|---|---|
+| **BO4 / DSO4** forecast | LightGBM vs "same day last week" | wMAPE **25.3%** vs 31.6% (−19.9% error), rolling backtest over 46 weeks |
+| **BO4 / DSO4** twin | prepared vs unprepared plan in peak weeks | understaffed hours **−60% to −84%**, abandonment **−55% to −76%** (all significant) |
+| **BO4 / DSO4** fidelity | simulated vs historical / queueing theory | KS volume p=0.998, hourly profile TVD 0.015, Erlang C error < 4% |
+| **BO3 / DSO3** shifts | CP-SAT vs peak-sized fixed schedule | labour cost **−40%** with service level still above the 80% target; all labour rules respected |
+| **BO1 / DSO1** routing | PPO / skill score vs FIFO | ASA **−14%** (PPO, unseen stressed days); peak weeks: p90 wait −18% to −25% (PPO), abandonment −8% to −11% (skill score) |
+| **BO2 / DSO2** advisor | bge-m3 RAG vs keyword search; LLM variants | context recall@4 **96.9%** vs 80.4%; RAG + rules-engine hybrid **12/12** verified policy-correct actions, best CSAT (4.33/5) |
 
-## Quickstart
+See [docs/IP_VALIDATION_REPORT.md](docs/IP_VALIDATION_REPORT.md) for the full analysis,
+including where an idea did **not** beat its baseline and the backup that took over.
 
-### Prerequisites
+## Quick start (Windows PowerShell)
 
-- Python 3.11+
-- Virtual environment manager (`venv` recommended)
-- Docker & Docker Compose (optional, for containerized run)
-
-### Installation
-
-Clone the repository and install core and development dependencies:
-
-```bash
-# Create and activate virtual environment
+```powershell
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install CallVerse in editable mode with development tools
-make install
+.venv\Scripts\activate
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -e ".[all]"
+copy .env.example .env
+callverse all --skip-data      # forecast -> RL training -> evaluation (~20 min)
+callverse serve                # API on http://127.0.0.1:8000
+cd frontend; npm install; npm run dev   # UI on http://localhost:5173
 ```
 
-### Running Tests and Linters
+Optional local LLMs: install [Ollama](https://ollama.com), then
+`ollama pull qwen2.5:3b`, `ollama pull llama3.2` (and `qwen2.5:7b` for the full profile).
+Without Ollama every agent uses its offline backup, so everything still runs.
 
-```bash
-# Run code linting
-make lint
+Full instructions: [docs/RUN_GUIDE.md](docs/RUN_GUIDE.md) ·
+Demo for the validation day: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) ·
+Internship (PFE) presentation kit: [docs/RECRUITER_KIT.md](docs/RECRUITER_KIT.md)
 
-# Run import boundary enforcement checks
-make import-lint
+## Architecture
 
-# Run test suite
-make test
-
-# Run smoke tests
-make smoke
+```
+Data layer ──> Forecast & simulation ──> Digital twin (4 agents, LangGraph) ──> Evaluation ──> Serving & MLOps
+ Olist+Bitext    LightGBM per intent       Client  · Advisor (RAG+tools)        KPI engine      FastAPI + WebSocket
+ SQLite, FAISS   SimPy event simulation    Quality (LLM judge) · Workforce      scenarios×seeds React control room
+ Pandera         twin fidelity (KS)        (PPO routing + CP-SAT shifts)        component metrics MLflow, Docker, CI
 ```
 
-### CLI Usage
+Layers are enforced by `import-linter` contracts (a lower layer never imports a higher one).
 
-```bash
-# Inspect available CLI commands
-callverse --help
+## Project structure
+
+```
+configs/            every assumption, one YAML per layer (data, simulation, agents, scenarios, app)
+data/               raw (Olist, Bitext) -> processed (Parquet) -> SQLite store, knowledge base
+notebooks/          01-12: documented data exploration, cleaning, contact generation, studies
+src/callverse/
+  data/             notebook runner, Pandera contracts, SQLite store, tickets & chat generator
+  forecasting/      features (leakage-safe), baselines, LightGBM, rolling backtest
+  simulation/       SimPy engine, routers, Erlang C, customers, twin setup
+  agents/           client/ advisor/ quality/ workforce/  (the four agents)
+  orchestration/    LangGraph conversation graph and agent runtime
+  twin/             digital twin scenarios and fidelity checks
+  evaluation/       KPI engine, experiments, component metrics, scorecard
+  llm/              Ollama client, cache, tracing
+  api/              FastAPI app
+frontend/           React + TypeScript control room
+tests/              unit, smoke and integration tests (pytest)
+docs/               report, run guide, demo script, recruiter kit, phase reports
 ```
 
-Available commands include:
-- `callverse generate-data`: Generate synthetic customer contact center dataset
-- `callverse simulate`: Run discrete-event simulation
-- `callverse compare`: Compare baseline and twin simulation scenarios
-- `callverse train-forecast`: Train call arrival and demand forecasting models
-- `callverse train-rl`: Train workforce routing and scheduling RL policy
-- `callverse experiments`: Run evaluation and experimentation pipeline
+## License and data
 
-### Docker
-
-Build and run using Docker:
-
-```bash
-docker build -t callverse .
-docker run --rm callverse
-```
-
-Or with Docker Compose:
-
-```bash
-docker compose run --rm cli
-```
-
-## Documentation
-
-Detailed documentation is available in [`docs/`](file:///docs):
-- [`docs/architecture.md`](file:///docs/architecture.md): System architecture, dependency boundaries, and BO/DSO mapping
-- [`docs/data_dictionary.md`](file:///docs/data_dictionary.md): Schema specifications and entity definitions
-- [`docs/experiments.md`](file:///docs/experiments.md): Evaluation experiments and benchmarking protocol
+Olist data: CC BY-NC-SA 4.0 (Kaggle). Bitext dataset: CDLA-Sharing. Synthetic contacts,
+tickets and chats are generated by this project and marked `is_synthetic = True`.
