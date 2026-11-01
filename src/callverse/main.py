@@ -241,9 +241,26 @@ def judge_calibrate(judge: str = typer.Option("rules", help="rules or llm.")) ->
     say(result["agreement"].round(3).to_string(index=False))
 
 
+@app.command("llm-pull")
+def llm_pull() -> None:
+    """Download the pinned Hugging Face models of the active profile, then pin their commits."""
+    os.environ["HF_HUB_OFFLINE"] = "0"
+    from huggingface_hub import constants, snapshot_download
+
+    from callverse.llm import get_llm
+
+    constants.HF_HUB_OFFLINE = False  # .env keeps the hub offline for everything else
+    llm = get_llm()
+    patterns = ["*.json", "*.safetensors", "*.txt", "*.model", "*.jinja", "tokenizer*"]
+    for repo in dict.fromkeys(llm.settings.models.values()):
+        stage(f"Downloading {repo}")
+        say(f"  -> {snapshot_download(repo, allow_patterns=patterns)}")
+    llm_pin()
+
+
 @app.command("llm-pin")
 def llm_pin() -> None:
-    """Record the digest of every pinned Ollama model (reproducibility)."""
+    """Record the commit of every pinned Hugging Face model (reproducibility)."""
     from callverse.config import TRACE_DIR, ensure_dirs
     from callverse.llm import get_llm
 
@@ -283,7 +300,7 @@ def evaluate(
 
 @app.command()
 def status() -> None:
-    """What is built (data, models, evaluations) and whether the LLMs are reachable."""
+    """What is built (data, models, evaluations) and whether the local LLMs can run."""
     from callverse.config import EVALUATION_DIR, FORECAST_DIR, POLICY_DIR, PROCESSED_DIR, database_path
     from callverse.llm import get_llm
 
@@ -299,11 +316,14 @@ def status() -> None:
     stage("CallVerse status")
     for name, ok in checks.items():
         say(f"  [{'x' if ok else ' '}] {name}")
-    llm = get_llm()
-    say(
-        f"  Ollama reachable: {llm.available()} "
-        f"(profile {llm.settings.profile}, models {llm.settings.models})"
-    )
+    info = get_llm().status()
+    gpu = info["gpu"]
+    say(f"  LLMs ({info['provider']}, profile {info['profile']}): available={info['available']}")
+    say(f"  GPU: {gpu['name']} ({gpu['total_mb']} MB)" if gpu else "  GPU: none visible to PyTorch")
+    for role, model in info["roles"].items():
+        say(f"    {role:8s} {model['pinned']}  downloaded={model['downloaded']}")
+    if info["reason"]:
+        say(f"  Note: {info['reason']}")
 
 
 @app.command()

@@ -9,10 +9,8 @@ impatient.
 
 from dataclasses import dataclass
 from typing import Any
-
 import numpy as np
 import pandas as pd
-
 from callverse.config import load_yaml
 
 SITUATION_TEXT = {
@@ -102,6 +100,7 @@ def sample_profiles(
         frame = frame[~frame["bitext_tags"].fillna("").str.contains("W")]
     picked = frame.iloc[rng.choice(len(frame), size=min(n, len(frame)), replace=False)]
     return [build_profile(row, rng, bool(row["is_repeat"])) for _, row in picked.iterrows()]
+
 
 
 def profile_by_contact_id(contacts: pd.DataFrame, contact_id: str, seed: int = 0) -> CustomerProfile:

@@ -3,6 +3,9 @@
 ADVISOR_SYSTEM = """You are a customer-service advisor of an online marketplace (Brazil, orders \
 from many sellers). You chat with a customer about one order.
 
+Always write in English, like the customer, even though the shop, the cities and the \
+names are Brazilian. Never answer in Portuguese.
+
 Rules (from the advisor playbook):
 1. Before sharing order details, get the order number. If you do not have it yet, greet \
 the customer and ask for it in one short sentence.
@@ -34,3 +37,8 @@ def format_context(hits: list) -> str:
     return "\n\n".join(
         f"[{h.chunk.chunk_id}] {h.chunk.doc_title} - {h.chunk.section}\n{h.chunk.text}" for h in hits
     )
+
+ENGLISH_ONLY = (
+    "Your last draft was not in English. Rewrite the same answer in English only, "
+    "with the same facts and the same next step."
+)

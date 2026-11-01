@@ -1,7 +1,12 @@
-# One-command deploy of the CallVerse control room:
-#   docker compose up --build          -> UI on http://localhost:8080, API on :8000, MLflow on :5000
-#   docker compose --profile llm up    -> also starts Ollama in a container
-# Pinned model versions and seeds come from .env (copy .env.example).
+# One-command deploy of CallVerse:
+#   docker compose up --build
+#     front office (customers + advisors)  http://localhost:8080
+#     back office  (managers' control room) http://localhost:8081
+#     API (FastAPI + WebSocket, Swagger)    http://localhost:8000/docs
+#     MLflow                                http://localhost:5000
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#     same, with the local Hugging Face LLMs on an NVIDIA GPU (NVIDIA Container Toolkit).
+# Without a GPU the agents use their offline backups (templates + rule-based judge).
 
 services:
   postgres:
@@ -36,30 +41,22 @@ services:
     env_file: [.env]
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
     ports: ["8000:8000"]
     volumes:
       - ./data:/app/data
       - ./artifacts:/app/artifacts
       - ./configs:/app/configs
-      - hf-cache:/root/.cache/huggingface
-    extra_hosts: ["host.docker.internal:host-gateway"]
+      - hf-cache:/root/.cache/huggingface   # bge-m3 + the agents' LLMs (callverse llm-pull)
     depends_on: [mlflow]
 
-  ui:
+  # Both React apps, served by one nginx (8080 front office, 8081 back office);
+  # /api and /ws are proxied to the API, so each app talks to a single origin.
+  web:
     build: ./frontend
-    ports: ["8080:80"]
+    ports: ["8080:8080", "8081:8081"]
     depends_on: [api]
-
-  ollama:
-    image: ollama/ollama:0.5.7
-    profiles: ["llm"]
-    ports: ["11434:11434"]
-    volumes:
-      - ollama:/root/.ollama
 
 volumes:
   mlflow-db:
   mlflow-artifacts:
   hf-cache:
-  ollama:

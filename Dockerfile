@@ -1,5 +1,8 @@
-# CallVerse API (FastAPI + the whole Python pipeline), CPU only.
+# CallVerse API (FastAPI + the whole Python pipeline). CPU by default; the GPU override
+# (docker-compose.gpu.yml) installs the CUDA build of torch for the local LLMs.
 FROM python:3.11-slim
+
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
 
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -11,8 +14,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
-# CPU wheels of torch first (avoids pulling the 2 GB CUDA build)
-RUN pip install --upgrade pip && pip install torch --index-url https://download.pytorch.org/whl/cpu
+# torch first, from the CPU (default) or CUDA index
+RUN pip install --upgrade pip && pip install torch --index-url ${TORCH_INDEX}
 
 COPY pyproject.toml README.md ./
 COPY src/ ./src/

@@ -2,37 +2,68 @@
 # Four cooperating agents (Client, Advisor, Quality, Workforce) orchestrated by LangGraph.
 
 llm:
-  # Local LLMs served by Ollama (zero cost, no data leaves the machine).
-  provider: ollama
-  base_url: http://localhost:11434
-  # auto: use Ollama when it answers, otherwise the offline backups (templates and
-  # rule-based judge). on: fail if Ollama is down. off: always use the backups.
+  # Open-weight models from the Hugging Face Hub, run locally with `transformers`
+  # (zero cost per call, no data leaves the machine). `callverse llm-pull` downloads
+  # them once and pins each repository's commit in artifacts/traces/llm_models.lock.json.
+  provider: transformers
+  # auto: use the local models when they can run (CUDA GPU + weights downloaded),
+  # otherwise the offline backups (templates and rule-based judge).
+  # on: fail if a model cannot run. off: always use the backups.
   mode: auto
+  device: auto                # auto | cuda | cpu (CALLVERSE_LLM_DEVICE overrides)
   temperature: 0.2
   seed: 42                    # fixed seed: same prompt + same model = same answer
-  timeout_seconds: 180
   cache: true                 # identical calls are answered from artifacts/traces/llm_cache.sqlite
-  # Pinned models (the digest of each is written to artifacts/traces/llm_models.lock.json
-  # by `callverse llm-pin`). The judge is from a DIFFERENT family than the advisor so it
-  # does not share the advisor's blind spots.
-  # Two profiles (CALLVERSE_LLM_PROFILE overrides):
-  #   full: the architecture's choice (mid-size advisor), for evaluation batches.
-  #   fast: everything fits a 4 GB laptop GPU, for live demos (~10x faster).
-  profile: fast
+  max_new_tokens: {client: 160, advisor: 320, judge: 256}
+  # The judge is from a DIFFERENT family and organisation than the advisor
+  # (IBM Granite vs Hugging Face SmolLM3), so it does not share its blind spots.
+  # Profiles (CALLVERSE_LLM_PROFILE overrides):
+  #   gpu4gb: 4-bit weights; advisor + client share one 3B model, 1.6B judge.
+  #           ~3.2 GB of VRAM in total: fits a 4 GB laptop GPU (GTX 1650).
+  #   full:   the same families in full precision, for a GPU with >= 12 GB.
+  profile: gpu4gb
   profiles:
+    gpu4gb:
+      client: unsloth/SmolLM3-3B-bnb-4bit      # plays the customer
+      advisor: unsloth/SmolLM3-3B-bnb-4bit     # same weights, loaded once
+      judge: unsloth/granite-4.0-1b-bnb-4bit   # grades the conversation
     full:
-      client: qwen2.5:3b        # small, cheap: plays the customer
-      advisor: qwen2.5:7b       # mid-size with tool calling: answers the customer
-      judge: llama3.2:latest    # different family (Meta Llama vs Alibaba Qwen): grades
-    fast:
-      client: qwen2.5:3b
-      advisor: qwen2.5:3b       # same model as the client: no GPU model swap
-      judge: llama3.2:latest
-  # Fallback chain when a pinned model is not pulled locally
+      client: HuggingFaceTB/SmolLM3-3B
+      advisor: HuggingFaceTB/SmolLM3-3B
+      judge: ibm-granite/granite-4.0-1b
+  # Fallback chain when a pinned model is not downloaded
   fallbacks:
-    advisor: [qwen2.5:3b, llama3.2:latest]
-    client: [llama3.2:latest]
-    judge: [qwen2.5:3b]
+    advisor: [HuggingFaceTB/SmolLM3-3B]
+    client: [HuggingFaceTB/SmolLM3-3B]
+    judge: [ibm-granite/granite-4.0-1b]
+  # Model cards (shown in the back office) and chat-template options
+  catalog:
+    unsloth/SmolLM3-3B-bnb-4bit:
+      base_model: HuggingFaceTB/SmolLM3-3B
+      family: SmolLM3 (Hugging Face)
+      parameters: 3.1B
+      license: apache-2.0
+      quantization: 4-bit NF4 (bitsandbytes)
+      chat_template_kwargs: {enable_thinking: false}   # no hidden reasoning: faster replies
+      tools_kwarg: xml_tools                            # SmolLM3's template lists tools this way
+    HuggingFaceTB/SmolLM3-3B:
+      base_model: HuggingFaceTB/SmolLM3-3B
+      family: SmolLM3 (Hugging Face)
+      parameters: 3.1B
+      license: apache-2.0
+      chat_template_kwargs: {enable_thinking: false}
+      tools_kwarg: xml_tools
+    unsloth/granite-4.0-1b-bnb-4bit:
+      base_model: ibm-granite/granite-4.0-1b
+      family: Granite 4.0 (IBM)
+      parameters: 1.6B
+      license: apache-2.0
+      quantization: 4-bit NF4 (bitsandbytes)
+    ibm-granite/granite-4.0-1b:
+      base_model: ibm-granite/granite-4.0-1b
+      family: Granite 4.0 (IBM)
+      parameters: 1.6B
+      license: apache-2.0
 
 client:
   # Persona profiles of the simulated customers (twin input).
@@ -64,6 +95,7 @@ advisor:
     index_dir: data/knowledge_base/index    # built by scripts/build_knowledge_base.py
     # bge-m3: multilingual (FR + EN), 1024-dim dense vectors, runs locally on CPU.
     embedding_model: BAAI/bge-m3
+    embedding_device: cpu      # keeps the GPU for the LLMs
     embedding_batch_size: 16
     max_seq_length: 512        # chunks are short sections; 512 tokens is plenty
     # One chunk per "##" section. Longer sections are split on paragraphs.

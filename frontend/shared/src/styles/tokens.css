@@ -1,0 +1,151 @@
+/* CallVerse design tokens.
+   Surfaces and brand are cool neutrals with an indigo -> sky gradient. Chart
+   colors keep the validated colour-blind-safe palette (categorical slots in a
+   fixed order, status colors reserved). Each theme has its own steps, declared
+   for the OS setting and for the explicit toggle (data-theme). */
+:root {
+  color-scheme: light;
+  --page: #f4f6fb;
+  --surface-1: #ffffff;
+  --surface-2: #f7f8fc;
+  --surface-3: #eef1f8;
+  --text-primary: #0b1020;
+  --text-secondary: #46506a;
+  --text-muted: #838ca3;
+  --hairline: #e2e6f0;
+  --baseline: #c5cad8;
+  --shadow: 15 23 42;
+  --brand: #5b4fe6;
+  --brand-2: #0ea5e9;
+  --brand-3: #c026d3;
+  --brand-soft: rgba(91, 79, 230, 0.1);
+  --glow: rgba(91, 79, 230, 0.32);
+  --grid-dot: rgba(15, 23, 42, 0.07);
+  --aurora-1: rgba(91, 79, 230, 0.16);
+  --aurora-2: rgba(14, 165, 233, 0.14);
+  --aurora-3: rgba(192, 38, 211, 0.08);
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+  --series-8: #e34948;
+  --seq-100: #cde2fb;
+  --seq-250: #86b6ef;
+  --seq-400: #3987e5;
+  --seq-550: #1c5cab;
+  --seq-700: #0d366b;
+  --seq-ink-0: #0b0b0b;
+  --seq-ink-1: #0b0b0b;
+  --seq-ink-2: #ffffff;
+  --seq-ink-3: #ffffff;
+  --seq-ink-4: #ffffff;
+  --good: #0ca30c;
+  --good-text: #006300;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --layer-data: #eb6834;
+  --layer-sim: #1baf7a;
+  --layer-agents: #6250d6;
+  --layer-eval: #e34948;
+  --layer-serve: #2a78d6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #05070e;
+    --surface-1: #0b1020;
+    --surface-2: #10182d;
+    --surface-3: #172039;
+    --text-primary: #eef1fa;
+    --text-secondary: #a9b2cc;
+    --text-muted: #6f7996;
+    --hairline: rgba(148, 163, 205, 0.14);
+    --baseline: rgba(148, 163, 205, 0.3);
+    --shadow: 0 0 0;
+    --brand: #8b7dff;
+    --brand-2: #38bdf8;
+    --brand-3: #e879f9;
+    --brand-soft: rgba(139, 125, 255, 0.14);
+    --glow: rgba(139, 125, 255, 0.45);
+    --grid-dot: rgba(148, 163, 205, 0.09);
+    --aurora-1: rgba(139, 125, 255, 0.22);
+    --aurora-2: rgba(56, 189, 248, 0.16);
+    --aurora-3: rgba(232, 121, 249, 0.1);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --seq-100: #104281;
+    --seq-250: #1c5cab;
+    --seq-400: #3987e5;
+    --seq-550: #86b6ef;
+    --seq-700: #cde2fb;
+    --seq-ink-0: #ffffff;
+    --seq-ink-1: #ffffff;
+    --seq-ink-2: #ffffff;
+    --seq-ink-3: #0b0b0b;
+    --seq-ink-4: #0b0b0b;
+    --good-text: #2fd07a;
+    --layer-data: #d95926;
+    --layer-sim: #199e70;
+    --layer-agents: #9085e9;
+    --layer-eval: #e66767;
+    --layer-serve: #3987e5;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #05070e;
+  --surface-1: #0b1020;
+  --surface-2: #10182d;
+  --surface-3: #172039;
+  --text-primary: #eef1fa;
+  --text-secondary: #a9b2cc;
+  --text-muted: #6f7996;
+  --hairline: rgba(148, 163, 205, 0.14);
+  --baseline: rgba(148, 163, 205, 0.3);
+  --shadow: 0 0 0;
+  --brand: #8b7dff;
+  --brand-2: #38bdf8;
+  --brand-3: #e879f9;
+  --brand-soft: rgba(139, 125, 255, 0.14);
+  --glow: rgba(139, 125, 255, 0.45);
+  --grid-dot: rgba(148, 163, 205, 0.09);
+  --aurora-1: rgba(139, 125, 255, 0.22);
+  --aurora-2: rgba(56, 189, 248, 0.16);
+  --aurora-3: rgba(232, 121, 249, 0.1);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --seq-100: #104281;
+  --seq-250: #1c5cab;
+  --seq-400: #3987e5;
+  --seq-550: #86b6ef;
+  --seq-700: #cde2fb;
+  --seq-ink-0: #ffffff;
+  --seq-ink-1: #ffffff;
+  --seq-ink-2: #ffffff;
+  --seq-ink-3: #0b0b0b;
+  --seq-ink-4: #0b0b0b;
+  --good-text: #2fd07a;
+  --layer-data: #d95926;
+  --layer-sim: #199e70;
+  --layer-agents: #9085e9;
+  --layer-eval: #e66767;
+  --layer-serve: #3987e5;
+}

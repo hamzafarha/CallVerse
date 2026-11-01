@@ -60,6 +60,7 @@ class TwinRun:
     kpis: dict[str, float]
     records: pd.DataFrame | None = None
     queue: pd.DataFrame | None = None
+    staff: list[dict[str, Any]] | None = None  # agents and duty hours (kept with records)
 
 
 class DigitalTwin:
@@ -216,6 +217,27 @@ class DigitalTwin:
         kpis.update(
             plan.planned_cost(self.settings.costs.regular_hourly, self.settings.costs.overtime_multiplier)
         )
+        staff = None
+        if keep_records:
+            staff = [
+                {
+                    "agent_id": agent.agent_id,
+                    "primary_group": agent.primary_group,
+                    "overtime": agent.overtime,
+                    "on_call": False,
+                    "duty": duty[index].astype(bool).tolist(),
+                }
+                for index, agent in enumerate(agents + overtime_agents)
+            ] + [
+                {
+                    "agent_id": agent.agent_id,
+                    "primary_group": agent.primary_group,
+                    "overtime": True,
+                    "on_call": True,
+                    "duty": None,
+                }
+                for agent in (pool or [])
+            ]
         return TwinRun(
             spec.name,
             plan.name,
@@ -225,7 +247,91 @@ class DigitalTwin:
             kpis,
             records if keep_records else None,
             engine.queue_trace_frame() if trace else None,
+            staff,
         )
+
+    def floor(
+        self,
+        spec: ScenarioSpec | str,
+        plan_kind: str = "cpsat",
+        router: str = "fifo",
+        seed: int = 0,
+        day: int = 0,
+        prepared: bool = True,
+    ) -> dict[str, Any]:
+        """One simulated day, contact by contact, for the animated live floor.
+
+        Times are seconds from midnight of that day. Each contact has its arrival,
+        the time an agent picked it up (or when the customer hung up) and the end of
+        the conversation; each agent has its skill and its 24 duty hours.
+        """
+        spec = self.scenario(spec) if isinstance(spec, str) else spec
+        day = int(np.clip(day, 0, spec.days - 1))
+        plan = self.plan(spec, plan_kind, prepared)
+        run = self.simulate(spec, plan, router, seed, keep_records=True, prepared=prepared)
+        assert run.records is not None and run.staff is not None
+        start = day * SECONDS_PER_DAY
+        end = start + SECONDS_PER_DAY
+        records = run.records
+        live = records["is_live"] & (records["arrival"] >= start) & (records["arrival"] < end)
+        # Asynchronous contacts (overnight messages) also occupy the agents: those worked
+        # on this day, or still waiting for it, are shown as the backlog.
+        backlog = ~records["is_live"] & (
+            ((records["start"] >= start) & (records["start"] < end))
+            | (
+                records["start"].isna()
+                & (records["arrival"] < end)
+                & (records["arrival"] >= start - SECONDS_PER_DAY)
+            )
+        )
+        rows = records[live | backlog]
+        used = set(rows["agent_id"].dropna().astype(int))
+        agents = []
+        for member in run.staff:
+            hours = member["duty"][day * 24 : (day + 1) * 24] if member["duty"] is not None else None
+            if (hours and any(hours)) or member["agent_id"] in used:
+                agents.append({**member, "duty": hours})
+        threshold = self.settings.sim.service_level_threshold_seconds
+        live_rows = rows[rows["is_live"]]
+        answered = live_rows[live_rows["start"].notna()]
+        sim = self.settings.sim
+
+        def rel(column: str) -> list[float | None]:
+            return [None if pd.isna(v) else round(float(v) - start, 1) for v in rows[column]]
+
+        return {
+            "scenario": spec.name,
+            "label": spec.label,
+            "date": str((spec.week_start + pd.Timedelta(days=day)).date()),
+            "day": day,
+            "days": spec.days,
+            "plan": plan.name,
+            "router": router,
+            "seed": seed,
+            "opening_hours": [sim.open_hour, sim.close_hour],
+            "threshold_seconds": threshold,
+            "agents": agents,
+            "contacts": {
+                "id": rows["contact_id"].astype(str).tolist(),
+                "group": rows["intent_group"].astype(str).tolist(),
+                "patience": rows["patience_class"].astype(str).tolist(),
+                "arrival": rel("arrival"),
+                "start": rel("start"),
+                "end": rel("end"),
+                "abandon_at": rel("abandon_at"),
+                "abandoned": rows["abandoned"].astype(bool).tolist(),
+                "agent": [None if pd.isna(v) else int(v) for v in rows["agent_id"]],
+                "live": rows["is_live"].astype(bool).tolist(),
+            },
+            "summary": {
+                "contacts": int(len(live_rows)),
+                "backlog": int((~rows["is_live"]).sum()),
+                "answered": int(len(answered)),
+                "abandoned": int(live_rows["abandoned"].sum()),
+                "service_level": float((answered["wait"] <= threshold).sum() / max(len(live_rows), 1)),
+                "mean_wait_seconds": float(live_rows["wait"].fillna(0).mean()) if len(live_rows) else 0.0,
+            },
+        }
 
     def run(
         self,

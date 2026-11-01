@@ -65,12 +65,14 @@ class AgentRuntime:
             return self._classifier
 
     def status(self) -> dict[str, Any]:
-        llm_ok = self.llm.available()
+        llm = self.llm.status()
         return {
-            "llm_available": llm_ok,
+            "llm_available": llm["available"],
             "llm_mode": self.llm.settings.mode,
+            "llm_reason": llm["reason"],
+            "llm": llm,
             "models": {
-                role: self.llm.resolve_model(role) if llm_ok else None for role in self.llm.settings.models
+                role: model["repo"] if llm["available"] else None for role, model in llm["roles"].items()
             },
             "pinned_models": self.llm.settings.models,
             "retriever": self.retriever_name,

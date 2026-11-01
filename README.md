@@ -3,7 +3,7 @@
 **A multi-agent digital twin of an e-commerce customer service center.**
 Forecast how many customers will contact you, test staffing and routing decisions on a
 virtual call center before applying them, and let AI agents answer and grade customer
-conversations — all running locally, at zero API cost.
+conversations — all running locally, at zero API cost, with open-weight Hugging Face models.
 
 > Integrated project (Advanced Data Science, ESPRIT). Data: real Olist orders (99,441)
 > and Bitext customer messages; contacts, tickets and chats are generated from them
@@ -13,7 +13,9 @@ conversations — all running locally, at zero API cost.
 |---|---|
 | **Business objectives** | BO1 shorter waits · BO2 correct answers & satisfaction · BO3 lower cost at equal service · BO4 prepare for peaks by testing first |
 | **AI components** | LightGBM forecast · SimPy digital twin · MaskablePPO routing · OR-Tools CP-SAT shift planning · agentic RAG advisor (bge-m3 + FAISS + tools) · LLM-as-judge · LangGraph orchestration |
-| **Serving & MLOps** | FastAPI (REST + WebSocket) · React control room · MLflow · LLM tracing · Docker Compose · GitHub Actions |
+| **LLMs (Hugging Face, local)** | SmolLM3-3B (advisor + simulated customer) · IBM Granite-4.0-1B (quality judge, different family) · 4-bit NF4 with `transformers` + `bitsandbytes` on a 4 GB GPU · commits pinned |
+| **Apps** | **Front office** (customers + advisors): help centre, live chat with the AI advisor, advisor desk with an AI copilot · **Back office** (managers): live floor of the twin, agent theater, forecast, workforce, quality, scorecard, MLOps |
+| **Serving & MLOps** | FastAPI (REST + WebSocket token streaming) · React + TypeScript + Framer Motion (npm workspaces, shared design system) · MLflow · LLM tracing · Docker Compose · GitHub Actions |
 
 ## Results (from `callverse evaluate`, 10 seeds, 95% CIs)
 
@@ -34,17 +36,19 @@ including where an idea did **not** beat its baseline and the backup that took o
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install torch --index-url https://download.pytorch.org/whl/cu126   # NVIDIA GPU (or .../whl/cpu)
 pip install -e ".[all]"
 copy .env.example .env
+callverse llm-pull             # SmolLM3-3B + Granite-4.0-1B, 4-bit (~3 GB, once)
 callverse all --skip-data      # forecast -> RL training -> evaluation (~20 min)
-callverse serve                # API on http://127.0.0.1:8000
-cd frontend; npm install; npm run dev   # UI on http://localhost:5173
+callverse serve                # API on http://127.0.0.1:8000 (Swagger: /docs)
+cd frontend; npm install
+npm run dev:front              # front office  http://localhost:5173
+npm run dev:back               # back office   http://localhost:5174  (second terminal)
 ```
 
-Optional local LLMs: install [Ollama](https://ollama.com), then
-`ollama pull qwen2.5:3b`, `ollama pull llama3.2` (and `qwen2.5:7b` for the full profile).
-Without Ollama every agent uses its offline backup, so everything still runs.
+Without a CUDA GPU (or before `llm-pull`) every agent uses its offline backup
+(approved templates, rule-based judge), so everything still runs.
 
 Full instructions: [docs/RUN_GUIDE.md](docs/RUN_GUIDE.md) ·
 Demo for the validation day: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) ·
@@ -55,7 +59,7 @@ Internship (PFE) presentation kit: [docs/RECRUITER_KIT.md](docs/RECRUITER_KIT.md
 ```
 Data layer ──> Forecast & simulation ──> Digital twin (4 agents, LangGraph) ──> Evaluation ──> Serving & MLOps
  Olist+Bitext    LightGBM per intent       Client  · Advisor (RAG+tools)        KPI engine      FastAPI + WebSocket
- SQLite, FAISS   SimPy event simulation    Quality (LLM judge) · Workforce      scenarios×seeds React control room
+ SQLite, FAISS   SimPy event simulation    Quality (LLM judge) · Workforce      scenarios×seeds React front + back office
  Pandera         twin fidelity (KS)        (PPO routing + CP-SAT shifts)        component metrics MLflow, Docker, CI
 ```
 
@@ -72,12 +76,12 @@ src/callverse/
   forecasting/      features (leakage-safe), baselines, LightGBM, rolling backtest
   simulation/       SimPy engine, routers, Erlang C, customers, twin setup
   agents/           client/ advisor/ quality/ workforce/  (the four agents)
-  orchestration/    LangGraph conversation graph and agent runtime
+  orchestration/    LangGraph conversation graph, live sessions (human + agents), runtime
   twin/             digital twin scenarios and fidelity checks
   evaluation/       KPI engine, experiments, component metrics, scorecard
-  llm/              Ollama client, cache, tracing
+  llm/              Hugging Face client (transformers, 4-bit), streaming, cache, tracing
   api/              FastAPI app
-frontend/           React + TypeScript control room
+frontend/           npm workspaces: shared/ (design system), front-office/, back-office/
 tests/              unit, smoke and integration tests (pytest)
 docs/               report, run guide, demo script, recruiter kit, phase reports
 ```

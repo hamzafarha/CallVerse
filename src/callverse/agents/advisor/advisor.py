@@ -12,6 +12,7 @@ invented answers. It also runs when Ollama is not available.
 
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from callverse.agents.advisor.intent_classifier import IntentClassifier
-from callverse.agents.advisor.prompts import ADVISOR_SYSTEM, NO_CONTEXT, format_context
+from callverse.agents.advisor.prompts import ADVISOR_SYSTEM, ENGLISH_ONLY, NO_CONTEXT, format_context
 from callverse.agents.advisor.tools import AdvisorTools, tool_schemas
 from callverse.data.conversations import (
     CLOSINGS,
@@ -36,6 +37,17 @@ from callverse.llm import LLMClient, LLMUnavailableError
 
 ORDER_ID = re.compile(r"\b[0-9a-f]{32}\b")
 ASKS_ORDER = re.compile(r"order (number|id|no)", re.I)
+# Small models drift to Portuguese (the orders, cities and names are Brazilian)
+PORTUGUESE = re.compile(
+    r"\b(obrigad[oa]|voc[eê]|pedido|desculp\w*|n[uú]mero|por favor|ol[aá]|n[aã]o|sua|seu|"
+    r"est[aá]|entrega|reembolso|ajudar|compra)\b",
+    re.I,
+)
+
+
+def looks_portuguese(text: str) -> bool:
+    """At least three common Portuguese words: the reply is not in English."""
+    return len(PORTUGUESE.findall(text)) >= 3
 NO_ORDER_YET = (
     "You do not have the order number yet. Greet the customer and ask for the order number "
     "before anything else. Never invent an order number."
@@ -123,9 +135,42 @@ class AdvisorAgent:
 
     # ------------------------------------------------------------------ public
     def reply(
-        self, messages: list[dict[str, Any]], memory: AdvisorMemory, tools: AdvisorTools
+        self,
+        messages: list[dict[str, Any]],
+        memory: AdvisorMemory,
+        tools: AdvisorTools,
+        on_token: Callable[[str], None] | None = None,
+        on_event: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> AdvisorReply:
-        """Next advisor message given the conversation so far."""
+        """Next advisor message given the conversation so far.
+
+        ``on_token`` streams the LLM's visible text; ``on_event`` reports pipeline
+        steps (``retrieval``, ``tool``, ``generation``) for the live UI.
+        """
+        previous = tools.listener
+        if on_event is not None:
+            tools.listener = lambda call: on_event(
+                "tool",
+                {
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "ok": call.ok,
+                    "latency_ms": round(call.latency_ms, 1),
+                },
+            )
+        try:
+            return self._reply(messages, memory, tools, on_token, on_event)
+        finally:
+            tools.listener = previous
+
+    def _reply(
+        self,
+        messages: list[dict[str, Any]],
+        memory: AdvisorMemory,
+        tools: AdvisorTools,
+        on_token: Callable[[str], None] | None,
+        on_event: Callable[[str, dict[str, Any]], None] | None,
+    ) -> AdvisorReply:
         if memory.intent is None:
             first = next(m["text"] for m in messages if m["speaker"] == "customer")
             prediction = self.classifier.predict(str(first))
@@ -135,7 +180,7 @@ class AdvisorAgent:
         calls_before = len(tools.calls)
         if self.use_llm():
             try:
-                reply = self._llm_reply(messages, memory, tools)
+                reply = self._llm_reply(messages, memory, tools, on_token, on_event)
             except LLMUnavailableError:
                 reply = self._template_reply(messages, memory, tools)
                 reply.mode = "template_fallback"
@@ -249,10 +294,20 @@ class AdvisorAgent:
         return memory.decision
 
     def _llm_reply(
-        self, messages: list[dict[str, Any]], memory: AdvisorMemory, tools: AdvisorTools
+        self,
+        messages: list[dict[str, Any]],
+        memory: AdvisorMemory,
+        tools: AdvisorTools,
+        on_token: Callable[[str], None] | None = None,
+        on_event: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> AdvisorReply:
         assert self.llm is not None
         hits = self.retrieve(messages, memory.intent)
+        if on_event is not None:
+            on_event(
+                "retrieval",
+                {"hits": [{"section": h.chunk.section, "score": round(h.score, 3)} for h in hits]},
+            )
         context = format_context(hits)
         if (
             self.no_answer_score is not None
@@ -287,8 +342,12 @@ class AdvisorAgent:
             chat.append({"role": role, "content": str(message["text"])})
 
         total_tokens, latency, model = 0, 0.0, None
-        for _ in range(self.max_tool_rounds + 1):
-            response = self.llm.chat("advisor", chat, tools=offered or None, agent="advisor")
+        for round_number in range(self.max_tool_rounds + 1):
+            if on_event is not None:
+                on_event("generation", {"round": round_number, "model": self.llm.resolve_model("advisor")})
+            response = self.llm.chat(
+                "advisor", chat, tools=offered or None, agent="advisor", on_token=on_token
+            )
             total_tokens += response.prompt_tokens + response.completion_tokens
             latency += response.latency_ms
             model = response.model
@@ -320,8 +379,17 @@ class AdvisorAgent:
                 chat.append({"role": "tool", "content": result, "tool_name": call["name"]})
         else:
             text = ""
+        if text and looks_portuguese(text):
+            # Language guardrail: regenerate once in English (no tools, same context).
+            if on_event is not None:
+                on_event("generation", {"round": round_number + 1, "model": model, "reason": "english"})
+            chat += [{"role": "assistant", "content": text}, {"role": "user", "content": ENGLISH_ONLY}]
+            retry = self.llm.chat("advisor", chat, agent="advisor", on_token=on_token)
+            total_tokens += retry.prompt_tokens + retry.completion_tokens
+            latency += retry.latency_ms
+            text = retry.content.strip() if not looks_portuguese(retry.content) else ""
         if not text:
-            raise LLMUnavailableError("The advisor model returned no answer.")
+            raise LLMUnavailableError("The advisor model returned no usable answer.")
         if self.variant == "rag_policy" and memory.order_id is None and not ASKS_ORDER.search(text):
             # Compliance guardrail (playbook rule 1): verify the order before helping further.
             text = f"{text}\n\n{self._pick(VERIFY_REQUESTS)}"

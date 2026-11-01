@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "callverse"
-version = "1.0.0"
+version = "1.1.0"
 description = "Multi-agent digital twin of an e-commerce customer service center"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,9 +37,14 @@ forecast = [
     "statsmodels>=0.14",
     "prophet>=1.1",
 ]
-# Agents: RAG embeddings, LangGraph orchestration, RL routing, CP-SAT scheduling
+# Agents: local Hugging Face LLMs (4-bit on a CUDA GPU), RAG embeddings, LangGraph
+# orchestration, RL routing, CP-SAT scheduling. For the GPU, install torch from the
+# CUDA index first (docs/RUN_GUIDE.md).
 agents = [
     "torch>=2.2",
+    "transformers>=4.56",
+    "accelerate>=1.0",
+    "bitsandbytes>=0.45; platform_machine == 'x86_64' or platform_machine == 'AMD64'",
     "sentence-transformers>=3.0",
     "faiss-cpu>=1.8",
     "langgraph>=0.2",
@@ -93,7 +98,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 markers = [
     "slow: trains or simulates for more than a few seconds",
-    "llm: needs a running Ollama server",
+    "llm: needs the local Hugging Face models (CUDA GPU, `callverse llm-pull`)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 

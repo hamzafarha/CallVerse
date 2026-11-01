@@ -152,6 +152,102 @@ def expected_wait(profile: CustomerProfile, intent_group: str) -> dict[str, Any]
     }
 
 
+def route_contact(session: ConversationSession, first_text: str) -> dict[str, Any]:
+    """Workforce agent: predict the problem type and pick the best-skilled desk."""
+    prediction = session.advisor.classifier.predict(first_text)
+    session.memory.intent = prediction.intent
+    session.memory.intent_group = prediction.intent_group
+    session.memory.intent_confidence = prediction.confidence
+    return {
+        "predicted_intent": prediction.intent,
+        "predicted_group": prediction.intent_group,
+        "confidence": round(prediction.confidence, 3),
+        **expected_wait(session.profile, prediction.intent_group),
+    }
+
+
+def advisor_message(reply: Any) -> dict[str, Any]:
+    """Transcript message of one advisor reply."""
+    meta = {
+        "mode": reply.mode,
+        "stage": reply.stage,
+        "sources": reply.sources,
+        "retrieval": reply.retrieval,
+        "tools": reply.tool_calls,
+        "model": reply.model,
+        "latency_ms": round(reply.latency_ms, 1),
+        "tokens": reply.tokens,
+    }
+    return {"speaker": "advisor", "text": reply.text, "meta": meta}
+
+
+def advisor_state(session: ConversationSession) -> dict[str, Any]:
+    memory = session.memory
+    return {
+        "intent": memory.intent,
+        "order_id": memory.order_id,
+        "outcome": memory.outcome,
+        "handed_to": memory.handed_to,
+        "answered": memory.answered,
+    }
+
+
+def review_conversation(
+    session: ConversationSession, messages: list[dict[str, Any]]
+) -> tuple[dict[str, Any], Any]:
+    """Quality agent: (policy-correct reference, scorecard) of a finished conversation."""
+    reference = reference_answer(session)
+    advisor_messages = [m for m in messages if m["speaker"] == "advisor"]
+    meta = {
+        "sources": [s for m in advisor_messages for s in m.get("meta", {}).get("sources", [])],
+        "tools": [t for m in advisor_messages for t in m.get("meta", {}).get("tools", [])],
+        "outcome": session.memory.outcome,
+        "handed_to": session.memory.handed_to,
+    }
+    transcript = [{"speaker": m["speaker"], "text": m["text"]} for m in messages]
+    return reference, session.reviewer.review(transcript, reference, meta)
+
+
+def kpi_row(
+    session: ConversationSession,
+    messages: list[dict[str, Any]],
+    routing: dict[str, Any],
+    card: dict[str, Any],
+    csat: int | None,
+    reference: dict[str, Any],
+) -> dict[str, Any]:
+    """BO2 indicators of one conversation."""
+    tools = [t for m in messages if m["speaker"] == "advisor" for t in m.get("meta", {}).get("tools", [])]
+    customer_text = " ".join(m["text"] for m in messages if m["speaker"] == "customer").lower()
+    handover = session.memory.handed_to or ("supervisor" if "supervisor" in customer_text else None)
+    action_correct = None
+    if session.memory.outcome and reference.get("outcome"):
+        action_correct = session.memory.outcome == reference["outcome"]
+    return {
+        "contact_id": session.profile.contact_id,
+        "true_intent": session.profile.intent,
+        "predicted_intent": routing.get("predicted_intent"),
+        "intent_correct": routing.get("predicted_intent") == session.profile.intent,
+        "advisor_mode": next(
+            (m.get("meta", {}).get("mode") for m in reversed(messages) if m["speaker"] == "advisor"), None
+        ),
+        "judge": card["judge"],
+        "turns": len(messages),
+        "fcr": bool(card["resolved"]) and handover is None,
+        "resolved_or_handed_over": bool(card["resolved"]),
+        "csat": csat,
+        "compliant": card["scores"]["compliance"] >= 4,
+        "correct": action_correct if action_correct is not None else card["correct"],
+        "action_correct": action_correct,
+        "judge_correct": card["correct"],
+        "tool_calls": len(tools),
+        "tool_success_rate": (sum(t["ok"] for t in tools) / len(tools)) if tools else None,
+        "expected_wait_seconds": routing.get("expected_wait_seconds"),
+        "expected_handle_seconds": routing.get("expected_handle_seconds"),
+        **{f"score_{k}": v for k, v in card["scores"].items()},
+    }
+
+
 def build_graph(session: ConversationSession):
     """Compiled LangGraph for one conversation."""
 
@@ -168,22 +264,13 @@ def build_graph(session: ConversationSession):
         }
 
     def workforce_route(state: ConversationState) -> dict[str, Any]:
-        prediction = session.advisor.classifier.predict(state["messages"][0]["text"])
-        session.memory.intent = prediction.intent
-        session.memory.intent_group = prediction.intent_group
-        session.memory.intent_confidence = prediction.confidence
-        routing = {
-            "predicted_intent": prediction.intent,
-            "predicted_group": prediction.intent_group,
-            "confidence": round(prediction.confidence, 3),
-            **expected_wait(session.profile, prediction.intent_group),
-        }
+        routing = route_contact(session, state["messages"][0]["text"])
         return {
             "routing": routing,
             "events": _event(
                 state,
                 "workforce",
-                f"Predicted '{prediction.intent}' -> {routing['assigned_desk']} "
+                f"Predicted '{routing['predicted_intent']}' -> {routing['assigned_desk']} "
                 f"({routing['desk_specialty']} specialist)",
                 routing=routing,
             ),
@@ -192,26 +279,10 @@ def build_graph(session: ConversationSession):
     def advisor(state: ConversationState) -> dict[str, Any]:
         messages = state["messages"]
         reply = session.advisor.reply(messages, session.memory, session.tools)
-        meta = {
-            "mode": reply.mode,
-            "stage": reply.stage,
-            "sources": reply.sources,
-            "retrieval": reply.retrieval,
-            "tools": reply.tool_calls,
-            "model": reply.model,
-            "latency_ms": round(reply.latency_ms, 1),
-            "tokens": reply.tokens,
-        }
-        message = {"speaker": "advisor", "text": reply.text, "meta": meta}
+        message = advisor_message(reply)
         return {
             "messages": [*messages, message],
-            "advisor": {
-                "intent": session.memory.intent,
-                "order_id": session.memory.order_id,
-                "outcome": session.memory.outcome,
-                "handed_to": session.memory.handed_to,
-                "answered": session.memory.answered,
-            },
+            "advisor": advisor_state(session),
             "events": _event(
                 state,
                 "advisor",
@@ -246,16 +317,7 @@ def build_graph(session: ConversationSession):
         return "advisor"
 
     def quality(state: ConversationState) -> dict[str, Any]:
-        reference = reference_answer(session)
-        advisor_messages = [m for m in state["messages"] if m["speaker"] == "advisor"]
-        meta = {
-            "sources": [s for m in advisor_messages for s in m["meta"].get("sources", [])],
-            "tools": [t for m in advisor_messages for t in m["meta"].get("tools", [])],
-            "outcome": session.memory.outcome,
-            "handed_to": session.memory.handed_to,
-        }
-        transcript = [{"speaker": m["speaker"], "text": m["text"]} for m in state["messages"]]
-        card = session.reviewer.review(transcript, reference, meta)
+        reference, card = review_conversation(session, state["messages"])
         return {
             "reference": reference,
             "scorecard": card.to_dict(),
@@ -269,39 +331,14 @@ def build_graph(session: ConversationSession):
         }
 
     def kpi(state: ConversationState) -> dict[str, Any]:
-        card = state["scorecard"]
-        tools = [
-            t for m in state["messages"] if m["speaker"] == "advisor" for t in m["meta"].get("tools", [])
-        ]
-        customer_text = " ".join(m["text"] for m in state["messages"] if m["speaker"] == "customer").lower()
-        handover = session.memory.handed_to or ("supervisor" if "supervisor" in customer_text else None)
-        reference = state.get("reference") or {}
-        action_correct = None
-        if session.memory.outcome and reference.get("outcome"):
-            action_correct = session.memory.outcome == reference["outcome"]
-        kpis = {
-            "contact_id": session.profile.contact_id,
-            "true_intent": session.profile.intent,
-            "predicted_intent": state["routing"]["predicted_intent"],
-            "intent_correct": state["routing"]["predicted_intent"] == session.profile.intent,
-            "advisor_mode": next(
-                (m["meta"]["mode"] for m in reversed(state["messages"]) if m["speaker"] == "advisor"), None
-            ),
-            "judge": card["judge"],
-            "turns": len(state["messages"]),
-            "fcr": bool(card["resolved"]) and handover is None,
-            "resolved_or_handed_over": bool(card["resolved"]),
-            "csat": state.get("csat"),
-            "compliant": card["scores"]["compliance"] >= 4,
-            "correct": action_correct if action_correct is not None else card["correct"],
-            "action_correct": action_correct,
-            "judge_correct": card["correct"],
-            "tool_calls": len(tools),
-            "tool_success_rate": (sum(t["ok"] for t in tools) / len(tools)) if tools else None,
-            "expected_wait_seconds": state["routing"].get("expected_wait_seconds"),
-            "expected_handle_seconds": state["routing"].get("expected_handle_seconds"),
-            **{f"score_{k}": v for k, v in card["scores"].items()},
-        }
+        kpis = kpi_row(
+            session,
+            state["messages"],
+            state["routing"],
+            state["scorecard"],
+            state.get("csat"),
+            state.get("reference") or {},
+        )
         return {"kpis": kpis, "events": _event(state, "kpi", "KPIs recorded", kpis=kpis)}
 
     graph = StateGraph(ConversationState)

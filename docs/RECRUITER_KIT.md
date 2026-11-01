@@ -30,7 +30,8 @@ and the questions you will be asked (with answers grounded in what the project r
 - *Action*: built the data pipeline (Olist + Bitext, Pandera contracts), the forecast
   (rolling backtest of 5 models), the SimPy twin (validated against Erlang C), the
   Workforce agent (CP-SAT + MaskablePPO), the RAG advisor and LLM judge (LangGraph,
-  local Ollama models), the KPI engine (seeds, 95% CIs), FastAPI + React, MLflow, Docker, CI.
+  Hugging Face SmolLM3 + Granite in 4-bit on a 4 GB GPU), the KPI engine (seeds, 95% CIs),
+  FastAPI with token streaming, two React apps (front office + back office), MLflow, Docker, CI.
 - *Result*: cost −40% at the service target (CP-SAT), forecast error −20% vs naive,
   routing −14% wait on stressed days, retrieval recall@4 97% vs 80% for keyword
   search — and honest negatives: the small LLM advisor invented promises, so the
@@ -48,11 +49,14 @@ and the questions you will be asked (with answers grounded in what the project r
   vs a peak-sized fixed schedule while meeting the 80/20 service level in simulation.
 - Trained a **MaskablePPO** routing agent (Stable-Baselines3, Gymnasium) in the simulator:
   **−14% average speed of answer** vs FIFO on unseen stressed days.
-- Built an **agentic RAG** advisor (bge-m3 + FAISS, tool calling over SQLite, local Ollama
-  LLMs) and an **LLM-as-judge** with agreement measured by Cohen's kappa; retrieval
+- Built an **agentic RAG** advisor (bge-m3 + FAISS, tool calling over SQLite) on open-weight
+  **Hugging Face** LLMs run locally with `transformers` + 4-bit `bitsandbytes` (SmolLM3-3B advisor,
+  IBM Granite judge) and an **LLM-as-judge** with agreement measured by Cohen's kappa; retrieval
   recall@4 **97% vs 80%** for keyword search.
-- Shipped it as a product: **FastAPI** (REST + WebSocket), **React/TypeScript** control room,
-  **MLflow** tracking, LLM tracing, **Docker Compose**, **GitHub Actions** CI (80 tests,
+- Shipped it as a product: **FastAPI** (REST + WebSocket token streaming), two **React/TypeScript**
+  apps on one design system — a customer/advisor **front office** (live AI chat, advisor desk with
+  an AI copilot) and a manager **back office** (animated live floor of the twin, agent theater,
+  scorecard) — **MLflow**, LLM tracing, **Docker Compose**, **GitHub Actions** CI (95+ tests,
   layered-architecture contracts).
 
 ## 3. LinkedIn post (draft)
@@ -65,24 +69,27 @@ and the questions you will be asked (with answers grounded in what the project r
 > 🏭 a SimPy simulation of the center, validated against queueing theory
 > 🧑‍💼 a Workforce agent: OR-Tools plans the shifts (−40% labour cost at the same service
 > target), a reinforcement-learning agent routes customers
-> 🤖 LLM agents (local, via Ollama) that play customers, answer with RAG + tools, and grade
-> each conversation
+> 🤖 LLM agents (open-weight Hugging Face models running on my laptop GPU) that play customers,
+> answer with RAG + tools, and grade each conversation
+> 💬 a customer portal where you chat with the AI advisor live, and a control room where you
+> watch the virtual contact centre work, customer by customer
 > 🧪 every claim tested over 10 seeds with 95% confidence intervals
 >
 > My favourite lesson: the AI judge caught our small LLM advisor inventing promises — so we
 > kept the rules-engine hybrid, exactly as our own "switch to backup" rule said.
 > Stack: Python · LightGBM · SimPy · Stable-Baselines3 · OR-Tools · LangGraph · FAISS ·
-> FastAPI · React · MLflow · Docker.
+> Hugging Face transformers · FastAPI · React · MLflow · Docker.
 > I'm looking for a PFE internship in data science / ML engineering — happy to demo it! 🔗 [repo]
 
 ## 4. Portfolio checklist
 
 - [ ] GitHub repo public (or private + access on request), README with the results table and a GIF.
-- [ ] **Record a 2-3 minute demo video** (OBS): Overview → What-if (promo spike, unprepared vs
-      prepared) → Agent playground (one LLM conversation) → Evaluation scorecard.
-- [ ] Screenshots in `docs/img/` (overview, twin, workforce heatmap, agent playground, evaluation).
+- [ ] **Record a 2-3 minute demo video** (OBS): front-office live chat (tokens streaming, behind-the-scenes
+      panel) → back-office live floor (promo spike, unprepared vs prepared) → agent theater → scorecard.
+- [ ] Screenshots in `docs/img/` (front-office chat, advisor desk, live floor, agent theater, MLOps) —
+      add `?snapshot` to the URL to freeze every animation in its final state.
 - [ ] Pin the repo on GitHub; add topics: `digital-twin`, `reinforcement-learning`, `rag`,
-      `langgraph`, `or-tools`, `forecasting`, `fastapi`, `react`.
+      `langgraph`, `or-tools`, `forecasting`, `huggingface`, `fastapi`, `react`.
 - [ ] One-page PDF summary (problem, architecture diagram, 4 results, stack, your role).
 - [ ] Be able to run `callverse chat --mode template` and open the UI on your laptop in < 1 min.
 - [ ] Know your numbers by heart (section 1) and the limits (section 6).
@@ -145,6 +152,7 @@ of an existing contact-center platform. See the commercial section of the report
 | Optimization | `agents/workforce/scheduling.py`, CP-SAT two-stage model |
 | LLM engineering | `agents/advisor/`, `agents/quality/`, `orchestration/graph.py`, `llm/` |
 | Statistics | paired differences, 95% CIs, KS tests, Cohen's kappa |
-| Software engineering | layered architecture with import contracts, 80 tests, CI, typing |
+| Software engineering | layered architecture with import contracts, 95+ tests, CI, typing |
 | MLOps | MLflow, model pinning, caching, tracing, Docker Compose |
-| Full-stack | FastAPI + WebSocket, React + TypeScript + Tailwind + Recharts |
+| Full-stack | FastAPI + WebSocket streaming, two React + TypeScript apps (npm workspaces), Tailwind, Framer Motion, Recharts, canvas animation |
+| LLM serving | `llm/hf_local.py`: 4-bit loading, chat templates, tool-call parsing, token streaming, JSON repair |

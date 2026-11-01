@@ -152,7 +152,7 @@ this for an e-commerce order). The break-even, not the euro figure, is the robus
 
 ## A7. Go-to-market and roadmap
 
-1. **MVP (this project)**: twin, four agents, control room, evaluation — runs on a laptop.
+1. **MVP (this project)**: twin, four agents, front office + back office, evaluation — runs on a laptop.
 2. **Pilot** (8 weeks, 1–2 clients): connect real logs (tickets, chat timestamps, schedules);
    calibrate patience, handle times and contact rates; validate fidelity; human-label 100 chats.
 3. **Product**: connectors (Zendesk, Freshdesk, Gorgias), multi-skill queues and channels
@@ -215,7 +215,7 @@ trained and tested inside its simulation.
 | 3 | Modelling — twin | SimPy engine, Erlang C validation (10, `simulation/`) |
 | 4 | Modelling — agents | knowledge base (11), advisor, client, quality, workforce (`agents/`), LangGraph |
 | 5 | Evaluation | KPI engine, experiments with seeds and CIs, scorecard (`evaluation/`) |
-| 6 | Deployment | FastAPI, React control room, MLflow, Docker Compose, CI |
+| 6 | Deployment | FastAPI, React front office + back office, Hugging Face LLMs, MLflow, Docker Compose, CI |
 
 ## B3. Data
 
@@ -257,15 +257,16 @@ tables every later layer depends on (`callverse validate`); all pass.
 ┌────────────┐   ┌──────────────────────┐   ┌──────────────────────────────────┐   ┌─────────────┐   ┌──────────────────┐
 │ DATA LAYER │──▶│ FORECAST & SIMULATION│──▶│ DIGITAL TWIN (LangGraph)          │──▶│ EVALUATION  │──▶│ SERVING & MLOPS  │
 │ Olist      │   │ LightGBM per intent  │   │ Client agent  (small LLM)         │   │ KPI engine  │   │ FastAPI + WS     │
-│ Bitext     │   │ SimPy event sim.     │   │ Workforce agent (PPO + CP-SAT)    │   │ scenarios × │   │ React control    │
-│ SQLite     │   │ Erlang C, fidelity   │   │ Advisor agent (RAG + tools)       │   │ seeds, CIs  │   │ room, MLflow,    │
+│ Bitext     │   │ SimPy event sim.     │   │ Workforce agent (PPO + CP-SAT)    │   │ scenarios × │   │ front + back     │
+│ SQLite     │   │ Erlang C, fidelity   │   │ Advisor agent (RAG + tools)       │   │ seeds, CIs  │   │ office, MLflow,  │
 │ FAISS KB   │   │                      │   │ Quality agent (LLM judge)         │   │ comp. metrics│  │ tracing, Docker  │
 └────────────┘   └──────────────────────┘   └──────────────────────────────────┘   └─────────────┘   └──────────────────┘
 ```
 
 Where each part runs: PPO trains on the fast SimPy + Gymnasium environment (sampled
 intents, no LLM calls); the LLM agents then validate behaviour on a smaller set of
-conversations. Model versions are pinned (Ollama digests) and seeds are fixed.
+conversations. Model versions are pinned (Hugging Face commit of each repository, written by
+`callverse llm-pull`) and seeds are fixed.
 
 **Layering is enforced**: `import-linter` contracts forbid a lower layer from importing a
 higher one (data ↛ simulation ↛ agents ↛ twin ↛ orchestration/evaluation ↛ api); all 5 hold.
@@ -286,10 +287,10 @@ higher one (data ↛ simulation ↛ agents ↛ twin ↛ orchestration/evaluation
 | Optimization | Google OR-Tools CP-SAT | exact integer optimization with hard labour rules |
 | NLP / RAG | sentence-transformers bge-m3, FAISS | multilingual (FR/EN) embeddings, exact cosine search |
 | NLP | scikit-learn TF-IDF + logistic regression | intent classifier (backup) and keyword baseline |
-| LLM | Ollama (qwen2.5 3B/7B, llama3.2 3B) | local, free, private; tool calling; judge from another family |
+| LLM | Hugging Face `transformers` + `bitsandbytes` 4-bit: SmolLM3-3B (advisor, client), IBM Granite-4.0-1B (judge) | open weights, local, free, private; tool calling; judge from another family and organisation; both fit a 4 GB GPU |
 | Orchestration | LangGraph | explicit state machine of agents; streaming of each step |
 | API | FastAPI, Pydantic, uvicorn, WebSocket | typed, documented (OpenAPI), async streaming |
-| UI | React 18, TypeScript, Vite, Tailwind, Recharts | modern SPA, typed, fast dev server; replaces Streamlit |
+| UI | React 18, TypeScript, Vite, Tailwind, Framer Motion, Recharts, cmdk, npm workspaces | two apps (front office, back office) on one design system; typed; animated; replaces Streamlit |
 | MLOps | MLflow (SQLite / Postgres) | runs, params, metrics, artifacts per experiment |
 | MLOps | JSONL tracing (+ Langfuse option), SQLite LLM cache | cost/latency per agent call; reproducible replays |
 | Delivery | Docker Compose, GitHub Actions, pytest, ruff, import-linter | one-command deploy; tested, linted, layered builds |
@@ -458,7 +459,7 @@ PPO stays the research track. Next step: multi-day training episodes that match 
 ## B9. DSO2 — AI advisor and AI reviewer
 
 **Client agent** (twin input): plays the customer of a real contact — opening message from
-history, persona, knowledge of its order — with a small LLM (qwen2.5 3B, JSON output), or a
+history, persona, knowledge of its order — with a small LLM (SmolLM3-3B, JSON output), or a
 rule-based customer offline. It ends with a 1–5 satisfaction survey.
 
 **Advisor agent** (Ask → Retrieve → LLM → Reply). Retrieval: bge-m3 + FAISS top-3 policy
@@ -487,7 +488,8 @@ variant — `recommend_resolution` (the company rules engine). Variants evaluate
 
 **Quality agent**: a scorecard of 5 criteria (compliance, relevance, satisfaction,
 sentiment, resolution, 1–5) filled by an LLM judge from a **different family** than the
-advisor (Llama vs Qwen), given the policy-correct reference; checklist reviewer offline.
+advisor (IBM Granite vs Hugging Face SmolLM3), given the policy-correct reference; checklist
+reviewer offline.
 
 **Correctness** is measured two ways: deterministic (the advisor's chosen action equals the
 policy reference computed by the rules on the true intent) and by the judge.
@@ -570,13 +572,14 @@ on a 4 GB laptop GPU ("fast" profile; "full" profile = 7B advisor).
 
 | Component | Implementation |
 |---|---|
-| API | FastAPI: `/api/overview`, `/api/data/summary`, `/api/forecast`, `/api/twin/config`, `POST /api/twin/run`, `POST /api/twin/compare`, `/api/workforce/schedule`, `/api/workforce/routing`, `/api/agents/*`, `POST /api/agents/conversation`, `WS /ws/conversation`, `/api/quality/*` (labeling, calibration), `/api/evaluation`, `/api/mlops`; OpenAPI docs at `/docs` |
-| Control room | React + TypeScript: Overview, Data, Forecast, Digital twin (what-if), Workforce (shifts, routing), Agent playground (live), Quality & labeling, Evaluation, MLOps; light/dark themes; colour-blind-safe validated palette |
+| API | FastAPI: back office — `/api/overview`, `/api/data/summary`, `/api/forecast`, `/api/twin/config`, `POST /api/twin/run`, `POST /api/twin/compare`, `/api/twin/floor` (one day, contact by contact), `/api/workforce/*`, `/api/agents/*`, `/api/quality/*` (labeling, calibration), `/api/evaluation`, `/api/mlops`, `/api/system` (+ `POST /api/system/warmup`); front office — `/api/portal/customers[/id]`, `/api/kb/articles[/id]`, `/api/kb/search`, `/api/desk/queue`, `WS /ws/session` (live chat: tokens, tool calls, stages, review); OpenAPI docs at `/docs` |
+| Front office | React app for customers and advisors: home with semantic help search, help centre (the advisor's knowledge base), demo customers with the order journey, live chat with the AI advisor (token streaming + "behind the scenes" trace + CSAT + quality review), advisor desk (live queue, copilot drafts, autopilot, customer 360, quality tab) |
+| Back office | React app for managers: overview (BO→DSO rings, animated architecture), data, forecast, digital twin (animated canvas **live floor** replaying a simulated day + scenario lab), agent theater (the four agents streaming live), workforce, quality & labeling, scorecard, models & MLOps (Hugging Face model cards, GPU gauge, tracing); command palette (Ctrl+K), light/dark themes, colour-blind-safe palette |
 | Tracking | MLflow experiments: forecast, routing PPO, evaluation suites (params, metrics, artifacts) |
-| LLM ops | pinned models + digests (`callverse llm-pin`), disk cache, JSONL tracing per agent (tokens, latency, tools), optional Langfuse |
+| LLM ops | Hugging Face models pinned to a commit (`callverse llm-pull` / `llm-pin`), local-cache-only loading, 4-bit NF4 + bf16 compute, disk cache, JSONL tracing per agent (tokens, latency, tokens/s, tools), optional Langfuse |
 | Reproducibility | seeds in configs, `callverse all`, executed notebooks archived |
-| Deployment | Docker Compose: api, ui (nginx), mlflow + postgres, optional ollama |
-| Quality | 80 automated tests (unit, smoke, integration), ruff, 5 import contracts, GitHub Actions (Python + frontend build) |
+| Deployment | Docker Compose: api, web (nginx: front office :8080, back office :8081), mlflow + postgres; GPU override `docker-compose.gpu.yml` (CUDA torch + NVIDIA device) |
+| Quality | 95+ automated tests (unit, smoke, integration incl. the live WebSocket session), ruff, 5 import contracts, GitHub Actions (Python + type-check and build of both apps) |
 
 ## B13. Project structure — folder by folder, file by file
 
@@ -586,10 +589,10 @@ on a 4 GB laptop GPU ("fast" profile; "full" profile = 7B advisor).
 |---|---|
 | `README.md` | front page: results, quick start, structure |
 | `pyproject.toml` | package, dependency extras (forecast, agents, mlops, dev), ruff, pytest, import contracts |
-| `Makefile` | shortcuts (install, test, all, serve, ui, docker) |
-| `Dockerfile`, `docker-compose.yml`, `.dockerignore` | API image and the multi-service deployment |
-| `.env.example` | environment settings (LLM profile, retriever, MLflow, Langfuse) |
-| `.github/workflows/tests.yml` | CI: lint, contracts, tests, frontend build |
+| `Makefile` | shortcuts (install, install-gpu, llm-pull, test, all, serve, front, back, docker, docker-gpu) |
+| `Dockerfile`, `docker-compose.yml`, `docker-compose.gpu.yml`, `.dockerignore` | API image (CPU or CUDA torch) and the multi-service deployment |
+| `.env.example` | environment settings (LLM profile and device, retriever, MLflow, Langfuse) |
+| `.github/workflows/tests.yml` | CI: lint, contracts, tests, type-check and build of both apps |
 
 **`configs/`** — every assumption, in one place
 
@@ -597,7 +600,7 @@ on a 4 GB laptop GPU ("fast" profile; "full" profile = 7B advisor).
 |---|---|
 | `data.yaml` | contact-rate assumptions per order situation, intent groups, promo calendar, ticket rules, pipeline notebooks, store path |
 | `simulation.yaml` | opening hours, staffing target (80/20), patience, handle times, skills, costs, fidelity settings |
-| `agents.yaml` | LLM profiles and models, personas, advisor (variant, KB, classifier), quality rubric, workforce (PPO, skill score, CP-SAT rules) |
+| `agents.yaml` | LLM profiles (Hugging Face repositories per role), model catalog (family, licence, chat-template options), personas, advisor (variant, KB, classifier), quality rubric, workforce (PPO, skill score, CP-SAT rules) |
 | `scenarios.yaml` | what-if scenarios (week, multipliers, absences) |
 | `app.yaml` | API, CORS, MLflow experiments |
 
@@ -615,8 +618,9 @@ study, `11` knowledge-base retrieval study, `12` tickets and chats.
 |---|---|
 | `config.py` | project paths, `.env` loading, YAML access |
 | `tracking.py` | MLflow runs (SQLite or server), recent runs for the UI |
-| `main.py` | the `callverse` CLI (data, validate, forecast, train-rl, schedule, simulate, fidelity, chat, agents, judge-calibrate, llm-pin, evaluate, status, serve, all) |
-| `llm/client.py` | Ollama chat client: role → pinned model, fallbacks, tools, JSON mode |
+| `main.py` | the `callverse` CLI (data, validate, forecast, train-rl, schedule, simulate, fidelity, chat, agents, judge-calibrate, llm-pull, llm-pin, evaluate, status, serve, all) |
+| `llm/client.py` | chat client: role → pinned Hugging Face model, fallbacks, availability (GPU, weights), cache, tracing, streaming, JSON repair |
+| `llm/hf_local.py` | local `transformers` models: 4-bit loading, model pool, chat templates, tool-call parsing, token streaming (tool markup hidden), early stop on complete JSON |
 | `llm/cache.py` | SQLite cache of LLM answers (reproducible replays) |
 | `llm/tracing.py` | JSONL tracing of every call (+ Langfuse) |
 | `data/pipeline.py` | headless execution of notebooks 03–08 |
@@ -653,26 +657,37 @@ study, `11` knowledge-base retrieval study, `12` tickets and chats.
 | `agents/workforce/scheduling.py` | CP-SAT, rule-based and fixed planners, labour-rule checks |
 | `agents/workforce/manager.py` | Workforce agent facade (plan_week, router) |
 | `orchestration/state.py`, `runtime.py`, `graph.py` | LangGraph state, shared resources, conversation graph and batches |
-| `twin/state.py`, `digital_twin.py`, `calibration.py` | scenarios; scenario runner; fidelity checks |
+| `orchestration/live.py` | live sessions for the front office: a human plays the customer or the advisor, the same agents play the other side (copilot, autopilot) |
+| `twin/state.py`, `digital_twin.py`, `calibration.py` | scenarios; scenario runner and live-floor replay; fidelity checks |
 | `evaluation/business_kpis.py` | KPI engine, CIs, paired differences |
 | `evaluation/experiments.py` | DSO1–DSO4 experiments, RAG and judge evaluations |
 | `evaluation/forecast_metrics.py`, `advisor_metrics.py`, `twin_metrics.py`, `workforce_metrics.py` | component metrics |
 | `evaluation/report.py` | component-metrics table and BO/DSO scorecard |
 | `api/app.py`, `schemas.py`, `services.py` | FastAPI routes and WebSocket; request models; caching and JSON helpers |
 
-**`frontend/`** — `src/main.tsx` (routes), `components/Layout.tsx` (sidebar, theme),
-`components/ui.tsx` (cards, stats, status badges, tooltips), `components/Heatmap.tsx`
-(staffing grid), `lib/api.ts` (fetch hooks, WebSocket), `lib/format.ts` (formats and fixed
-colour per entity), `pages/*.tsx` (nine pages), `Dockerfile` + `nginx.conf`.
+**`frontend/`** — npm workspaces, one design system, two apps:
+
+| Path | Role |
+|---|---|
+| `package.json`, `package-lock.json` | workspace root (`dev:front`, `dev:back`, `build`, `typecheck`) |
+| `Dockerfile`, `nginx.conf` | builds both apps; one nginx serves :8080 (front) and :8081 (back), proxying `/api` and `/ws` |
+| `shared/tailwind.preset.js` | shared Tailwind theme (colour tokens, fonts, shadows, keyframes) |
+| `shared/src/styles/` | `tokens.css` (light/dark tokens, validated chart palette), `index.css` (cards, buttons, glass, gradients, tables, prose, animations, reduced motion) |
+| `shared/src/lib/` | `api.ts` (fetch hooks), `session.ts` (live-session WebSocket client and event reducer), `theme.ts`, `format.ts` |
+| `shared/src/components/` | `ui.tsx` (cards, stats, badges, segmented control, avatar, skeletons), `motion.tsx` (page transitions, stagger, count-up, rings, typewriter), `brand.tsx` (logo, aurora background, theme toggle), `chat.tsx` (bubbles, streaming bubble), `AgentPipeline.tsx` (animated LangGraph flow), `LiveTrace.tsx` (behind-the-scenes trace), `QualityScore.tsx` (radar scorecard), `CommandPalette.tsx` (Ctrl+K), `Markdown.tsx`, `ErrorBoundary.tsx` |
+| `front-office/src/` | `App.tsx` (routes), `layout/Shell.tsx` (navbar, footer), `customer.tsx` (demo customer), `components/` (help search, order timeline, hero chat demo, CSAT dialog, customer card), `pages/` (Home, Help, Account, Chat, Desk) |
+| `back-office/src/` | `App.tsx`, `components/Layout.tsx` (collapsible sidebar by layer, GPU status), `components/LiveFloor.tsx` (canvas replay of the twin), `components/ArchitectureMap.tsx` (animated SVG), `components/Heatmap.tsx`, `pages/` (Overview, Data, Forecast, Twin, Agents, Workforce, Quality, Evaluation, Mlops) |
 
 **`tests/`** — `unit/` (simulation, engine, workforce, forecasting, KPI engine, tickets,
-database, knowledge base), `smoke/` (imports, CLI), `integration/` (conversation, twin, API
-on real data; LLM test marked `llm`).
+database, knowledge base, Hugging Face LLM layer), `smoke/` (imports, CLI), `integration/`
+(conversation, live sessions, front-office endpoints, live-floor replay, WebSocket session, twin,
+API on real data; LLM test marked `llm`).
 
 **`data/`** (git-ignored) — `raw/` Olist and Bitext; `processed/` Parquet tables;
 `callverse.db`; `knowledge_base/docs` (tracked) and `index/`; `labels/` human grades.
 **`artifacts/`** (git-ignored) — `forecasts/`, `policies/` (PPO, classifier, weights),
-`evaluations/` (every table of this report), `traces/` (LLM calls, cache, conversations),
+`evaluations/` (every table of this report), `traces/` (LLM calls, cache, conversations, live
+sessions, `llm_models.lock.json`),
 `notebook_runs/`.
 
 ## B14. Steps to realize the project (reproducible path)
@@ -696,7 +711,7 @@ on real data; LLM test marked `llm`).
 13. **Orchestration**: LangGraph conversation graph; streaming.
 14. **Twin scenarios**: scenario file; prepared vs unprepared; fidelity report.
 15. **Evaluation**: KPI engine, experiment suites with seeds and CIs, scorecard.
-16. **Serving**: FastAPI + WebSocket, React control room, MLflow, Docker Compose, CI, tests.
+16. **Serving**: FastAPI + WebSocket, React front office + back office, MLflow, Docker Compose, CI, tests.
 17. **Document and present**: this report, run guide, demo script.
 
 ## B15. Limitations, ethics and future work
@@ -742,8 +757,10 @@ main result.
 | `callverse agents --n N --variants template,rag,rag_policy` | DSO2 batches |
 | `callverse judge-calibrate --judge rules|llm` | judge agreement |
 | `callverse evaluate` | every experiment + scorecard |
-| `callverse llm-pin` | record model digests |
-| `callverse serve` | API (+ built UI) |
+| `callverse llm-pull` | download the Hugging Face models of the profile and pin their commits |
+| `callverse llm-pin` | record the commits of the cached models |
+| `callverse serve` | API for both apps |
+| `npm run dev:front` / `dev:back` (in `frontend/`) | front office :5173 / back office :5174 |
 
 ## Appendix B — Glossary
 

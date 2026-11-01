@@ -1,12 +1,17 @@
 """Shared fixtures: synthetic inputs so unit tests never need the real data."""
 
+import os
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-import pytest
+# Tests never touch the GPU: agents use their offline backups unless a test builds
+# its own LLM client (tests marked ``llm``).
+os.environ.setdefault("CALLVERSE_LLM_MODE", "off")
 
-from callverse.config import PROCESSED_DIR, database_path
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
+
+from callverse.config import PROCESSED_DIR, database_path  # noqa: E402
 
 GROUPS = ["wismo", "cancel_refund", "post_delivery", "order_admin"]
 

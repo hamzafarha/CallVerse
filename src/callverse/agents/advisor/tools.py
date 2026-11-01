@@ -9,6 +9,7 @@ gives the DSO2 metric "% of tool uses that work".
 import json
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,8 @@ class AdvisorTools:
     retriever: Any = None
     calls: list[ToolCall] = field(default_factory=list)
     opened_tickets: list[dict[str, Any]] = field(default_factory=list)
+    # Called after every tool execution (live UI shows tools as they run)
+    listener: Callable[[ToolCall], None] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         config = load_ticket_config(config_path("data"))
@@ -98,7 +101,10 @@ class AdvisorTools:
     def _record(
         self, name: str, arguments: dict[str, Any], started: float, ok: bool, result: dict[str, Any]
     ) -> dict[str, Any]:
-        self.calls.append(ToolCall(name, arguments, ok, result, (time.perf_counter() - started) * 1000))
+        call = ToolCall(name, arguments, ok, result, (time.perf_counter() - started) * 1000)
+        self.calls.append(call)
+        if self.listener is not None:
+            self.listener(call)
         return result
 
     # ------------------------------------------------------------------- tools

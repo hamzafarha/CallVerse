@@ -25,6 +25,13 @@ NEGATIVE = re.compile(
     re.I,
 )
 
+# Phrases only an advisor would write (role-swap guardrail of the simulated customer)
+ADVISOR_VOICE = re.compile(
+    r"(how (can|may) i (help|assist)|anything else i can|assist you|i can help you|"
+    r"feel free to (ask|reach)|let me (check|look)|happy to help)",
+    re.I,
+)
+
 CLIENT_SYSTEM = """You are role-playing a CUSTOMER chatting with an online store's support advisor.
 Stay in character. Never act as the advisor. Always write in English.
 
@@ -87,7 +94,11 @@ class ClientAgent:
             return ClientTurn(reply, False, None, "rule")
         if self.use_llm():
             try:
-                return self._llm_turn(profile, messages)
+                turn = self._llm_turn(profile, messages)
+                if ADVISOR_VOICE.search(turn.text):
+                    # Guardrail: a small model sometimes starts speaking as the advisor.
+                    raise ValueError("role swap")
+                return turn
             except (LLMUnavailableError, ValueError):
                 pass
         return self._rule_turn(profile, messages)

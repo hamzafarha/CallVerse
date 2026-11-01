@@ -1,6 +1,6 @@
 # CallVerse — step-by-step run guide
 
-This guide takes a fresh Windows machine to the running control room. Every command is
+This guide takes a fresh Windows machine to the two running apps (front office and back office). Every command is
 for **PowerShell** from the project folder (`CallVerse/`). Linux/macOS: replace
 `.venv\Scripts\activate` with `source .venv/bin/activate`.
 
@@ -13,14 +13,14 @@ Times are measured on the development laptop (Intel CPU, 16 GB RAM, GTX 1650 4 G
 | Tool | Version | Why | Check |
 |---|---|---|---|
 | Python | 3.11 or 3.12 | the whole pipeline | `python --version` |
-| Node.js | 20 LTS | the React control room | `node --version` |
+| Node.js | 20 LTS | the two React apps | `node --version` |
 | Git | any | clone / version | `git --version` |
-| Ollama *(optional)* | ≥ 0.5 | local LLMs for the agents | `ollama --version` |
+| NVIDIA GPU + driver *(optional)* | ≥ 4 GB VRAM, driver ≥ 560 | local Hugging Face LLMs (4-bit) | `nvidia-smi` |
 | Docker Desktop *(optional)* | ≥ 24 | one-command deploy | `docker --version` |
-| Disk space | ~8 GB | venv (~3 GB), data (~0.4 GB), bge-m3 (~2.3 GB), LLMs (~4-9 GB) | |
+| Disk space | ~12 GB | venv with CUDA torch (~6 GB), data (~0.4 GB), bge-m3 (~2.3 GB), LLMs (~3.1 GB) | |
 
-Without Ollama the agents use their offline backups (templates, rule-based judge); all
-pages and every evaluation still work.
+Without a CUDA GPU the agents use their offline backups (approved templates, rule-based
+judge); all pages and every evaluation still work.
 
 ---
 
@@ -50,14 +50,18 @@ Raw data (not in git, ~120 MB):
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+# NVIDIA GPU: CUDA build of torch (~2.5 GB). No GPU: use .../whl/cpu instead.
+pip install torch --index-url https://download.pytorch.org/whl/cu126
 pip install -e ".[all]"
 copy .env.example .env
 ```
 
-`.[all]` installs the forecast (LightGBM, Prophet, statsmodels), agent (sentence-transformers,
-FAISS, LangGraph, Gymnasium, Stable-Baselines3, OR-Tools), MLOps (MLflow, nbclient) and
-dev (pytest, ruff, import-linter) extras.
+`.[all]` installs the forecast (LightGBM, Prophet, statsmodels), agent (transformers,
+accelerate, bitsandbytes, sentence-transformers, FAISS, LangGraph, Gymnasium,
+Stable-Baselines3, OR-Tools), MLOps (MLflow, nbclient) and dev (pytest, ruff,
+import-linter) extras.
+
+Check the GPU is visible: `python -c "import torch; print(torch.cuda.is_available())"` → `True`.
 
 First time only — let the embedding model download: in `.env` set `HF_HUB_OFFLINE=0`,
 run step 4, then set it back to `1` (faster start, no network calls).
@@ -71,17 +75,24 @@ pytest -m "not llm" -q
 
 ---
 
-## 3. Local LLMs with Ollama (optional, ≈10 min download)
+## 3. Local LLMs from Hugging Face (≈5-60 min download, once)
 
 ```powershell
-ollama pull qwen2.5:3b      # client agent (and advisor in the "fast" profile)
-ollama pull llama3.2        # quality judge (different model family)
-ollama pull qwen2.5:7b      # advisor in the "full" profile (needs > 6 GB VRAM to be fast)
-callverse llm-pin           # records the exact model digests (reproducibility)
+callverse llm-pull          # downloads the models of the active profile, pins their commits
+callverse status            # GPU, models downloaded, LLMs available
 ```
 
-Profiles (`.env`, `CALLVERSE_LLM_PROFILE`): `fast` = everything fits a 4 GB GPU (~1 min per
-conversation), `full` = the architecture's 7B advisor (~3-5 min per conversation on 4 GB).
+| Role | Model (Hugging Face Hub) | Why |
+|---|---|---|
+| Advisor + simulated customer | `HuggingFaceTB/SmolLM3-3B` (4-bit: `unsloth/SmolLM3-3B-bnb-4bit`, 2 GB) | fully open 3B model, tool calling, Apache-2.0 |
+| Quality judge | `ibm-granite/granite-4.0-1b` (4-bit: `unsloth/granite-4.0-1b-bnb-4bit`, 1.2 GB) | different family than the advisor (no self-preference), Apache-2.0 |
+| Retrieval | `BAAI/bge-m3` (CPU) | multilingual embeddings for the knowledge base |
+
+Both LLMs together use ~3.2 GB of VRAM (4-bit NF4 weights, bfloat16 compute), so they fit a
+4 GB laptop GPU. `llm-pull` writes the exact commit of each repository to
+`artifacts\traces\llm_models.lock.json`; afterwards models load from the local cache only
+(`HF_HUB_OFFLINE=1`). Profiles (`CALLVERSE_LLM_PROFILE`): `gpu4gb` (default) or `full`
+(full-precision weights, ≥ 12 GB GPU).
 
 ---
 
@@ -105,8 +116,8 @@ Or stage by stage (what each produces):
 | 4 | `callverse train-rl` | ~15 min | skill-score weights + MaskablePPO policy in `artifacts\policies\` |
 | 5 | `callverse fidelity` | 20 s | twin fidelity checks (Erlang C, KS tests) |
 | 6 | `callverse evaluate` | ~12 min | every experiment, `component_metrics.csv`, `scorecard.json` |
-| 7 | `callverse agents --n 15 --variants rag_policy,rag` | ~45 min | LLM advisor variants (needs Ollama) |
-| 8 | `callverse judge-calibrate --judge llm` | ~10 min | LLM judge agreement (needs Ollama) |
+| 7 | `callverse agents --n 12 --variants rag_policy,rag` | ~30 min | LLM advisor variants (needs the GPU models) |
+| 8 | `callverse judge-calibrate --judge llm` | ~15 min | LLM judge agreement (needs the GPU models) |
 
 Single experiments for exploring:
 
@@ -119,32 +130,48 @@ callverse chat --mode llm --variant rag_policy
 
 ---
 
-## 5. Start the control room
+## 5. Start the two apps
 
-Terminal 1 — API:
+Terminal 1 — API (shared by both apps):
 
 ```powershell
 .venv\Scripts\activate
-callverse serve            # http://127.0.0.1:8000  (API docs: /docs)
+callverse serve            # http://127.0.0.1:8000  (Swagger: /docs)
 ```
 
-Terminal 2 — UI (development server with hot reload):
+Terminal 2 — front office (customers + advisors):
 
 ```powershell
 cd frontend
-npm install                # once
-npm run dev                # http://localhost:5173
+npm install                # once, installs the three workspaces
+npm run dev:front          # http://localhost:5173
 ```
 
-Terminal 3 — MLflow UI (optional):
+Terminal 3 — back office (managers' control room):
+
+```powershell
+cd frontend
+npm run dev:back           # http://localhost:5174
+```
+
+Terminal 4 — MLflow UI (optional):
 
 ```powershell
 .venv\Scripts\activate
 mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5000   # http://localhost:5000
 ```
 
-Single-port alternative: `cd frontend; npm run build`, then `callverse serve` also serves the
-built UI on http://127.0.0.1:8000.
+Before a demo, open the back office → *Models & MLOps* → **Load models on GPU** (or call
+`POST /api/system/warmup`): the first chat then answers at full speed (~8 s per reply)
+instead of waiting ~20 s for the models to load.
+
+| App | Pages |
+|---|---|
+| Front office :5173 | Home + semantic help search · Help centre · My orders (demo customers) · Live chat with the AI advisor · Advisor desk (queue, copilot drafts, autopilot, customer 360, quality review) |
+| Back office :5174 | Overview · Data & contracts · Demand forecast · Digital twin (live floor + scenario lab) · Agent theater · Workforce agent · Quality & labeling · BO/DSO scorecard · Models & MLOps |
+
+Both apps: `Ctrl+K` opens the command palette; the theme toggle is top right. Add
+`?snapshot` to a URL to render every animation in its final state (screenshots).
 
 ---
 
@@ -157,13 +184,19 @@ docker compose up --build
 
 | Service | URL |
 |---|---|
-| UI (nginx) | http://localhost:8080 |
+| Front office (nginx) | http://localhost:8080 |
+| Back office (nginx) | http://localhost:8081 |
 | API | http://localhost:8000/docs |
 | MLflow (+ Postgres) | http://localhost:5000 |
 
-`data\` and `artifacts\` are mounted from the host, so build them first (step 4). The API
-reaches Ollama on the host through `host.docker.internal`; `docker compose --profile llm up`
-starts Ollama in a container instead.
+`data\` and `artifacts\` are mounted from the host, so build them first (step 4). The
+default image is CPU-only (agents use their offline backups). With an NVIDIA GPU and the
+NVIDIA Container Toolkit:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+docker compose exec api callverse llm-pull     # once: models go to the hf-cache volume
+```
 
 ---
 
@@ -173,9 +206,11 @@ starts Ollama in a container instead.
 |---|---|
 | `Raw data missing` | put the Olist/Bitext CSVs where step 1 says |
 | `No index in data\knowledge_base\index` | `python scripts\build_knowledge_base.py` (needs bge-m3 once: `HF_HUB_OFFLINE=0`) |
-| Agents page says *Ollama offline* | start Ollama (`ollama serve`) or use "Offline backups" |
-| LLM conversation very slow | `CALLVERSE_LLM_PROFILE=fast` in `.env`, restart `callverse serve` |
+| Sidebar says *Offline backups* | `nvidia-smi` works? CUDA torch installed (`torch.cuda.is_available()`)? `callverse llm-pull` done? (`callverse status` says which) |
+| First LLM reply takes ~20 s | models load on first use: *Load models on GPU* in the back office before the demo |
+| `CUDA out of memory` | close other GPU apps; only one process may hold the models (stop `callverse serve` while running `callverse agents`) |
+| Output only `!!!!` | float16 overflow: keep the default bfloat16 compute (`src/callverse/llm/hf_local.py`) |
 | `ppo` router missing in the UI | `callverse train-rl` |
 | Evaluation page empty | `callverse evaluate` |
-| Port 8000 busy | `callverse serve --port 8001` and `$env:VITE_API_TARGET="http://127.0.0.1:8001"; npm run dev` |
+| Port 8000 busy | `callverse serve --port 8001` and `$env:VITE_API_TARGET="http://127.0.0.1:8001"; npm run dev:front` |
 | Prophet/cmdstan error | `callverse forecast --fast` (skips Prophet and SARIMA) |

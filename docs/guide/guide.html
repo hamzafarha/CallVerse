@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CallVerse — Technical Guide</title>
+<style>
+@page { size: A4; margin: 18mm 16mm 18mm 16mm;
+  @bottom-center { content: "CallVerse · Technical guide · " counter(page); font: 8pt "Segoe UI", sans-serif; color: #8790a6; } }
+@page :first { @bottom-center { content: none; } }
+:root { --ink:#0b1020; --ink2:#46506a; --muted:#7c859b; --line:#e2e6f0; --brand:#5b4fe6; --brand2:#0ea5e9; --soft:#f4f6fb; --good:#0a8a3a; --bad:#c43232; --warn:#b07a00; }
+* { box-sizing: border-box; }
+body { font: 10pt/1.55 "Segoe UI", "Inter", Arial, sans-serif; color: var(--ink); margin: 0; }
+h1, h2, h3, h4 { font-family: "Segoe UI Semibold", "Segoe UI", Arial, sans-serif; letter-spacing: -0.01em; color: var(--ink); }
+h1 { font-size: 22pt; margin: 0 0 6pt; }
+h2 { font-size: 15pt; margin: 18pt 0 6pt; padding-bottom: 3pt; border-bottom: 2px solid var(--line); }
+h3 { font-size: 12pt; margin: 14pt 0 4pt; color: #24294a; }
+h4 { font-size: 10.5pt; margin: 10pt 0 3pt; color: var(--brand); }
+h2, h3, h4 { break-after: avoid; page-break-after: avoid; }
+.keep { break-inside: avoid; page-break-inside: avoid; }
+p { margin: 4pt 0 6pt; }
+ul, ol { margin: 3pt 0 7pt 0; padding-left: 16pt; }
+li { margin: 1.5pt 0; }
+code, .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 8.8pt; background: var(--soft); padding: 0 3px; border-radius: 3px; }
+table { width: 100%; border-collapse: collapse; margin: 6pt 0 10pt; font-size: 8.8pt; page-break-inside: auto; }
+tr { page-break-inside: avoid; }
+th { text-align: left; background: #eef0f8; color: #2c3150; font-weight: 600; padding: 4pt 6pt; border-bottom: 1px solid #cfd4e4; }
+td { padding: 3.5pt 6pt; border-bottom: 1px solid var(--line); vertical-align: top; }
+.part { page-break-before: always; padding-top: 40mm; }
+.part .num { font-size: 11pt; color: var(--brand); font-weight: 700; letter-spacing: .2em; text-transform: uppercase; }
+.part h1 { font-size: 30pt; margin-top: 6pt; }
+.part p.lead { font-size: 12pt; color: var(--ink2); max-width: 150mm; }
+.newpage { page-break-before: always; }
+.avoid { page-break-inside: avoid; }
+.box { border: 1px solid var(--line); border-left: 4px solid var(--brand); background: #fafbfe; border-radius: 6px; padding: 7pt 10pt; margin: 8pt 0; page-break-inside: avoid; }
+.box.good { border-left-color: var(--good); } .box.warn { border-left-color: var(--warn); } .box.bad { border-left-color: var(--bad); }
+.box b.t { display: block; margin-bottom: 2pt; }
+.formula { font-family: "Cambria Math", Cambria, serif; font-size: 11pt; background: var(--soft); border-radius: 6px; padding: 6pt 10pt; margin: 6pt 0; text-align: center; page-break-inside: avoid; }
+figure { margin: 8pt 0 10pt; page-break-inside: avoid; }
+figure img { width: 100%; border: 1px solid #d7dbe8; border-radius: 6px; display: block; }
+figure.half img { width: 70%; margin: 0 auto; }
+figcaption { font-size: 8.5pt; color: var(--muted); margin-top: 3pt; }
+.legend { counter-reset: lg; list-style: none; padding-left: 0; }
+.legend > li { counter-increment: lg; position: relative; padding-left: 20pt; margin: 3pt 0; }
+.legend > li::before { content: counter(lg); position: absolute; left: 0; top: 1pt; width: 13pt; height: 13pt; border-radius: 50%; background: var(--brand); color: #fff; font-size: 7.5pt; font-weight: 700; text-align: center; line-height: 13pt; }
+.grid2 { display: flex; gap: 10pt; } .grid2 > div { flex: 1; }
+.flow { display: flex; align-items: stretch; gap: 0; margin: 8pt 0 10pt; page-break-inside: avoid; }
+.flow .n { flex: 1; border: 1px solid #cdd2e3; border-radius: 6px; padding: 5pt 6pt; background: #fbfbff; font-size: 8.3pt; }
+.flow .n b { display: block; font-size: 8.8pt; color: var(--ink); margin-bottom: 1pt; }
+.flow .a { width: 14pt; display: flex; align-items: center; justify-content: center; color: var(--brand); font-weight: 700; }
+.flow .n.c1 { border-top: 3px solid #eb6834; } .flow .n.c2 { border-top: 3px solid #1baf7a; } .flow .n.c3 { border-top: 3px solid #6250d6; } .flow .n.c4 { border-top: 3px solid #e34948; } .flow .n.c5 { border-top: 3px solid #2a78d6; }
+.tag { display: inline-block; font-size: 7.5pt; font-weight: 700; padding: 0 5px; border-radius: 3px; color: #fff; background: var(--brand); vertical-align: 1px; }
+.tag.fo { background: #0ea5e9; } .tag.bo { background: #24294a; }
+.cover { height: 255mm; display: flex; flex-direction: column; justify-content: space-between; }
+.cover .top { padding-top: 30mm; }
+.cover .logo { width: 22mm; height: 22mm; border-radius: 6mm; background: linear-gradient(135deg, #5b4fe6, #0ea5e9); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 26pt; font-weight: 700; }
+.cover h1 { font-size: 40pt; margin: 10mm 0 2mm; }
+.cover .sub { font-size: 15pt; color: var(--ink2); }
+.cover .meta td { border: none; padding: 1.5pt 0; font-size: 10pt; }
+.toc ol { columns: 1; font-size: 10pt; } .toc li { margin: 2.5pt 0; }
+.toc .sub { color: var(--ink2); font-size: 9pt; }
+.kpis { display: flex; gap: 6pt; margin: 6pt 0 10pt; } .kpis div { flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 5pt 7pt; }
+.kpis b { display: block; font-size: 14pt; color: var(--brand); } .kpis span { font-size: 8pt; color: var(--muted); }
+.small { font-size: 8.6pt; color: var(--ink2); }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ COVER -->
+<section class="cover">
+  <div class="top">
+    <div class="logo">C</div>
+    <h1>CallVerse</h1>
+    <div class="sub">Multi-agent digital twin of an e-commerce customer-service centre</div>
+    <p style="font-size:13pt;margin-top:10mm;color:#24294a"><b>Technical guide</b> — every concept, every component and every page of the
+    front office and the back office, explained with real screenshots.</p>
+  </div>
+  <table class="meta" style="width:auto">
+    <tr><td style="width:40mm;color:#7c859b">Project</td><td>Integrated project (Advanced Data Science) — ESPRIT</td></tr>
+    <tr><td style="color:#7c859b">Author</td><td>Hamza Farhani</td></tr>
+    <tr><td style="color:#7c859b">Version</td><td>1.1 — Hugging Face LLMs, front office + back office</td></tr>
+    <tr><td style="color:#7c859b">Date</td><td>October 2026</td></tr>
+    <tr><td style="color:#7c859b">Source</td><td>branch <code>hamza</code> of the CallVerse repository</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ TOC -->
+<section class="newpage toc">
+  <h1>Contents</h1>
+  <ol>
+    <li><b>The project in brief</b> <span class="sub">— problem, objectives, architecture, results</span></li>
+    <li><b>How everything works</b> <span class="sub">— data, forecast, queueing theory, the digital twin, the Workforce agent (CP-SAT + PPO), the conversational agents, the Hugging Face LLMs, LangGraph and live sessions, evaluation, API, frontend, MLOps</span></li>
+    <li><b>Front office, page by page</b> <span class="sub">— home and semantic search, help centre, demo customer, live chat with the AI advisor, advisor desk</span></li>
+    <li><b>Back office, page by page</b> <span class="sub">— overview, data, forecast, digital twin (live floor + scenario lab), agent theater, workforce, quality, scorecard, models &amp; MLOps</span></li>
+    <li><b>End-to-end walkthroughs</b> <span class="sub">— one customer message from keyboard to quality review; one what-if from click to confidence interval</span></li>
+    <li><b>Appendix</b> <span class="sub">— glossary, commands, folder map, honest limits</span></li>
+  </ol>
+  <div class="box"><b class="t">How to read this guide</b>
+  Part 2 explains each concept once, with the formulas and the design decisions. Parts 3 and 4 then walk through every
+  screen: each screenshot is followed by a numbered list that names every element (cards, charts, badges) and says what
+  it shows, where the number comes from and how to read it. All screenshots are real: they were captured from the running
+  apps (API with the local models on the GTX 1650 GPU), during live conversations and simulations.</div>
+  <div class="box warn"><b class="t">About the numbers</b>
+  Forecast, twin, scheduling, routing and BO4 numbers come from <code>callverse evaluate</code> (10 seeds, 95% CIs).
+  The DSO2 conversation table (verified actions, CSAT, judge kappa) was measured with the first LLM stack (Ollama
+  qwen2.5/llama3.2); the re-run with the Hugging Face models (<code>callverse agents</code>, <code>callverse judge-calibrate --judge llm</code>)
+  is the next planned step. Retrieval numbers do not depend on the LLM.</div>
+</section>
+
+<!-- ============================================================ PART 1 -->
+<section class="part">
+  <div class="num">Part 1</div>
+  <h1>The project in brief</h1>
+  <p class="lead">What problem CallVerse solves, how the business objectives become data-science objectives,
+  and how the five layers fit together.</p>
+</section>
+
+<section class="newpage">
+<h2>1.1 The problem</h2>
+<p>An e-commerce contact centre fails in two ways: <b>too few advisors</b> during promotions or delivery incidents (customers
+wait, hang up, complain) and <b>too many</b> when it is quiet (money wasted). Decisions — how many people to schedule, who
+takes which customer, what an advisor may promise — are usually made from intuition and tested directly on real customers.</p>
+<p><b>CallVerse is a digital twin</b>: a virtual copy of the contact centre where every decision is tested first. It forecasts
+how many customers will contact the centre, plans the shifts, simulates every customer and every advisor minute by minute,
+lets AI agents answer and grade conversations, and compares every idea with a baseline using confidence intervals.</p>
+
+<h2>1.2 From business objectives to data-science objectives</h2>
+<p>The framework follows a strict chain: <b>BO</b> (business objective) → <b>KPI</b> → <b>DSO</b> (data-science objective) → metric.
+Each DSO has a <i>main idea</i>, a <i>baseline</i> it must beat, a <i>backup</i>, and a <i>switch rule</i> that decides automatically
+which one is kept.</p>
+<table>
+<tr><th style="width:14%">Objective</th><th style="width:22%">Main idea</th><th style="width:20%">Baseline</th><th style="width:20%">Backup</th><th>Switch rule</th></tr>
+<tr><td><b>BO1 / DSO1</b><br>shorter waits</td><td>Reinforcement-learning routing (MaskablePPO)</td><td>FIFO with skill matching</td><td>Tuned skill-score router</td><td>≥ 10% less waiting than FIFO in the twin's peak weeks</td></tr>
+<tr><td><b>BO2 / DSO2</b><br>correct answers, satisfaction</td><td>Agentic RAG advisor + LLM judge</td><td>Keyword FAQ search / templates</td><td>Intent classifier + approved templates; checklist reviewer</td><td>≤ 10% wrong answers; judge agreement kappa ≥ 0.4</td></tr>
+<tr><td><b>BO3 / DSO3</b><br>lower cost, same service</td><td>Forecast + OR-Tools CP-SAT shift planning</td><td>Fixed, peak-sized schedule</td><td>Erlang C + shift templates + overtime rule</td><td>Cost −5% or better while the 80/20 service target is met; labour rules respected</td></tr>
+<tr><td><b>BO4 / DSO4</b><br>prepare for peaks</td><td>Intent-level LightGBM forecast + SimPy digital twin</td><td>"Same day last week"; Erlang C queue model</td><td>Prophet/SARIMA + Erlang C</td><td>Beat the naive forecast; twin passes the fidelity checks</td></tr>
+</table>
+
+<h2>1.3 Results at a glance</h2>
+<div class="kpis">
+  <div><b>−19.9%</b><span>forecast error (wMAPE 25.3% vs 31.6%)</span></div>
+  <div><b>−40.1%</b><span>labour cost, service level 92.4%</span></div>
+  <div><b>−60 to −84%</b><span>understaffed hours when the plan is tested first</span></div>
+  <div><b>96.9%</b><span>retrieval recall@4 (vs 80.4% keyword)</span></div>
+</div>
+<table>
+<tr><th>Objective</th><th>Verdict</th><th>Why</th></tr>
+<tr><td>BO4 / DSO4</td><td style="color:var(--good)"><b>main idea kept</b></td><td>LightGBM beats every baseline on the total; the twin passes every fidelity check (KS p = 0.998, Erlang C error &lt; 4%); preparing for a peak saves €730 net over three peak weeks.</td></tr>
+<tr><td>BO3 / DSO3</td><td style="color:var(--good)"><b>main idea kept</b></td><td>CP-SAT plan: −40.1% labour cost vs the fixed schedule, service level 92.4% (target 80%), all labour rules met.</td></tr>
+<tr><td>BO1 / DSO1</td><td style="color:var(--warn)"><b>backup kept</b></td><td>PPO cuts the average speed of answer by 13.9% on unseen stressed days, but not the mean wait in full peak weeks (+2.2%) → the tuned skill-score router is the production candidate.</td></tr>
+<tr><td>BO2 / DSO2</td><td style="color:var(--warn)"><b>hybrid kept</b></td><td>Retrieval clearly beats keyword search, but a small LLM alone invents order ids and promises → "rules engine decides, LLM writes"; the LLM judge is not yet trusted (kappa &lt; 0.4).</td></tr>
+</table>
+
+<h2>1.4 Architecture: five layers</h2>
+<div class="flow">
+  <div class="n c1"><b>Data layer</b>Olist orders · Bitext intents · synthetic contacts, tickets, chats · SQLite · bge-m3 + FAISS knowledge base · Pandera contracts</div><div class="a">→</div>
+  <div class="n c2"><b>Forecast &amp; simulation</b>LightGBM per intent group · rolling backtest · SimPy engine · Erlang C</div><div class="a">→</div>
+  <div class="n c3"><b>Digital twin</b>4 agents: Client, Advisor, Quality, Workforce · LangGraph · PPO · CP-SAT · RAG · LLM judge</div><div class="a">→</div>
+  <div class="n c4"><b>Evaluation</b>scenarios × seeds · paired 95% CIs · KPI engine · component metrics · scorecard</div><div class="a">→</div>
+  <div class="n c5"><b>Serving &amp; MLOps</b>FastAPI + WebSocket · front office + back office · MLflow · tracing · Docker · CI</div>
+</div>
+<p>Each layer is a Python package in <code>src/callverse/</code>. A lower layer never imports a higher one: this is enforced by
+five <code>import-linter</code> contracts checked in CI (for example, <i>data</i> may not import <i>agents</i>, <i>evaluation</i> may not
+import <i>api</i>). Every assumption (contact rates, opening hours, costs, model names) lives in a YAML file in <code>configs/</code>.</p>
+
+<h2>1.5 Two applications on one API</h2>
+<table>
+<tr><th style="width:18%">App</th><th style="width:22%">Users</th><th>What it is for</th></tr>
+<tr><td><span class="tag fo">FRONT OFFICE</span><br>localhost:5173</td><td>Customers and advisors</td><td>The "shop side": a help centre with semantic search, a demo customer account with the order journey, a <b>live chat with the AI advisor</b> (tokens stream, every agent step is visible), and an <b>advisor desk</b> where a human answers simulated customers with an AI copilot.</td></tr>
+<tr><td><span class="tag bo">BACK OFFICE</span><br>localhost:5174</td><td>Managers, data scientists, the jury</td><td>The control room of the twin: overview and scorecard, data, forecast, an <b>animated live floor</b> replaying a simulated day, the scenario lab, an <b>agent theater</b> where the four agents run alone, workforce planning and routing, judge calibration, models and MLOps.</td></tr>
+<tr><td>API<br>localhost:8000</td><td>Both apps</td><td>FastAPI: REST endpoints + two WebSockets; Swagger documentation at <code>/docs</code>.</td></tr>
+</table>
+</section>
+
+<!-- ============================================================ PART 2 -->
+<section class="part">
+  <div class="num">Part 2</div>
+  <h1>How everything works</h1>
+  <p class="lead">Every concept used in CallVerse, in the order data flows through the system: from raw orders to a
+  forecast, from a forecast to a staffing plan, from a plan to a simulated day, and from a customer message to a graded
+  AI answer.</p>
+</section>
+
+<section class="newpage">
+<h2>2.1 Data layer</h2>
+<h3>Why synthetic contacts</h3>
+<p>No public dataset contains real contact-centre logs linked to orders. CallVerse therefore starts from two real public datasets
+and generates the contacts with <b>explicit, documented assumptions</b> (all marked <code>is_synthetic = True</code>):</p>
+<ul>
+<li><b>Olist</b> — 99,441 real orders of a Brazilian marketplace (2016–2018): purchase, approval, carrier and delivery timestamps,
+estimated delivery date, payments, items, reviews, customer city.</li>
+<li><b>Bitext</b> — real customer-service utterances labelled by intent. 17 order-related intents are kept and grouped into four
+<b>problem families</b>: <i>wismo</i> (where is my order), <i>cancel_refund</i>, <i>post_delivery</i> (damaged, wrong, missing items,
+returns) and <i>order_admin</i> (invoices, address changes, payment).</li>
+</ul>
+<h3>How a contact is generated</h3>
+<ol>
+<li>Each order is inspected for <b>situations</b> that make customers write: delivery late, seller shipped late, order canceled,
+payment anomaly, low review score, long transit…</li>
+<li>Each situation has a <b>contact probability</b> and a timing (days after an anchor event, e.g. 2 days after the shipping
+limit), set in <code>configs/data.yaml</code>. A random draw (fixed seed) decides whether the customer contacts the centre.</li>
+<li>The contact receives an <b>intent</b> consistent with the situation and the <b>real wording</b> of a Bitext message of that intent.</li>
+<li>Promotion windows (Black Friday, Christmas) and public holidays shift the volumes.</li>
+</ol>
+<p>Result: <b>9,179 contacts</b> (Jan 2017 → Aug 2018), each linked to a real order. From them, <b>9,179 tickets</b> and <b>60,837 chat
+messages</b> are generated: a rules engine decides the policy-correct <i>outcome</i> (tracking shared, refund approved, carrier
+investigation, hand-over to logistics…), approved answer templates write the advisor turns, and a 30% CSAT survey is simulated.</p>
+<h3>SQLite store and knowledge base</h3>
+<ul>
+<li><b>SQLite</b> (<code>data/callverse.db</code>) holds orders, tickets and chats with keys; the advisor's tools query it "as of" the
+moment the customer writes, so an order that was "shipped" on that day is never shown as "delivered".</li>
+<li><b>Knowledge base</b>: 10 hand-written policy documents (refunds, returns, delays, invoices, payments, cancellations, tracking,
+FAQ, damaged items, advisor playbook). Each "##" section becomes a chunk (58 chunks), embedded with <b>bge-m3</b>
+(multilingual, 1024-dimension vectors) and stored in a <b>FAISS</b> exact inner-product index. Vectors are L2-normalised, so the inner
+product equals the <b>cosine similarity</b>.</li>
+<li><b>Pandera contracts</b> check every processed table (types, ranges, uniqueness, allowed values) after each pipeline run, before
+the forecast and the twin read the data.</li>
+<li>The data notebooks (03–08) stay the single source of truth: <code>callverse data</code> re-executes them headless (nbclient).</li>
+</ul>
+
+<h2>2.2 Demand forecast (DSO4, part 1)</h2>
+<p>Target: <b>daily number of contacts per problem family</b>, forecast 1 to 7 days ahead (the planning horizon of a weekly roster).</p>
+<h3>Features — leakage-safe</h3>
+<p>Every lag is <b>≥ 7 days</b>, so a forecast made on Sunday for the next Saturday only uses information available on Sunday:
+contacts 7, 14, 21, 28 days before; orders, deliveries, late deliveries and overdue backlog with the same lags; day of week,
+promotion calendar, public holidays. A unit test checks that <code>lag_7</code> equals the value 7 days earlier.</p>
+<h3>Model and baselines</h3>
+<ul>
+<li><b>Main</b>: one <b>global LightGBM</b> model for the four groups (the group is a feature), with a <b>Poisson</b> objective because
+the target is a count.</li>
+<li><b>Baselines</b>: <i>seasonal naive</i> ("same day last week", the DSO4 baseline), 4-week weekday mean, <b>SARIMA</b>, <b>Prophet</b>.</li>
+</ul>
+<h3>Rolling-origin backtest</h3>
+<p>Every Sunday from October 2017 to August 2018 (46 origins), each model is trained only on the past and forecasts the next
+7 days. Errors are aggregated over all origins:</p>
+<div class="formula">wMAPE = Σ |actual − forecast| / Σ actual &nbsp;&nbsp;&nbsp; MAE = mean |error| &nbsp;&nbsp;&nbsp; RMSE = √ mean(error²) &nbsp;&nbsp;&nbsp; bias = Σ(forecast − actual) / Σ actual</div>
+<p>wMAPE is the decision metric: unlike MAPE it does not explode on days with very few contacts. Result on the total:
+<b>LightGBM 25.3%</b> vs 31.6% (naive), 27.7% (SARIMA), 31.9% (4-week mean), 35.9% (Prophet). Small groups (a few contacts a day)
+are close to the <i>Poisson noise floor</i>, so the total is the decision level. Every run is logged to <b>MLflow</b>.</p>
+</section>
+
+<section class="newpage">
+<h2>2.3 Queueing theory: Erlang C</h2>
+<p>A contact centre is a queue with <i>c</i> servers (advisors). With arrival rate λ (contacts per hour) and average handle time
+AHT, the offered load is <b>A = λ · AHT</b> (in Erlangs: the number of advisors that would be busy all the time). The Erlang C formula
+gives the probability that a customer has to wait:</p>
+<div class="formula">P(wait) = [ A<sup>c</sup>/c! · c/(c−A) ] / [ Σ<sub>k=0..c−1</sub> A<sup>k</sup>/k! + A<sup>c</sup>/c! · c/(c−A) ]</div>
+<div class="formula">Service level = 1 − P(wait) · e<sup>−(c−A)·T/AHT</sup> &nbsp;&nbsp;&nbsp; ASA = P(wait) · AHT / (c − A)</div>
+<p>CallVerse uses it three ways: (1) the <b>required number of agents</b> per hour is the smallest <i>c</i> reaching the
+<b>80/20 target</b> (80% of chats answered within 20 s) with occupancy ≤ 90%; (2) the Workforce agent quotes the <b>expected wait</b> of a
+conversation; (3) it <b>validates the simulator</b>: on a stationary hour the SimPy engine must reproduce Erlang C (error &lt; 4%).</p>
+<p><b>Little's law</b> (L = λ · W: average number waiting = arrival rate × average wait) explains why the routing reward
+"minus customer-seconds of waiting" is the same as minimising the average wait.</p>
+
+<h2>2.4 The digital twin (DSO4, part 2)</h2>
+<p>The twin is a <b>discrete-event simulation</b> written with <b>SimPy</b>: time jumps from event to event (an arrival, an advisor
+becoming free, a customer hanging up, a shift starting) instead of ticking every second.</p>
+<h3>Ingredients</h3>
+<table>
+<tr><th style="width:24%">Element</th><th>How it is modelled</th></tr>
+<tr><td>Arrivals</td><td>Daily volumes per group from the history or the scenario, spread over the day with the hourly profile, as a Poisson process (random but realistic bursts).</td></tr>
+<tr><td>Live vs asynchronous</td><td>Chats arriving during opening hours (8:00–22:00) are <b>live</b>; messages arriving at night form an <b>overnight backlog</b> worked first in the morning.</td></tr>
+<tr><td>Customers</td><td>Personas: <b>impatient 25%</b> (patience ×0.5), <b>normal 55%</b>, <b>patient 20%</b> (×2). A customer whose patience runs out <b>abandons</b> (hangs up). Repeat contacts are more often impatient.</td></tr>
+<tr><td>Handle time</td><td>Lognormal per problem family (long right tail).</td></tr>
+<tr><td>Advisors</td><td>Each has a <b>main skill</b>: ×0.75 handle time on their specialty, ×1.3 on weak groups. A <b>duty matrix</b> (agent × hour) says who works when.</td></tr>
+<tr><td>Overtime</td><td>Planned overtime hours, plus a real-time rule: if the queue exceeds 8 customers, 2 on-call agents join.</td></tr>
+<tr><td>Routing</td><td>A <b>router</b> decides which waiting customer a free advisor takes: FIFO, skill score or PPO (section 2.6).</td></tr>
+<tr><td>Costs</td><td>€12/h regular, overtime ×1.5, €8 per lost (abandoned) customer.</td></tr>
+</table>
+<h3>KPIs</h3>
+<p>Service level (answered within 20 s), ASA (average speed of answer), mean wait of all live customers, p90 wait, abandon rate,
+occupancy, understaffed hours (scheduled &lt; Erlang C requirement), overtime hours, labour cost, cost per contact, total cost.</p>
+<h3>Scenarios and "prepared vs unprepared"</h3>
+<p>Scenarios (<code>configs/scenarios.yaml</code>) are real weeks with multipliers: <i>promo spike</i>, <i>delivery delays</i>, <i>staff
+shortage</i> (absences), <i>Black Friday 2017</i>. A plan is <b>unprepared</b> when it is built from the normal forecast and <b>prepared</b>
+when it is built after testing the scenario in the twin. Comparing both on the same customers measures the value of testing first (BO4).</p>
+<h3>Statistics: common random numbers and paired confidence intervals</h3>
+<p>Each option is simulated over <b>10 seeds</b>. For a given seed, every option sees <b>exactly the same customers</b> (same arrival
+times, same patience, same handle times): this is the <i>common random numbers</i> technique. The difference between two options is
+computed seed by seed, and a <b>paired t-interval</b> gives its 95% confidence interval. A difference is "significant" when the
+interval does not contain 0. Pairing removes the noise of the customers themselves, so small effects become measurable.</p>
+<h3>Fidelity: is the twin realistic?</h3>
+<ul>
+<li><b>Kolmogorov–Smirnov test</b> on daily volumes, simulated vs historical: p = 0.998 (no detectable difference).</li>
+<li><b>Hourly profile</b>: total-variation distance 0.015 between simulated and historical shares per hour.</li>
+<li><b>Erlang C check</b>: on stationary hours, simulated P(wait) and ASA within 4% of the formula.</li>
+</ul>
+</section>
+
+<section class="newpage">
+<h2>2.5 Workforce agent — shift planning (DSO3)</h2>
+<p>Given the hourly requirement (Erlang C on the forecast), the planner chooses <b>who works when</b>. It is an integer optimisation
+solved with Google <b>OR-Tools CP-SAT</b> in two stages:</p>
+<ol>
+<li><b>Coverage</b>: choose how many people start each of 27 <b>shift templates</b> (4, 6 or 8 hours) each day, plus overtime hours
+(≤ 4 per hour, ≤ 60 per week), minimising <i>regular cost + 1.5 × overtime cost + 200 × understaffed agent-hours</i>.</li>
+<li><b>Roster</b>: assign the chosen shifts to named agents under hard <b>labour rules</b>: at most 5 days and 40 hours a week, one
+shift per day, at least 11 hours of rest between shifts.</li>
+</ol>
+<p>The solver proves optimality in under a second. It runs with <code>num_workers = 1</code>: with 8 parallel workers it returned
+different (equally optimal) rosters from run to run, which moved the simulation KPIs — determinism matters more than speed here.</p>
+<p><b>Baselines and backups</b>: <i>fixed schedule</i> sized for the peak (same staff every hour), <i>fixed tuned</i> (sized at the 75%
+quantile), <i>Erlang C + rules</i> (morning/afternoon templates + overtime rule), <i>Erlang C hourly</i> (theoretical reference).</p>
+
+<h2>2.6 Workforce agent — real-time routing (DSO1)</h2>
+<p>When an advisor becomes free, the router chooses which waiting customer they take.</p>
+<ul>
+<li><b>FIFO with skill matching</b> (baseline): oldest customer first.</li>
+<li><b>Skill score</b> (backup): a weighted score of waiting time, the advisor's speed on that problem, persona and live/overnight;
+the weights are tuned by random search in the twin.</li>
+<li><b>MaskablePPO</b> (main idea): a reinforcement-learning policy trained only inside the simulator.</li>
+</ul>
+<h3>The RL problem (MDP)</h3>
+<table>
+<tr><th style="width:16%">Part</th><th>Definition</th></tr>
+<tr><td>State</td><td>The <b>10 oldest waiting customers</b>, 12 features each (wait so far, problem family, persona, live or overnight, the free advisor's speed on that family…) + 7 global features (queue length, staff on duty, time of day…).</td></tr>
+<tr><td>Action</td><td>Which of the 10 slots the free advisor takes. Empty slots are <b>masked</b> (MaskablePPO never picks an invalid action).</td></tr>
+<tr><td>Reward</td><td>−(Δ customer-seconds of waiting + 600 × Δ abandons) / 600: every waiting second costs, a hang-up costs 10 minutes.</td></tr>
+<tr><td>Training</td><td>300,000 steps on single busy days (load ×1.0–1.8, group surges, 5–30% absences), 2017-02 → 2018-03; test on unseen days 2018-04 → 2018-08. Network 2 × 128, γ = 0.995, learning rate 3e-4, entropy 0.01.</td></tr>
+</table>
+<p>The SimPy engine has a <b>steppable mode</b> (<code>advance()</code> / <code>resolve()</code>) wrapped as a <b>Gymnasium</b> environment, so the
+same simulator serves training, evaluation and the live floor.</p>
+<p><b>Result</b>: on unseen stressed days PPO reduces ASA by 13.9% versus FIFO; in full peak weeks (multi-day backlog, planned overtime)
+it does not reduce the mean wait (+2.2%) although it cuts long waits (p90 −18 to −25%). Following the switch rule, the tuned
+skill-score router is the production candidate; PPO stays the research track (next step: multi-day training episodes).</p>
+
+<h2>2.7 The conversational agents</h2>
+<h3>Client agent (plays the customer)</h3>
+<p>It knows a <b>profile</b>: the real opening message, the order, the hidden situation, a persona and a tone. It answers the advisor
+with an LLM in JSON (<code>{"message", "end", "csat"}</code>) or with rules offline. Guardrails: verification questions ("your order
+number?") are always answered deterministically, and if the LLM starts writing like an advisor ("how can I help you?") the turn
+falls back to the rule-based customer. At the end it rates the chat 1–5 (CSAT).</p>
+<h3>Advisor agent: Ask → Retrieve → Decide → Reply</h3>
+<ol>
+<li><b>Understand</b>: an intent classifier (TF-IDF + logistic regression, 99.0% accuracy on held-out Bitext) predicts the intent.</li>
+<li><b>Retrieve</b>: bge-m3 + FAISS returns the top-3 policy sections. Below a cosine of 0.57 the advisor says the knowledge base has no answer.</li>
+<li><b>Verify</b>: no order data is shared before the customer gives an order number (playbook rule 1).</li>
+<li><b>Tools</b> on the SQLite store, as of the contact time: <code>lookup_order</code>, <code>get_ticket_history</code>,
+<code>check_refund_eligibility</code>, <code>open_ticket</code>, <code>search_knowledge_base</code> and <code>recommend_resolution</code> (the company rules engine).</li>
+<li><b>Reply</b> in plain language.</li>
+</ol>
+<table>
+<tr><th style="width:18%">Variant</th><th>How it works</th></tr>
+<tr><td><b>template</b> (backup)</td><td>Classifier + approved answers filled with the order facts. Deterministic, instant, used offline.</td></tr>
+<tr><td><b>rag</b> (pure idea)</td><td>The LLM decides which tools to call and what to answer.</td></tr>
+<tr><td><b>rag_policy</b> (hybrid, production)</td><td>As soon as the order number is known, the pipeline itself calls <code>lookup_order</code> and the rules engine; the LLM receives the decision ("action: carrier investigation, hand over to: logistics, approved answer: …") and only <b>writes</b> it. <i>The rules engine decides, the LLM writes.</i></td></tr>
+</table>
+<p>Guardrails added after the first LLM runs: <b>tool gating</b> (order tools exist only after an order number appears — small models
+called them with invented ids), and a <b>verification guardrail</b> (a reply given before verification always ends by asking for the order number).</p>
+<h3>Quality agent (the reviewer)</h3>
+<p>It fills a <b>scorecard</b> of five criteria (1–5): <i>compliance</i> (policy followed, no invented promise), <i>relevance</i>,
+<i>satisfaction</i>, <i>sentiment</i>, <i>resolution</i>, plus "correct" and "resolved" verdicts and a one-sentence rationale. It receives the
+<b>policy-correct reference</b> (what the rules engine says for the true intent). The LLM judge comes from a <b>different model family</b>
+than the advisor (IBM Granite vs Hugging Face SmolLM3) so it does not share its blind spots. Offline, a rule-based checklist fills the same scorecard.</p>
+<h3>Can the judge be trusted? Calibration</h3>
+<p>The judge's grades are compared with labels using <b>Cohen's quadratic kappa</b> (chance-corrected agreement on an ordinal scale,
+1 = perfect, 0 = chance; disagreements of 2 points cost 4× more than 1 point) and <b>Spearman's ρ</b>. Rule: trusted at kappa ≥ 0.4.
+Without human labels, proxy labels come from the generator's answer key; once 20+ chats are graded by humans on the labeling page,
+the calibration switches to them automatically.</p>
+<h3>Workforce agent inside a conversation</h3>
+<p>For each chat it predicts the problem family, picks the best-skilled desk and quotes the Erlang C expected wait for that hour.</p>
+</section>
+
+<section class="newpage">
+<h2>2.8 The local LLMs (Hugging Face)</h2>
+<table>
+<tr><th style="width:15%">Role</th><th style="width:30%">Model</th><th>Why</th></tr>
+<tr><td>Advisor + simulated customer</td><td><b>SmolLM3-3B</b> (Hugging Face), 3.1 B parameters, Apache-2.0</td><td>Fully open (weights, data, recipe), tool calling, strong for its size; one copy serves both roles.</td></tr>
+<tr><td>Quality judge</td><td><b>Granite-4.0-1B</b> (IBM), 1.6 B parameters, Apache-2.0</td><td>Different family and organisation than the advisor (no self-preference bias); small enough to stay loaded.</td></tr>
+<tr><td>Retrieval</td><td><b>bge-m3</b> (BAAI), on CPU</td><td>Multilingual embeddings; keeps the GPU for the LLMs.</td></tr>
+</table>
+<h3>Fitting two LLMs in a 4 GB laptop GPU</h3>
+<ul>
+<li><b>4-bit NF4 quantization</b> (bitsandbytes): each weight is stored in 4 bits using "NormalFloat" levels that match the
+bell-shaped distribution of neural-network weights; <i>double quantization</i> also compresses the scaling constants. A 3B model goes
+from ~6 GB (16-bit) to ~2 GB. Both models together use <b>~3.2 GB</b> of the GTX 1650's 4 GB.</li>
+<li><b>bfloat16 compute</b>: the matrix products run in bf16. Float16 overflows on these models (activations above 65,504) and the
+output becomes "!!!!"; bf16 has the range of float32, and PyTorch emulates it on this Turing GPU at the same speed.</li>
+<li>Speed: ~8–13 tokens/s; an advisor reply takes ~7–10 s, a whole four-agent conversation ~45 s.</li>
+</ul>
+<h3>From messages to tokens and back</h3>
+<ul>
+<li><b>Chat templates</b>: each model has its own prompt format; <code>apply_chat_template</code> renders it. Tool schemas are passed the
+model's way (SmolLM3 uses <code>xml_tools</code>); system messages are merged into one; "thinking" mode is disabled for faster answers.</li>
+<li><b>Tool-call parsing</b>: the model writes <code>&lt;tool_call&gt;{"name": …, "arguments": …}&lt;/tool_call&gt;</code>; the parser also
+accepts Granite's and bare-JSON formats and ignores unknown tools.</li>
+<li><b>Streaming</b>: a background thread generates while a <code>TextIteratorStreamer</code> yields text pieces; a <b>stream gate</b> forwards them
+to the UI but hides tool-call markup (it holds back the last 12 characters until it is sure they do not start a tool call).</li>
+<li><b>JSON outputs</b> (client turns, judge scorecards): generation stops as soon as the JSON object is closed; a repair step closes
+an object that a small model left unfinished.</li>
+<li><b>Cache</b>: every call is keyed by the SHA-256 of (model, commit, messages, tools, temperature, seed); an identical call is answered
+from SQLite instantly, which makes runs reproducible.</li>
+<li><b>Tracing</b>: every call is appended to <code>llm_calls.jsonl</code> (agent, model, tokens, latency, tokens/s, tools, cache hit).</li>
+<li><b>Pinning</b>: <code>callverse llm-pull</code> downloads the models and writes the exact Hub commit of each repository to
+<code>llm_models.lock.json</code>; afterwards models load from the local cache only.</li>
+<li><b>Graceful degradation</b>: with no CUDA GPU or no downloaded weights, every agent switches to its offline backup and the UI says so.</li>
+</ul>
+
+<h2>2.9 Orchestration: LangGraph and live sessions</h2>
+<div class="keep"><h3>The automatic conversation graph</h3>
+<div class="flow">
+  <div class="n c3"><b>client_open</b>real opening message</div><div class="a">→</div>
+  <div class="n c3"><b>workforce_route</b>intent, desk, expected wait</div><div class="a">→</div>
+  <div class="n c3"><b>advisor</b>RAG, tools, reply</div><div class="a">⇄</div>
+  <div class="n c3"><b>client_reply</b>continue or leave</div><div class="a">→</div>
+  <div class="n c4"><b>quality</b>scorecard vs reference</div><div class="a">→</div>
+  <div class="n c4"><b>kpi</b>FCR, CSAT, compliance…</div>
+</div></div>
+<p><b>LangGraph</b> runs this as an explicit state machine; the conditional edge after <i>client_reply</i> loops back to the advisor until the
+customer leaves (or 4 customer turns). The final <b>KPI row</b> holds: first-contact resolution, CSAT, compliant (compliance ≥ 4),
+policy-correct action (advisor's outcome = reference outcome), judge verdict, tool success rate, intent predicted, turns, expected wait.
+Batches of conversations (<code>callverse agents</code>) produce the DSO2 tables.</p>
+<h3>Live sessions: a human on either side</h3>
+<p><code>orchestration/live.py</code> drives the <b>same agents</b> one step at a time, so a human can play the customer (front-office chat) or
+the advisor (advisor desk, with the AI as copilot or autopilot). The browser talks to it through the WebSocket <code>/ws/session</code>:</p>
+<table>
+<tr><th style="width:22%">Event (server → UI)</th><th>Meaning</th></tr>
+<tr><td><code>ready</code></td><td>Session created: profile, whether the LLM is used, which model, which retriever.</td></tr>
+<tr><td><code>stage</code></td><td>An agent started a step: routing, retrieval (with hits and scores), tool (name, ok, latency), generation (model, round), typing, reviewing.</td></tr>
+<tr><td><code>token</code></td><td>A piece of the advisor's text as it is generated (for a reply or a copilot draft).</td></tr>
+<tr><td><code>message</code></td><td>A finished message (customer or advisor) with its metadata (mode, tools, sources).</td></tr>
+<tr><td><code>routing</code>, <code>advisor_state</code></td><td>Workforce decision; policy state (intent, order verified, action, hand-over).</td></tr>
+<tr><td><code>suggestion</code></td><td>The copilot's draft for the human advisor.</td></tr>
+<tr><td><code>review</code>, <code>done</code></td><td>Quality scorecard, policy reference and KPI row; end of session.</td></tr>
+</table>
+<p>The UI sends <code>start</code>, <code>customer_message</code>, <code>advisor_message</code>, <code>suggest</code>, <code>autopilot</code> and <code>end</code> (with the CSAT).
+The server runs each blocking agent step in a worker thread and pushes events through an asyncio queue; a global lock ensures one
+generation at a time on the GPU. Live transcripts are saved apart from the evaluation batches.</p>
+</section>
+
+<section class="newpage">
+<h2>2.10 Evaluation framework</h2>
+<ul>
+<li><b>KPI engine</b> (<code>evaluation/business_kpis.py</code>): means, 95% CIs and paired differences of every KPI.</li>
+<li><b>Experiments</b>: DSO3 planners vs fixed; DSO1 routers vs FIFO (stressed days and peak weeks); BO4 prepared vs unprepared;
+DSO2 retrieval (255 Bitext questions: recall@1, recall@4, MRR), conversations per variant, judge calibration, faithfulness and similarity to the policy answer.</li>
+<li><b>Component metrics</b>: is each part good on its own (forecast wMAPE, retrieval recall, judge kappa, twin KS and Erlang C error)?</li>
+<li><b>Scorecard</b>: applies each DSO's switch rule and writes the verdicts (<code>scorecard.json</code>), shown in both apps.</li>
+<li><b>BO4 money</b>: saving = (unprepared − prepared) labour cost + €8 × lost customers avoided; the <b>break-even</b> value of a lost
+customer is the value above which preparing pays off (€6–12 depending on the scenario).</li>
+</ul>
+<div class="formula">MRR = mean(1 / rank of the first correct section) &nbsp;&nbsp;&nbsp; recall@k = share of questions whose correct section is in the top k</div>
+
+<h2>2.11 API (FastAPI)</h2>
+<table>
+<tr><th style="width:36%">Endpoint</th><th>Used by — purpose</th></tr>
+<tr><td><code>/api/portal/customers</code>, <code>/api/portal/customers/{id}</code></td><td>Front office — demo customers (one real contact per main intent), order journey "as of" the contact date, previous contacts.</td></tr>
+<tr><td><code>/api/kb/articles</code>, <code>/api/kb/articles/{id}</code>, <code>/api/kb/search?q=</code></td><td>Front office — help centre (the advisor's knowledge base) and semantic search.</td></tr>
+<tr><td><code>/api/desk/queue</code></td><td>Front office — contacts waiting for a human advisor.</td></tr>
+<tr><td><code>WS /ws/session</code></td><td>Front office + agent theater — live sessions (section 2.9).</td></tr>
+<tr><td><code>/api/overview</code>, <code>/api/data/summary</code>, <code>/api/forecast</code></td><td>Back office — headline numbers, data charts, backtest and next-week forecast.</td></tr>
+<tr><td><code>/api/twin/config</code>, <code>POST /api/twin/run</code>, <code>POST /api/twin/compare</code>, <code>/api/twin/floor</code></td><td>Back office — scenarios, one configuration over seeds, several options with common random numbers, one day contact by contact.</td></tr>
+<tr><td><code>/api/workforce/schedule</code>, <code>/api/workforce/routing</code></td><td>Back office — CP-SAT plan and roster; router comparison and PPO curve.</td></tr>
+<tr><td><code>/api/quality/*</code>, <code>/api/evaluation</code>, <code>/api/mlops</code>, <code>/api/system</code></td><td>Back office — labeling and calibration, scorecard tables, MLflow runs and traces, models and GPU (+ <code>POST /api/system/warmup</code>).</td></tr>
+</table>
+
+<h2>2.12 Frontend architecture</h2>
+<ul>
+<li><b>npm workspaces</b>: <code>frontend/shared</code> (design system), <code>front-office</code>, <code>back-office</code>. Both apps are React 18 +
+TypeScript + Vite; the shared package is consumed as source, so a component change shows in both apps at once.</li>
+<li><b>Design tokens</b>: colours are CSS variables with a light and a dark set; Tailwind classes point to them, so themes switch without
+rebuilding. Chart colours use a validated colour-blind-safe palette with a fixed colour per entity (e.g. "Where is my order" is always blue).</li>
+<li><b>Motion</b> (Framer Motion): page transitions, staggered entrances, count-up numbers, animated rings and bars, spring chat bubbles, an
+animated agent pipeline. The OS "reduce motion" setting is respected; <code>?snapshot</code> renders every animation in its final state.</li>
+<li><b>Live floor</b>: drawn on an HTML <code>&lt;canvas&gt;</code> at 60 fps (hundreds of moving customers would be too slow as DOM nodes).</li>
+<li><b>Live session client</b>: a React hook (<code>useLiveSession</code>) turns WebSocket events into state (messages, streaming text, active
+agent, stages, routing, suggestion, review) through one reducer.</li>
+<li><b>Quality of life</b>: command palette (Ctrl+K), toasts, skeleton loaders, error boundaries (one broken view never blanks the app),
+self-hosted fonts (works offline on demo day).</li>
+</ul>
+
+<h2>2.13 MLOps and software quality</h2>
+<ul>
+<li><b>MLflow</b> (SQLite backend locally, Postgres in Docker): forecast backtests, PPO training, evaluation suites — parameters, metrics, artifacts.</li>
+<li><b>Reproducibility</b>: seeds in configs, pinned model commits, LLM cache, CP-SAT single worker, <code>callverse all</code> rebuilds everything.</li>
+<li><b>Docker Compose</b>: api, web (one nginx serving the front office on 8080 and the back office on 8081, proxying <code>/api</code> and <code>/ws</code>),
+mlflow + postgres; <code>docker-compose.gpu.yml</code> adds CUDA PyTorch and the NVIDIA GPU.</li>
+<li><b>CI (GitHub Actions)</b>: ruff, import-linter (5 layer contracts), pytest (95+ tests: unit, smoke, integration including the live
+WebSocket session), type-check and build of both apps.</li>
+</ul>
+</section>
+
+<!-- ============================================================ PART 3 -->
+<section class="part">
+  <div class="num">Part 3</div>
+  <h1>Front office, page by page</h1>
+  <p class="lead">The customer and advisor side, in a light theme. Every screenshot was taken while the AI agents were really
+  running on the laptop GPU.</p>
+</section>
+
+<section class="newpage">
+<h2>3.1 Home — the help centre landing page</h2>
+<p><b>Purpose</b>: the first screen a customer sees. It answers simple questions with search, routes harder ones to the AI advisor,
+and lets the jury "become" a real customer of the twin.</p>
+<!--FIG fo_home "Front office home (full page)."-->
+<ol class="legend">
+<li><b>Navigation bar</b> (glass effect): Home, Help centre, My orders, Live chat; on the right a <b>Staff</b> area (Advisor desk, link
+to the back office), the signed-in demo customer and the theme toggle. The active link is marked by a sliding pill (shared layout animation).</li>
+<li><b>Hero</b>: headline, the trust badge ("answers grounded in our policies · checked against your order") and the two calls to
+action: chat with an advisor, track an order.</li>
+<li><b>Semantic search box</b> (detailed on the next page) with example questions as chips.</li>
+<li><b>Animated chat preview</b> (right): a scripted, looping conversation that types itself, shows the tool chips the real advisor
+uses (Order lookup, Rules engine, Ticket opened) and three floating cards summarising what happens behind a reply: knowledge-base
+hit with its cosine score, Workforce routing with the expected wait, quality review. It is an illustration; the real chat is on /chat.</li>
+<li><b>Four problem families</b> — the intent groups of the data (where is my order, cancel/refund, problem with an item, invoices &amp;
+changes), each with its fixed colour, linking to the matching policy article.</li>
+<li><b>"Try it as a real customer"</b>: eight cards, one per main intent. Each is a real anonymised Olist order plus the real message its
+customer sent. The badges show the order status <i>at the contact date</i> (e.g. "On its way", "Canceled") and "N days late" when the
+estimated date has passed; the dot colour is the persona (red impatient, blue normal, green patient). The names are deterministic
+demo names (Olist customers are anonymous ids). Clicking a card signs in as that customer.</li>
+<li><b>"How our AI advisor answers you"</b>: the four steps of the advisor pipeline (understand, retrieve, verify &amp; decide, answer &amp;
+review) with an animated connecting line.</li>
+<li><b>Popular guides</b>: the policy articles of the knowledge base.</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>3.2 Semantic search</h2>
+<!--FIG fo_search "Typing a question in your own words: results appear as you type."-->
+<ol class="legend">
+<li>The query is embedded with <b>bge-m3</b> and compared with the 58 policy sections in FAISS (debounced 280 ms after the last keystroke).</li>
+<li>Each result shows its <b>cosine similarity</b> (bar + value), the section title, the article and a snippet with the query words highlighted.</li>
+<li>The footer names the retriever and the search latency. Keyboard: arrows to move, Enter to open the article at that exact section.</li>
+</ol>
+<div class="box"><b class="t">Why semantic and not keyword search?</b>"my parcel is late and nobody answers" shares almost no word with
+"Order late: estimated date has passed", yet it is the right section. On 255 Bitext questions, bge-m3 finds the correct section
+in the top 4 for 96.9% of questions, against 80.4% for TF-IDF keyword search (the DSO2 baseline).</div>
+
+<h2>3.3 Help centre and articles</h2>
+<!--FIG fo_help "Help centre index: the knowledge base shown to customers."-->
+<!--FIG fo_article "An article opened at the section a search result pointed to."-->
+<ol class="legend">
+<li>The help centre <b>is</b> the advisor's knowledge base: one source of truth, so customers and the AI read the same policies.</li>
+<li>Each card shows the document type (policy, FAQ, procedure), a summary and its sections; the internal advisor playbook is marked "staff".</li>
+<li>In an article: table of contents on the left (the section targeted by search is highlighted), the Markdown policy in the middle,
+a "Still need help? Start a chat" card on the right.</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>3.4 My orders — the demo customer's account</h2>
+<p><b>Purpose</b>: show the order exactly as it was on the day the customer contacted the centre (the twin replays the past), so the
+chat that follows is consistent with the data the advisor's tools will read.</p>
+<!--FIG fo_account "Account of a demo customer whose delivery is late."-->
+<ol class="legend">
+<li><b>Header</b>: avatar, city, the demo persona, and the <b>twin clock</b> — the date and time of the original contact.</li>
+<li><b>Order journey</b>: placed → payment approved → handed to the carrier → delivered. Steps are computed "as of" the twin clock:
+done steps show their date, the current step pulses, a step past its due date is red ("was due …"). The gradient bar fills to the last done step.</li>
+<li><b>Late banner</b>: appears when the estimated delivery date has passed, and explains what the advisor can do.</li>
+<li><b>Order facts</b>: category, value (in R$, the Olist currency), items, payment method, order and estimated delivery dates.</li>
+<li><b>"Need help with this order?"</b>: the message the customer really sent, and the button to start the chat.</li>
+<li><b>Previous contacts</b> of the same customer before this date (repeat contacts are more often impatient in the twin).</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>3.5 Live chat with the AI advisor</h2>
+<p><b>Purpose</b>: a human (the customer) chats with the Advisor agent running on the GPU, while a side panel shows what every agent
+does. This is the clearest demonstration of the four agents and of "the rules engine decides, the LLM writes".</p>
+<!--FIG fo_chat "Live chat after two customer messages: the advisor asked for the order number, then answered with the policy decision."-->
+<ol class="legend">
+<li><b>Header</b>: the assistant, the engine actually answering ("AI · SmolLM3-3B on GPU", or "offline backups" without a GPU) and a switch
+between <b>Local LLM</b> and <b>Offline</b> (approved templates) — useful if the GPU fails on demo day.</li>
+<li><b>Messages</b>: the customer's messages on the right (gradient), the advisor's on the left. Under each advisor message: who wrote it
+(model name, "approved template"…), the <b>tools</b> it used (Order lookup ✓, Rules engine ✓) and how many policy <b>sources</b> support it.
+While the model writes, a streaming bubble shows the text token by token with a blinking caret.</li>
+<li><b>Suggestion chips</b> above the input: the customer's real opening message, "My order number is …" (order ids are 32 hexadecimal
+characters), "Can I speak to a supervisor?", "Thanks, that's all".</li>
+<li><b>Behind the scenes</b> panel: the <b>Hybrid / Pure RAG</b> switch (production variant vs ablation) and the <b>agent pipeline</b> lighting up as
+each agent works — "You (customer)", Workforce agent, Advisor agent (with its sub-steps bge-m3, tools, LLM), Quality agent, KPI engine.</li>
+<li><b>Workforce agent decision</b>: predicted intent and its confidence, the desk chosen (best-skilled advisor), its specialty, the
+<b>Erlang C expected wait</b> for that hour and the number of agents on duty.</li>
+<li><b>Live trace</b>: every step in order — knowledge-base search (top sections with cosine scores), each tool call with the order id and
+latency, each LLM generation with the model name.</li>
+</ol>
+<!--FIG fo_csat "Ending the chat: the CSAT survey (1 to 5 stars) feeds the BO2 satisfaction KPI."-->
+<!--FIG fo_chat_review "After the rating: the Quality agent's review in the chat and the conversation KPIs in the side panel."-->
+<ol class="legend">
+<li><b>Quality review card</b>: overall score ring (/5, green ≥ 4), verdicts "policy-correct answer" and "resolved / correctly handed over",
+the judge used (Granite-4.0-1B) and a <b>radar chart</b> of the five criteria (compliance, relevance, satisfaction, sentiment, resolution). The
+further a point is from the centre, the better.</li>
+<li><b>Rationale</b> in one sentence and the <b>policy reference</b>: the outcome the rules engine gives for this order and the true intent
+(e.g. "tracking shared"), against which the answer was judged.</li>
+<li><b>Conversation KPIs</b>: first-contact resolution, policy-correct action, compliant, intent predicted — the BO2 indicators of this chat.</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>3.6 Advisor desk — human + AI copilot</h2>
+<p><b>Purpose</b>: the advisor's workspace. Simulated customers (played by the Client agent) wait in a queue; a human advisor answers them,
+helped by the Advisor agent as a <b>copilot</b> that drafts every reply. <b>Autopilot</b> lets the agent answer alone.</p>
+<!--FIG fo_desk_queue "The desk before accepting a chat: the live queue on the left."-->
+<ol class="legend">
+<li><b>Desk metrics</b> (top strip): customers waiting, longest wait (red above 3 minutes), chats handled, average quality and handle time
+of the session; switch Local LLM / Offline; "New queue" draws another sample of real contacts.</li>
+<li><b>Queue</b>: one card per waiting customer — name, problem family (colour bar), the real first message, persona badge, repeat-contact
+badge and a <b>wait timer that ticks every second</b>. Sorted by wait, longest first.</li>
+<li>Centre: instructions until a chat is accepted. Right: the context panel (Customer, Copilot, Quality tabs).</li>
+</ol>
+<!--FIG fo_desk_draft "A chat accepted: the copilot draft appears above the composer."-->
+<ol class="legend">
+<li><b>Header</b>: the customer, intent and persona; the <b>You answer / Autopilot</b> switch; <b>Wrap up</b> to close and review.</li>
+<li><b>Agent pipeline</b> (horizontal version) showing which agent works now.</li>
+<li><b>Copilot draft</b> (gradient border): the Advisor agent's proposed reply, streamed as it is written, with the number of tool calls it
+made. <b>Send draft</b> sends it as is; <b>Edit first</b> copies it into the composer. Sent messages are labelled "human · AI draft" or
+"human · edited AI draft", so the evaluation knows how much the human relied on the AI.</li>
+<li><b>Customer 360</b> (right): the order journey in compact form, value, estimated date, days past estimate, previous contacts.</li>
+</ol>
+<!--FIG fo_desk_copilot "Copilot tab: the policy state and the sources behind the draft."-->
+<ol class="legend">
+<li><b>Policy state</b>: intent, whether the order is verified, the rules-engine action and who the case is handed to.</li>
+<li><b>Policy sources of the draft</b>: the knowledge-base sections retrieved, with their similarity scores.</li>
+<li>The live trace of the session (routing, retrieval, tools, generations).</li>
+</ol>
+<!--FIG fo_desk_quality "After autopilot finished the chat: the Quality tab with the scorecard."-->
+<ol class="legend">
+<li>The <b>quality scorecard</b> (ring, verdicts, radar) and the KPIs of the chat: FCR, the customer's CSAT, compliance, number of turns.</li>
+<li>The handled chat leaves the queue and updates the desk metrics (handled, average quality, average handle time).</li>
+</ol>
+</section>
+
+<!-- ============================================================ PART 4 -->
+<section class="part">
+  <div class="num">Part 4</div>
+  <h1>Back office, page by page</h1>
+  <p class="lead">The managers' control room, in a dark theme. The sidebar groups the pages by architecture layer; the card at the
+  bottom of the sidebar shows, live, whether the local LLMs are ready, the GPU and its memory.</p>
+</section>
+
+<section class="newpage">
+<h2>4.1 Overview</h2>
+<p><b>Purpose</b>: the one-screen summary for the jury: what the project is, the four verdicts, the data volumes and the architecture.</p>
+<!--FIG bo_overview "Back-office overview."-->
+<ol class="legend">
+<li><b>Sidebar</b> grouped by layer (colour dot per layer): Control room, Data layer, Simulation &amp; forecasting, Agents, Evaluation,
+Serving &amp; MLOps; the active page is marked by a sliding highlight and a coloured bar. Bottom: <b>system card</b> (LLMs ready / offline
+backups, GPU name, VRAM bar, models loaded) refreshed every 15 s, and the collapse button.</li>
+<li><b>Top bar</b>: breadcrumb (layer / page), the command-palette button (Ctrl+K), a link to the front office, the theme toggle.</li>
+<li><b>Hero</b> with the <b>"main ideas kept" ring</b>: how many DSOs passed their switch rule (2 of 4), and the list of verdicts.</li>
+<li><b>Headline numbers</b> (count up when the page opens): real Olist orders, synthetic contacts and their date range, chat messages and
+tickets in SQLite, historical first-contact resolution and CSAT of the generated logs.</li>
+<li><b>BO → DSO cards</b>: for each objective the ring (green = main idea beats the baseline, amber = backup kept), the main idea vs baseline,
+the measured result and the rule.</li>
+<li><b>Architecture map</b> (animated SVG): the five layers with particles flowing along the data path; the dashed loop "test first,
+then decide" goes from evaluation back to the twin. Clicking a layer opens its page.</li>
+<li><b>Agent runtime</b>: LLM status and the model of each role.</li>
+</ol>
+<!--FIG bo_palette "Command palette (Ctrl+K): jump to any page or action by typing."-->
+</section>
+
+<section class="newpage">
+<h2>4.2 Data &amp; contracts</h2>
+<p><b>Purpose</b>: show where the contacts come from and prove the data is checked.</p>
+<!--FIG bo_data "Data layer page."-->
+<ol class="legend">
+<li><b>Weekly contacts by problem type</b> — stacked area chart: each colour is a problem family, the height of the stack is the total
+contacts of the week. The peaks follow Black Friday and Christmas 2017 (more orders and more late deliveries → more contacts).</li>
+<li><b>Contacts per problem type</b> — horizontal bars of the totals: "where is my order" dominates, as in real e-commerce centres.</li>
+<li><b>Time-of-day profile</b> — share of contacts per hour (from Olist purchase hours): low at night, high from late morning to evening.
+It drives the hourly arrival rates of the twin.</li>
+<li><b>Post-chat satisfaction (CSAT)</b> — distribution of the 1–5 survey scores of the generated tickets (30% of customers answer).</li>
+<li><b>Why customers contact us</b> — the hidden <i>situation</i> of the order behind each contact (late delivery, seller shipped late…).</li>
+<li><b>Data contracts (Pandera)</b> — every processed table, its rows and whether its contract passes.</li>
+<li><b>Sample contacts</b> — real Bitext wording linked to a real order, with the generated situation.</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>4.3 Demand forecast</h2>
+<p><b>Purpose</b>: show that the forecast beats the naive baseline out of sample (DSO4 part 1).</p>
+<!--FIG bo_forecast "Forecast page."-->
+<ol class="legend">
+<li><b>Stat tiles</b>: LightGBM wMAPE on the total (25.3%), the naive baseline (31.6%), the gain (−19.9% error: main idea kept) and the RMSE in contacts per day.</li>
+<li><b>Actual vs forecast</b> — line chart over the whole backtest: actual total contacts per day (white/black), LightGBM (blue) and "same day
+last week" (dashed orange). Every point was forecast 1–7 days before it happened. LightGBM follows the level shifts (promotions, holidays)
+while the naive forecast copies last week's accidents.</li>
+<li><b>wMAPE by level and model</b> — table: rows are the total and the four groups, columns the five models; the best of each row is
+bold. LightGBM wins on the total and on "where is my order"; on tiny groups SARIMA is sometimes better, all close to the noise floor.</li>
+<li><b>Error by horizon</b> — grouped bars: wMAPE of LightGBM and the naive forecast for D+1 … D+7. LightGBM is better at every horizon.</li>
+<li><b>Next week forecast</b> — stacked bars of the forecast contacts per day and group for the week after the data (model retrained on all history).</li>
+<li><b>What drives the forecast</b> — LightGBM feature importance (share of total gain): which lags and calendar features matter most.</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>4.4 Digital twin — the live floor</h2>
+<p><b>Purpose</b>: make the simulation visible. One simulated day is replayed customer by customer (from <code>/api/twin/floor</code>: every
+contact's arrival, pick-up, end or hang-up time, and every agent's skill and duty hours), animated on a canvas.</p>
+<!--FIG bo_floor_unprepared "Promo spike, Wednesday 9 May 2018, CP-SAT plan built from the normal forecast (unprepared), FIFO routing, at 08:32 — inside the busiest half hour (08:20)."-->
+<ol class="legend">
+<li><b>Controls</b>: scenario, day of the week, shift planner, router, and whether the plan was built from the normal forecast
+(<i>unprepared</i>) or the scenario forecast (<i>prepared</i>). The sentence below gives the day's result (service level, hang-ups).</li>
+<li><b>KPI strip</b> (updated live): twin clock, customers waiting now, busy agents / agents on duty, overnight <b>backlog left</b>, answered,
+hung up, service level so far (red below 80%).</li>
+<li><b>Queue zone</b> (left): each dot is a waiting customer, coloured by problem family; it slides into place as the queue moves. A
+<b>red ring</b> means it has waited more than 20 s (it will miss the service level).</li>
+<li><b>Agent desks</b> (right): border colour = the agent's main skill; dashed and dim = off duty this hour; filled = busy, with the colour
+of the problem being handled and a white arc showing the progress of the conversation; an <b>envelope</b> = working on an overnight message;
+"OT" = overtime agent, "+OT" = on-call agent added by the real-time overtime rule.</li>
+<li><b>Movements</b>: a customer picked up flies in an arc from the queue to the desk; a finished conversation leaves as a fading
+green dot; a customer who hangs up turns red and drops out.</li>
+<li><b>Playback</b>: play/pause, restart, <b>jump to the peak</b> (the 30 minutes with the most customer-minutes of waiting),
+speed (60× to 30 simulated minutes per second), time scrubber.</li>
+<li><b>Waiting curve</b> (bottom): customers waiting through the day (2-minute samples), with a cursor at the current time; legend of colours.</li>
+</ol>
+<div class="box warn"><b class="t">Reading the unprepared picture</b>At 08:32 all <b>8</b> agents on duty are busy with overnight messages
+(envelope icons; 78 still to do). Live customers who arrived since 08:00 wait behind them under FIFO: 14 have already hung up (red dots
+dropping out) and nobody has been answered yet, so the service level so far is 0%. This "opening rush" is where this promo day loses
+its customers: over the whole day the plan reaches 83.6% service level with 64 hang-ups.</div>
+<!--FIG bo_floor_prepared "Same customers, same moment, with the plan built after testing the scenario (prepared)."-->
+<div class="box good"><b class="t">What preparing changes</b>The prepared plan puts <b>11</b> agents on duty at opening instead of 8, so the
+overnight backlog shrinks faster (47 messages left at 08:32 instead of 78) and live customers are reached sooner. Over the whole day:
+<b>93.1%</b> service level and <b>28</b> hang-ups instead of 83.6% and 64. This is BO4 ("prepare for peaks by testing first") made
+visible; the scenario lab below measures it over several seeds with confidence intervals. It also shows why routing matters:
+a router that serves live customers before overnight messages (skill score, PPO) attacks the same opening problem.</div>
+</section>
+
+<section class="newpage">
+<h2>4.5 Digital twin — the scenario lab</h2>
+<p><b>Purpose</b>: run what-if experiments with statistics: one configuration over several seeds, then several options on the same customers.</p>
+<!--FIG bo_lab "Scenario lab: a run (promo spike, CP-SAT, FIFO, prepared, 5 seeds) and the comparison of four decisions."-->
+<ol class="legend">
+<li><b>What-if configuration</b>: scenario, planner, router, prepared/unprepared, number of seeds; sliders multiply the volume of each
+problem family and set the share of absent agents (custom what-ifs on top of a scenario).</li>
+<li><b>KPI tiles</b>: mean over the seeds with its <b>[95% confidence interval]</b> and whether lower or higher is better: service level,
+abandon rate, ASA, understaffed hours, labour cost, overtime, cost per contact, total cost.</li>
+<li><b>Customers waiting</b> (area chart): hourly mean number of live customers waiting over the simulated week (seed 0) — one hump per day.</li>
+<li><b>Agents on duty vs busy</b> (lines): the step line is the plan (agents on duty), the other line the agents actually busy; when the
+two touch, the centre is saturated and the queue grows.</li>
+<li><b>Staffing plan heatmap</b>: agents scheduled per day and hour (darker = more); a red outline marks hours below the Erlang C requirement.</li>
+<li><b>"Same customers, four decisions"</b>: unprepared CP-SAT, prepared CP-SAT, fixed schedule, and CP-SAT with the PPO router, compared
+on every KPI with common random numbers. Typical promo-spike result: preparing cuts understaffed hours by ~71% and abandonment by ~62%;
+the fixed schedule also reaches the target but costs much more.</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>4.6 Agent theater</h2>
+<p><b>Purpose</b>: watch the four agents handle a real contact with no human involved — this is how DSO2 batches are evaluated.</p>
+<!--FIG bo_theater_running "During the run: the pipeline shows the active agent and the advisor's reply streams in."-->
+<!--FIG bo_theater "At the end: transcript, live trace and the Quality agent's scorecard."-->
+<ol class="legend">
+<li><b>Controls</b>: a real contact from history (or random), <b>Local LLMs</b> vs offline backups, <b>Hybrid</b> (rag_policy) vs <b>Pure RAG</b>;
+pills with the model of each role and the retriever.</li>
+<li><b>LangGraph flow</b>: client_open → workforce_route → advisor ⇄ client_reply → quality → kpi. The active node glows with a pulsing ring,
+finished nodes get a check mark, a particle travels along the edge being executed; the timer shows the elapsed time.</li>
+<li><b>Conversation</b>: the customer (Client agent) on the left, the advisor on the right, with mode, tools and sources under each message.</li>
+<li><b>What each agent did</b>: the Workforce decision and the step-by-step trace.</li>
+<li><b>Quality agent scorecard</b>: radar, verdicts and rationale; then the BO2 KPIs: first-contact resolution, policy-correct action,
+compliant, intent predicted, the simulated customer's CSAT, tool success rate, number of messages.</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>4.7 Workforce agent — shift planning</h2>
+<!--FIG bo_workforce_shifts "Shift planning tab: a CP-SAT week."-->
+<ol class="legend">
+<li><b>Plan a week</b>: scenario week, planner (CP-SAT, Erlang C + rules, fixed, fixed tuned, Erlang C hourly) and the demand used.</li>
+<li><b>Stat tiles</b>: planned cost (regular + 1.5 × overtime), regular hours, overtime hours, <b>understaffed hours</b> (hours where scheduled
+&lt; required; 0 means the plan covers the requirement everywhere), headcount and solve time.</li>
+<li><b>Labour rules</b>: the four hard constraints, each checked on the roster (≤ 5 days, ≤ 40 h, one shift a day, ≥ 11 h rest).</li>
+<li><b>Required agents heatmap</b>: Erlang C requirement per day (rows) and hour (columns) for 80/20 and occupancy ≤ 90%; darker = more agents.</li>
+<li><b>Scheduled agents heatmap</b>: what the plan provides (regular + overtime); a red outline would mark an hour below the requirement.
+Comparing both heatmaps shows how closely CP-SAT follows the demand curve, which is where the −40% cost comes from.</li>
+<li><b>Roster</b>: each named agent's shift per day (start–end) and weekly hours.</li>
+</ol>
+<h2>4.8 Workforce agent — real-time routing</h2>
+<!--FIG bo_workforce_routing "Real-time routing tab."-->
+<ol class="legend">
+<li><b>How the routing agent decides</b>: the state, action and reward of the MDP (section 2.6), and the tuned skill-score weights.</li>
+<li><b>Average wait to answer (ASA)</b> and <b>abandon rate</b> — bars per router on unseen stressed days (load ×1.6, 15% absent), with
+error bars = 95% CI of the paired difference with FIFO.</li>
+<li><b>Router comparison vs FIFO</b> — table of the relative change and its confidence interval for ASA, abandonment, service level and mean wait.</li>
+<li><b>PPO learning curve</b> — reward per simulated day (rolling mean of 50 episodes): it rises as the policy learns to reduce waiting and
+hang-ups, then plateaus.</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>4.9 Quality &amp; labeling</h2>
+<p><b>Purpose</b>: decide whether the AI judge can be trusted, by comparing it with human grades.</p>
+<!--FIG bo_quality "Labeling studio and judge calibration."-->
+<ol class="legend">
+<li><b>Human-labeled conversations</b>: progress towards the 60 target; from 20 labels on, calibration uses human grades instead of proxy labels.</li>
+<li><b>Judge agreement</b> table: for each judge (LLM, checklist) and criterion, the label source, n, <b>quadratic kappa</b>, Spearman ρ, the
+share of grades within ±1 point and the verdict (trusted at kappa ≥ 0.4). "Recompute" re-runs the calibration.</li>
+<li><b>Conversation to grade</b>: a historical chat (customer and advisor turns); "Skip" draws another one.</li>
+<li><b>Your grades</b>: the same five criteria as the Quality agent, with their definitions, as 1–5 buttons; "Save and next" stores the
+labels in <code>data/labels/human_quality_labels.csv</code>.</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>4.10 BO / DSO scorecard (evaluation)</h2>
+<!--FIG bo_evaluation "Evaluation page."-->
+<ol class="legend">
+<li><b>Scorecard table</b>: each objective, main idea vs baseline, the measured result, the switch rule and the verdict (main idea kept /
+backup or hybrid kept, with the fallback used).</li>
+<li><b>BO4 — money saved by testing first</b>: bars of the net weekly saving per scenario (labour + lost customers, unprepared minus
+prepared, 95% CI); the table adds the extra labour, the lost customers avoided and the <b>break-even</b> value of a lost customer.
+A negative saving (staff shortage) means preparing cost more labour than the €8 assumption recovers.</li>
+<li><b>Paired difference tables</b> (DSO1, DSO3, BO4): option mean, baseline mean, relative change and "significant (95%)" when the CI excludes 0.</li>
+<li><b>DSO2</b>: conversations per advisor variant (verified policy action, judge verdict, FCR, CSAT, compliance, tools OK) and retrieval
+quality (recall@1, recall@4, MRR) of keyword search vs bge-m3.</li>
+<li><b>Component metrics</b>: each part on its own with its reference value.</li>
+<li><b>Twin fidelity</b>: hourly share of contacts, simulated (dashed) vs historical (solid) — the two curves overlap — and the checks
+table (KS p-values, distances, Erlang C errors) with pass/fail.</li>
+</ol>
+</section>
+
+<section class="newpage">
+<h2>4.11 Models &amp; MLOps</h2>
+<!--FIG bo_mlops "Models and MLOps page."-->
+<ol class="legend">
+<li><b>Load models on GPU</b>: loads every role's model in advance so the first chat is fast; links to MLflow and the API documentation.</li>
+<li><b>Model cards</b> (one per role): the Hugging Face base model (link to the Hub), family, parameters, licence, the exact repository and
+pinned commit, the quantization, the status (downloaded / loaded on cuda) and the VRAM footprint bar.</li>
+<li><b>GPU gauge</b>: memory used of the 4 GB, GPU name, CUDA version.</li>
+<li><b>Stack cards</b>: FastAPI, the two apps, Hugging Face, MLflow, LLM tracing, Docker + CI.</li>
+<li><b>LLM tracing by agent</b>: mean latency per agent (bars) and a table of calls, cache-hit share and tokens.</li>
+<li><b>Latest LLM calls</b>: newest first, with latency, prompt → completion tokens, tokens per second and a preview of the output.</li>
+<li><b>MLflow runs</b> and <b>artifacts</b> written by the pipeline (forecasts, policies, evaluation tables).</li>
+</ol>
+</section>
+
+<!-- ============================================================ PART 5 -->
+<section class="part">
+  <div class="num">Part 5</div>
+  <h1>End-to-end walkthroughs</h1>
+  <p class="lead">Two journeys through the whole system, step by step.</p>
+</section>
+
+<section class="newpage">
+<h2>5.1 One customer message, from keyboard to quality review</h2>
+<table>
+<tr><th style="width:5%">#</th><th style="width:22%">Where</th><th>What happens</th></tr>
+<tr><td>1</td><td>Front office (React)</td><td>The chat page opens a WebSocket to <code>/ws/session</code> and sends <code>start</code> with the demo customer's contact id, customer = human, advisor = agent.</td></tr>
+<tr><td>2</td><td>API → <code>LiveSession</code></td><td>Builds the session: customer profile from the contact (order, timestamp, true intent), the agents, the tools "as of" the contact time; replies <code>ready</code>.</td></tr>
+<tr><td>3</td><td>Browser</td><td>The customer sends a message → <code>customer_message</code>.</td></tr>
+<tr><td>4</td><td>Workforce agent</td><td>First message only: intent classifier → problem family → best-skilled desk; Erlang C expected wait for that hour → <code>routing</code> event.</td></tr>
+<tr><td>5</td><td>Advisor — retrieval</td><td>bge-m3 embeds the customer's words, FAISS returns the top-3 policy sections → <code>stage: retrieval</code>.</td></tr>
+<tr><td>6</td><td>Advisor — verification</td><td>No order number yet → only the knowledge-base tool is offered; the LLM is told to ask for the order number.</td></tr>
+<tr><td>7</td><td>LLM (GPU)</td><td>SmolLM3 renders its chat template, generates; tokens stream through the stream gate → <code>token</code> events → the bubble types itself.</td></tr>
+<tr><td>8</td><td>Browser</td><td>The customer gives the order number.</td></tr>
+<tr><td>9</td><td>Advisor — rules engine</td><td><code>lookup_order</code> reads SQLite as of the contact time; <code>recommend_resolution</code> applies the policy (e.g. tracking shared; carrier investigation if late with no movement) → <code>stage: tool</code> events.</td></tr>
+<tr><td>10</td><td>LLM</td><td>Receives the decision and the approved answer; writes the reply in natural language (it cannot change the decision).</td></tr>
+<tr><td>11</td><td>Browser</td><td>"End chat" → stars → <code>end</code> with the CSAT.</td></tr>
+<tr><td>12</td><td>Quality agent</td><td>Granite judges the transcript against the policy reference → scorecard; the KPI row is computed; the transcript is saved → <code>review</code>, <code>done</code>.</td></tr>
+</table>
+
+<h2>5.2 One what-if, from click to confidence interval</h2>
+<ol>
+<li>The manager picks <i>promo spike</i>, CP-SAT, FIFO, <i>unprepared</i> in the scenario lab and clicks Run.</li>
+<li>The API builds the week's demand: the forecast for that week (normal forecast for an unprepared plan, scenario-adjusted for a prepared one).</li>
+<li>Erlang C converts the hourly demand into the hourly requirement (80/20, occupancy ≤ 90%).</li>
+<li>CP-SAT chooses the shifts and builds the roster under the labour rules; the plan becomes a duty matrix.</li>
+<li>For each seed, the twin draws the <i>real</i> scenario customers (with the scenario multipliers and absences), then SimPy replays the week
+with the router, the overtime rule and the patience of every customer.</li>
+<li>KPIs per seed → means and 95% confidence intervals; for "compare", the same seeds are reused for every option (common random numbers)
+and the paired differences decide significance.</li>
+<li>The page shows the tiles, the waiting and staffing charts and the plan heatmap; the live floor can replay any single day of it.</li>
+</ol>
+</section>
+
+<!-- ============================================================ APPENDIX -->
+<section class="newpage">
+<h1>Appendix</h1>
+<h2>A. Glossary</h2>
+<table>
+<tr><th style="width:22%">Term</th><th>Meaning</th></tr>
+<tr><td>ASA</td><td>Average speed of answer: mean wait of the customers who were answered.</td></tr>
+<tr><td>Abandonment</td><td>A customer leaves the queue before being answered.</td></tr>
+<tr><td>Service level 80/20</td><td>Share of contacts answered within 20 seconds; the target is 80%.</td></tr>
+<tr><td>Occupancy</td><td>Share of on-duty time advisors spend handling contacts.</td></tr>
+<tr><td>FCR</td><td>First-contact resolution: solved in the first conversation, with no hand-over.</td></tr>
+<tr><td>CSAT</td><td>Customer satisfaction score, 1–5, from the post-chat survey.</td></tr>
+<tr><td>Erlang C</td><td>Queueing formula giving the probability of waiting with c advisors and load A.</td></tr>
+<tr><td>Discrete-event simulation</td><td>A simulation that jumps from one event to the next (SimPy).</td></tr>
+<tr><td>Common random numbers</td><td>Every option is simulated on the same random customers, so differences come from the decision only.</td></tr>
+<tr><td>Paired 95% CI</td><td>Confidence interval of the per-seed difference between two options.</td></tr>
+<tr><td>wMAPE</td><td>Σ|error| / Σ actual: forecast error weighted by volume.</td></tr>
+<tr><td>Rolling-origin backtest</td><td>Repeated forecasts where each model only sees data before the forecast date.</td></tr>
+<tr><td>CP-SAT</td><td>Google OR-Tools constraint-programming / SAT solver for integer optimisation.</td></tr>
+<tr><td>MaskablePPO</td><td>Proximal Policy Optimization with action masking (invalid actions can never be chosen).</td></tr>
+<tr><td>RAG</td><td>Retrieval-augmented generation: the LLM answers from retrieved documents.</td></tr>
+<tr><td>Embedding / cosine similarity</td><td>A text turned into a vector; two texts with similar meaning have vectors with a high cosine.</td></tr>
+<tr><td>FAISS</td><td>Library for fast vector search (exact inner-product index here).</td></tr>
+<tr><td>Quantization (NF4)</td><td>Storing model weights in 4 bits with levels matched to a normal distribution.</td></tr>
+<tr><td>bfloat16</td><td>16-bit floating format with the exponent range of float32 (no overflow where float16 overflows).</td></tr>
+<tr><td>LLM-as-judge</td><td>An LLM grading another model's output against a rubric.</td></tr>
+<tr><td>Cohen's quadratic kappa</td><td>Chance-corrected agreement on an ordinal scale; ≥ 0.4 = moderate agreement.</td></tr>
+<tr><td>Kolmogorov–Smirnov test</td><td>Tests whether two samples come from the same distribution.</td></tr>
+<tr><td>LangGraph</td><td>Library to run agents as an explicit graph / state machine.</td></tr>
+<tr><td>WebSocket</td><td>A persistent two-way connection: the server pushes events (tokens, steps) to the browser.</td></tr>
+</table>
+
+<div class="keep"><h2>B. Commands</h2>
+<table>
+<tr><th style="width:42%">Command</th><th>Purpose</th></tr>
+<tr><td><code>callverse all [--quick] [--skip-data]</code></td><td>Whole pipeline: data → forecast → RL → evaluation.</td></tr>
+<tr><td><code>callverse llm-pull</code> / <code>llm-pin</code> / <code>status</code></td><td>Download and pin the Hugging Face models; check GPU, data and models.</td></tr>
+<tr><td><code>callverse evaluate</code></td><td>Every experiment, component metrics and the scorecard.</td></tr>
+<tr><td><code>callverse agents --n 12 --variants rag_policy,rag</code></td><td>DSO2 conversation batches with the LLMs.</td></tr>
+<tr><td><code>callverse judge-calibrate --judge llm</code></td><td>Agreement of the LLM judge with the labels.</td></tr>
+<tr><td><code>callverse serve</code></td><td>API for both apps (Swagger at /docs).</td></tr>
+<tr><td><code>npm run dev:front</code> / <code>npm run dev:back</code> (in <code>frontend/</code>)</td><td>Front office :5173 / back office :5174.</td></tr>
+<tr><td><code>docker compose up --build</code></td><td>Everything in containers (add <code>-f docker-compose.gpu.yml</code> for the GPU).</td></tr>
+</table></div>
+
+<h2>C. Folder map</h2>
+<table>
+<tr><th style="width:30%">Folder</th><th>Content</th></tr>
+<tr><td><code>configs/</code></td><td>All assumptions: data, simulation, agents (LLM profiles), scenarios, app.</td></tr>
+<tr><td><code>src/callverse/data/</code></td><td>Notebook runner, Pandera contracts, loaders, SQLite store, ticket and chat generators.</td></tr>
+<tr><td><code>src/callverse/forecasting/</code></td><td>Features, baselines, LightGBM, rolling backtest, next-week forecast.</td></tr>
+<tr><td><code>src/callverse/simulation/</code></td><td>SimPy engine, routers, Erlang C, customers, twin setup.</td></tr>
+<tr><td><code>src/callverse/agents/</code></td><td><code>client/</code>, <code>advisor/</code> (retrieval, tools, classifier), <code>quality/</code>, <code>workforce/</code> (CP-SAT, PPO).</td></tr>
+<tr><td><code>src/callverse/llm/</code></td><td>Hugging Face client: 4-bit loading, chat templates, tool parsing, streaming, cache, tracing.</td></tr>
+<tr><td><code>src/callverse/orchestration/</code></td><td>LangGraph graph, live sessions, shared runtime.</td></tr>
+<tr><td><code>src/callverse/twin/</code></td><td>Scenarios, scenario runner, live-floor replay, fidelity checks.</td></tr>
+<tr><td><code>src/callverse/evaluation/</code></td><td>KPI engine, experiments, component metrics, scorecard.</td></tr>
+<tr><td><code>src/callverse/api/</code></td><td>FastAPI routes and WebSockets.</td></tr>
+<tr><td><code>frontend/</code></td><td><code>shared/</code> design system, <code>front-office/</code>, <code>back-office/</code>, Dockerfile + nginx.</td></tr>
+<tr><td><code>tests/</code>, <code>docs/</code></td><td>Unit, smoke and integration tests; report, run guide, demo script, recruiter kit, this guide.</td></tr>
+</table>
+
+<h2>D. Honest limits</h2>
+<ul>
+<li>Contacts, tickets and chats are synthetic (generated from real orders and real wording with explicit assumptions); real logs would replace them without changing the pipeline.</li>
+<li>Small 3B/1.6B models on a laptop: the hybrid design is mandatory, and the LLM judge is not yet trusted (kappa &lt; 0.4); 60 human labels are the next step.</li>
+<li>PPO is trained on single days; multi-day episodes are needed to beat FIFO on mean wait in full peak weeks.</li>
+<li>The DSO2 conversation numbers in the report predate the switch to Hugging Face models; the re-run is planned.</li>
+</ul>
+</section>
+
+</body>
+</html>

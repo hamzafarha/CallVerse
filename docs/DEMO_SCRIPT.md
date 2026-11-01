@@ -1,44 +1,62 @@
 # CallVerse — validation day: demo script
 
 A 20-minute presentation + live demo for the tutor, then questions. Times in brackets.
-Everything shown is produced by commands of the run guide; nothing is mocked.
+Everything shown is produced by the code and the commands of the run guide; nothing is
+mocked. Two apps run side by side:
+
+- **Front office** (http://localhost:5173) — what customers and advisors use.
+- **Back office** (http://localhost:5174) — what managers use: the control room of the twin.
 
 ---
 
 ## The day before (checklist)
 
-- [ ] `callverse status` → every box ticked (data, store, KB index, forecast, PPO, classifier, scorecard).
+- [ ] `callverse status` → every box ticked; *LLMs available = True*, GPU = GTX 1650.
 - [ ] `pytest -m "not llm" -q` → all tests pass (show it if asked about quality).
-- [ ] `ollama list` shows `qwen2.5:3b` and `llama3.2`; run **one** LLM conversation so the
-      models are warm and the answer is cached (`callverse chat --mode llm --contact SC006158`).
-- [ ] Laptop on power, GPU drivers OK, notifications off, screen resolution 1920×1080, browser zoom 100%.
-- [ ] Backup plan: a recorded 3-minute video of the demo + screenshots in `docs/img/`, in case
-      Wi-Fi/Ollama fails. The offline backups also work with no network at all.
+- [ ] Run **one** live chat in the front office so the models, bge-m3 and the answer cache are warm.
+- [ ] Laptop on power, GPU drivers OK, notifications off, 1920×1080, browser zoom 100%,
+      nothing else using the GPU (close games, video editors, other Python processes).
+- [ ] Backup plan: a recorded 3-minute video + screenshots (`http://localhost:5174/?snapshot`
+      renders every animation in its final state). Without the GPU every agent switches to its
+      offline backup, so the demo still runs with no network and no LLM.
 
 ## Start-up (5 minutes before)
 
-Terminal 1:
 ```powershell
-cd CallVerse; .venv\Scripts\activate
-callverse serve
+# Terminal 1 — API
+cd CallVerse; .venv\Scripts\activate; callverse serve
+# Terminal 2 — front office
+cd CallVerse\frontend; npm run dev:front
+# Terminal 3 — back office
+cd CallVerse\frontend; npm run dev:back
 ```
-Terminal 2:
-```powershell
-cd CallVerse\frontend; npm run dev
-```
-Terminal 3 (optional): `mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5000`
 
-Open http://localhost:5173 (light mode for a projector: toggle bottom-left).
+Open both apps in two browser tabs. Back office → *Models & MLOps* → **Load models on GPU**
+(~20 s; the sidebar card turns to "2 models loaded"). Front office: light theme (projector);
+back office: dark theme (control room). Toggle top right.
 
 ---
 
-## Part 1 — The business problem (3 min, slides or the Overview page)
+## Part 1 — The hook: a customer chats with the AI (3 min, front office) ⭐
 
-**Say:** "An e-commerce call center fails in two ways: too few agents during promotions and
-delivery delays, too many when it is quiet. Decisions are made on intuition and tested on
-real customers. Our goal: a virtual copy of the center where every decision is tested first."
+1. Front office home. **Say:** "This is the customer side of our virtual contact centre."
+   Point at the animated hero (the chat demo loops) and type *"my parcel is late"* in the
+   search box: semantic results appear with their similarity scores (bge-m3 + FAISS).
+2. *Try it as a real customer* → pick a card with a red **days late** badge.
+   **Say:** "Each card is a real Olist order and the real message its customer sent. The twin
+   replays the day they contacted us." Point at the order timeline (late step in red).
+3. **Chat with an advisor** → click the suggested opening message, then *My order number is…*.
+   While tokens stream, point at **Behind the scenes** on the right:
+   - Workforce agent: predicted intent + confidence, desk, Erlang C expected wait.
+   - Knowledge-base hits with cosine scores, *Order lookup ✓*, *Rules engine ✓*.
+   - *LLM writes the reply* — SmolLM3-3B from Hugging Face, 4-bit, on the laptop GPU.
+   **Say:** "The rules engine decides, the LLM only writes. That is why it never invents a refund."
+4. **End chat** → 4 stars → the Granite judge's scorecard animates (radar, verdicts, rationale).
+   **Say:** "A different model family grades every chat, against the policy-correct answer."
 
-**Show:** Overview page → the four BO → DSO cards.
+## Part 2 — The business problem (2 min, back office Overview)
+
+**Show:** the hero ring "2/4 main ideas kept" and the four BO → DSO cards.
 
 - BO1 shorter waits → DSO1 routing agent
 - BO2 correct answers → DSO2 RAG advisor + AI judge
@@ -46,77 +64,62 @@ real customers. Our goal: a virtual copy of the center where every decision is t
 - BO4 prepare for peaks → DSO4 forecast + digital twin
 
 **Say:** "Every idea has a baseline and a backup. We keep an idea only if it beats its
-baseline; the scorecard applies that rule automatically."
+baseline; the scorecard applies that rule automatically — two ideas won, two backups took over."
+Point at the animated architecture map: five layers, data flowing left to right.
 
-## Part 2 — Data (2 min, Data layer page)
-
-**Show:** weekly contacts chart, the "why customers contact us" table, data contracts.
+## Part 3 — Data and forecast (3 min, Data + Demand forecast)
 
 **Say:** "There are no public call-center logs. We start from 99,441 real Olist orders. Each
-order situation — late delivery, cancellation, payment anomaly, bad review — has a contact
-probability written in `configs/data.yaml`. The wording comes from real Bitext customer
-messages. 9,179 contacts, 9,179 tickets and 60,837 chat messages, all marked synthetic.
-Pandera contracts check every table before the models read it."
+order situation — late delivery, cancellation, payment anomaly — has a contact probability in
+`configs/data.yaml`; the wording comes from real Bitext messages: 9,179 contacts, 9,179 tickets,
+60,837 chat messages, all marked synthetic. Pandera contracts check every table."
 
-## Part 3 — Forecast (2 min, Forecast page)
+Forecast page. **Say:** "Rolling-origin backtest over 46 weeks: LightGBM wMAPE 25.3% against
+31.6% for 'same day last week' — 20% less error, also better than SARIMA and Prophet."
 
-**Show:** the three stat tiles, the actual-vs-forecast chart, the wMAPE table.
+## Part 4 — The digital twin, live floor (4 min, Digital twin) ⭐ main demo
 
-**Say:** "Rolling-origin backtest: every Sunday for 46 weeks, each model only sees the past.
-LightGBM uses lagged orders, late deliveries and the promotion calendar. wMAPE 25.3%
-against 31.6% for 'same day last week': 20% less error. It also beats SARIMA and Prophet on the
-total. Small groups are noisy — a few contacts a day — so we decide at the total level."
+1. *Live floor*: Promo spike, Wednesday, CP-SAT, FIFO, **Normal forecast (unprepared)**.
+   Press play. **Say:** "Every dot is a customer of the simulation; desks are agents, coloured by
+   skill." At 08:00 point at the ✉ desks and *Backlog left*: "All agents start on last night's
+   messages, live customers queue behind them and hang up — red dots." Click
+   **Jump to the peak** and let it run at 15 min/s.
+2. Switch *Plan built from* to **Scenario forecast (prepared)**: fewer red dots, higher service level.
+   **Say:** "Same customers, a plan tested in the twin first."
+3. *Scenario lab* tab → **Compare unprepared vs prepared vs fixed** (5 seeds).
+   **Say:** "Prepared: understaffed hours −60 to −84%, abandonment −55 to −76%, all significant
+   (95% CIs over common random numbers). The peak-sized fixed schedule also works — at ~67%
+   more labour cost. CP-SAT is the cheapest plan that meets the target." (BO3: −40% cost.)
 
-## Part 4 — The digital twin, live (5 min, Digital twin page) ⭐ main demo
+## Part 5 — The four agents together (2 min, Agent theater)
 
-1. Scenario **Promo spike**, planner **CP-SAT**, routing **FIFO**, *Normal forecast (unprepared)*, 5 seeds → **Run**.
-   **Say:** "This is what happens if we plan the promotion week like a normal week."
-   Point at: service level ~76%, abandonment ~12%, understaffed hours ~42.
-2. Switch to *Scenario forecast (prepared)* → **Run**.
-   **Say:** "Same customers, plan tested in the twin first: service ~92%, abandonment ~4.5%,
-   understaffed hours −71%." Point at the 95% intervals: "10 seeds, the difference is significant."
-3. Click **Compare unprepared vs prepared vs fixed**.
-   **Say:** "The fixed schedule sized for the peak also works — at 67% more labour cost. The
-   CP-SAT plan is the cheapest plan that meets the target."
-4. Move the *Where is my order* slider to ×2.5 and *Absent agents* to 20% → Run.
-   **Say:** "Any what-if in about 3 seconds: this is BO4's 'time needed to decide'."
+Pick a contact → *Local LLMs*, *Hybrid* → **Start conversation**. The LangGraph pipeline lights
+up node by node while the transcript streams. **Say:** "No human here: the Client agent plays the
+customer, the Workforce agent routes, the Advisor answers, the Quality agent grades, the KPI
+engine records FCR, CSAT and compliance. This is how we evaluate the advisor on many
+conversations before a real customer sees it." (~45 s per conversation; *Offline backups* is instant.)
 
-## Part 5 — Workforce agent (2 min, Workforce page)
+## Part 6 — The advisor desk: human + AI copilot (2 min, front office)
 
-**Show:** Shift planning → required vs scheduled heatmaps, the four labour-rule badges, roster.
-**Say:** "CP-SAT chooses 4, 6 and 8-hour shifts and overtime hours, then assigns them to named
-agents: max 5 days, 40 hours, 11 hours rest — guaranteed, not learned."
+Front office → *Advisor desk*. Accept the longest-waiting customer (timers tick live).
+The Client agent writes as the customer; the **copilot draft** streams in above the composer.
+Click **Edit first**, change a word, send. Toggle **Autopilot** to let the agent finish, then
+**Wrap up** → the Quality tab opens with the scorecard. **Say:** "Human in the loop: the copilot
+drafts from the policies and the order, the advisor stays responsible."
 
-Switch to **Real-time routing** → learning curve and the comparison.
-**Say:** "The routing agent is MaskablePPO, trained only in the simulator. On unseen stressed
-days it cuts the average speed of answer by 14% versus FIFO, and in peak weeks it cuts the
-longest waits (90th percentile) by 18-25%. In full peak weeks the tuned
-skill-score rule reduces abandonment more — so, following our own rule, the skill-score
-backup is the production candidate and PPO stays the research track."
+## Part 7 — Workforce agent and evaluation (2 min, back office)
 
-## Part 6 — The four agents together (3 min, Agent playground)
+Workforce page: CP-SAT heatmaps, four labour-rule badges, the PPO learning curve.
+**Say:** "PPO cuts the average speed of answer by 14% on unseen stressed days, but in full peak
+weeks the tuned skill-score rule wins, so — following our own rule — it is the production candidate."
+Evaluation page: scorecard, BO4 break-even (a lost customer worth more than €6–12).
+Quality page: "The judge must agree with humans: here is the labeling studio; agreement is Cohen's
+kappa. On proxy labels the judge is not yet trusted — a result, not a bug."
 
-1. Pick a contact, *Local LLMs via Ollama*, variant *RAG + tools + rules engine* → Start.
-   (If time is short or Ollama fails: *Offline backups* — instant.)
-2. While it streams, **say:** "LangGraph runs the graph: the Client agent — a small LLM — plays
-   the customer; the Workforce agent predicts the problem type and routes to a specialist; the
-   Advisor retrieves policy sections with bge-m3 + FAISS and calls tools on the SQLite store;
-   the Quality agent — a Llama model, different family from the Qwen advisor — grades the
-   chat against the policy-correct outcome."
-3. Point at the tool calls, the sources, the scorecard and the reference outcome.
+## Part 8 — Serving & MLOps (1 min, Models & MLOps)
 
-## Part 7 — Evaluation and honesty (2 min, Evaluation + Quality pages)
-
-**Show:** the scorecard table, BO4 savings with the break-even, component metrics.
-**Say:**
-- "Retrieval: recall@4 97% with bge-m3 versus 80% with keyword search — the DSO2 baseline."
-- "The AI judge must agree with humans: here is the labeling page; the agreement is measured
-  with Cohen's kappa. On proxy labels the judge is not yet trusted — that is a result, not a bug."
-- "Testing first saves money when a lost customer is worth more than 6 to 12 euros."
-
-## Part 8 — Serving & MLOps (1 min, MLOps page)
-
-**Show:** MLflow runs, LLM tracing by agent, pinned models, `docker compose up`, the CI workflow.
+**Show:** the three Hugging Face model cards (family, licence, pinned commit, VRAM), the GPU
+gauge, LLM tracing (latency, tokens/s per agent), MLflow runs, `docker compose up`, the CI workflow.
 
 ---
 
@@ -124,13 +127,16 @@ backup is the production candidate and PPO stays the research track."
 
 | Question | Answer |
 |---|---|
-| Why synthetic contacts? | No public call logs; real orders + explicit rates + real wording; validated against benchmarks and queueing theory; the pipeline accepts real logs unchanged. |
-| How do you know the twin is realistic? | Erlang C check (<4% error), KS tests on daily volume (p=0.998) and handle time, hourly profile distance 0.015, and scenarios move KPIs in the expected direction. |
-| Why LightGBM and not deep learning? | ~600 days × 4 series: too little for deep models; LightGBM with lags beats SARIMA/Prophet and is explainable (feature importance). |
-| How is leakage avoided? | Every lag ≥ 7 days, rolling origins, a leakage guard test (`lag_7` equals the value 7 days before). |
+| Why two apps? | Different users and risks: the front office is customer/advisor-facing (chat, desk); the back office is for managers (planning, evaluation, MLOps). Same API, same design system (npm workspaces). |
+| Which LLMs, and why? | Hugging Face open weights: SmolLM3-3B (advisor + simulated customer) and IBM Granite-4.0-1B (judge, another family to avoid self-preference). 4-bit NF4 with `transformers` + `bitsandbytes`: both fit a 4 GB laptop GPU (~3.2 GB). |
+| LLM cost? Privacy? | Zero per call; nothing leaves the laptop. Every call is traced (tokens, latency, tokens/s) and cached. |
+| Why does the LLM not decide refunds? | Small models invent ids and promises. The hybrid design lets a deterministic rules engine decide; the LLM only writes. Verified-action rate is the DSO2 metric. |
+| Why synthetic contacts? | No public call logs; real orders + explicit rates + real wording; validated against queueing theory; the pipeline accepts real logs unchanged. |
+| How do you know the twin is realistic? | Erlang C check (<4% error), KS tests on daily volume (p=0.998) and handle time, hourly profile distance 0.015. |
+| Why LightGBM and not deep learning? | ~600 days × 4 series: too little for deep models; LightGBM with lags beats SARIMA/Prophet and is explainable. |
+| How is leakage avoided? | Every lag ≥ 7 days, rolling origins, a leakage guard test. |
 | Why is PPO not the winner everywhere? | Trained on single stressed days; peak weeks differ (multi-day backlog, planned overtime). Our rule keeps the backup when the main idea doesn't clearly beat FIFO. |
 | Why CP-SAT instead of RL for shifts? | Labour rules must be guaranteed; the solver gives the optimal legal plan in < 1 s. |
-| LLM cost? | Zero: local Ollama models; every call is traced (tokens, latency) and cached. |
-| What if Ollama is down? | Every agent has an offline backup; the UI says which mode answered. |
-| Reproducibility? | Fixed seeds in configs, pinned model digests, MLflow runs, `callverse all` rebuilds everything. |
-| What's next? | Real logs to calibrate; human labels (60) for the judge; multi-day RL episodes; GPU for the 7B advisor. |
+| What if the GPU fails? | Every agent has an offline backup; the UI says which mode answered. |
+| Reproducibility? | Fixed seeds, Hugging Face commits pinned in `llm_models.lock.json`, MLflow runs, `callverse all` rebuilds everything. |
+| What's next? | Real logs to calibrate; 60 human labels for the judge; multi-day RL episodes; a bigger advisor on a server GPU. |

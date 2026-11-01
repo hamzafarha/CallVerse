@@ -1,6 +1,6 @@
 # CallVerse architecture
 
-Five layers, each a package of `src/callverse/` and a page of the control room. A lower layer
+Five layers, each a package of `src/callverse/` and a section of the back office. A lower layer
 never imports a higher one; the rule is enforced by `import-linter` (`pyproject.toml`).
 
 ```mermaid
@@ -27,8 +27,10 @@ graph LR
         CM[Component metrics] --> SC
     end
     subgraph Serve["Serving & MLOps"]
-        API[FastAPI + WebSocket] --> UI[React control room]
+        API[FastAPI + WebSocket] --> FO[Front office<br/>customers + advisors]
+        API --> BO[Back office<br/>managers]
         ML[MLflow] --- API
+        HF[Hugging Face LLMs<br/>SmolLM3 + Granite, 4-bit] --- API
     end
     ER --> WF
     SIM --> WF
@@ -51,8 +53,18 @@ graph LR
 | `api` | serving | everything |
 
 Runtime split: PPO trains on the fast SimPy + Gymnasium environment (sampled intents, no LLM
-calls); the LLM agents validate behaviour on a smaller set of conversations. Model versions are
-pinned (`callverse llm-pin`), seeds are fixed in `configs/`.
+calls); the LLM agents validate behaviour on a smaller set of conversations. Hugging Face model
+commits are pinned (`callverse llm-pull` / `llm-pin`), seeds are fixed in `configs/`.
+
+Two React apps share one API and one design system (`frontend/shared`):
+
+| App | Users | Talks to |
+|---|---|---|
+| Front office (`frontend/front-office`) | customers, advisors | `/api/portal`, `/api/kb`, `/api/desk`, `/ws/session` (live chat, copilot, autopilot) |
+| Back office (`frontend/back-office`) | managers | `/api/overview`, `/api/forecast`, `/api/twin/*` (incl. the live-floor replay), `/api/workforce`, `/api/agents`, `/api/quality`, `/api/evaluation`, `/api/mlops`, `/api/system` |
+
+`/ws/session` drives `orchestration/live.py`: the same agents as the LangGraph run, one step at a
+time, with a human on either side; tokens, tool calls and pipeline stages stream to the UI.
 
 The full description (models, formulations, results) is in
 [IP_VALIDATION_REPORT.md](IP_VALIDATION_REPORT.md).

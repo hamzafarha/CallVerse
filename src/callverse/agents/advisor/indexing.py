@@ -35,6 +35,7 @@ class KnowledgeBaseConfig:
     top_k: int
     min_score: float
     no_answer_score: float
+    embedding_device: str = "cpu"
 
 
 def load_knowledge_base_config(
@@ -55,6 +56,7 @@ def load_knowledge_base_config(
         top_k=int(raw["top_k"]),
         min_score=float(raw["min_score"]),
         no_answer_score=float(raw["no_answer_score"]),
+        embedding_device=str(raw.get("embedding_device", "cpu")),
     )
 
 
@@ -99,13 +101,17 @@ class SentenceTransformerEmbedder:
     """Local sentence-transformers model (bge-m3 by default), run on CPU or GPU."""
 
     def __init__(
-        self, model_name: str, batch_size: int = 16, max_seq_length: int = 512
+        self,
+        model_name: str,
+        batch_size: int = 16,
+        max_seq_length: int = 512,
+        device: str = "cpu",
     ) -> None:
         from sentence_transformers import SentenceTransformer
 
         self.model_name = model_name
         self.batch_size = batch_size
-        self.model = SentenceTransformer(model_name)
+        self.model = SentenceTransformer(model_name, device=device)
         self.model.max_seq_length = max_seq_length
 
     def encode(self, texts: list[str]) -> np.ndarray:
@@ -240,9 +246,7 @@ def save_knowledge_base(
     index_dir = Path(index_dir)
     index_dir.mkdir(parents=True, exist_ok=True)
     faiss.write_index(index, str(index_dir / INDEX_FILE))
-    pd.DataFrame([asdict(chunk) for chunk in chunks]).to_parquet(
-        index_dir / CHUNKS_FILE, index=False
-    )
+    pd.DataFrame([asdict(chunk) for chunk in chunks]).to_parquet(index_dir / CHUNKS_FILE, index=False)
     with open(index_dir / MANIFEST_FILE, "w", encoding="utf-8") as manifest_file:
         json.dump(manifest, manifest_file, indent=2)
 
@@ -256,7 +260,10 @@ def build_knowledge_base(
     chunks = load_chunks(config.docs_dir, config.max_chunk_chars, allowed_intents)
     if embedder is None:
         embedder = SentenceTransformerEmbedder(
-            config.embedding_model, config.embedding_batch_size, config.max_seq_length
+            config.embedding_model,
+            config.embedding_batch_size,
+            config.max_seq_length,
+            config.embedding_device,
         )
     index = build_index(chunks, embedder)
     manifest = {

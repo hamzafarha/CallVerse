@@ -60,9 +60,7 @@ class KnowledgeRetriever:
 
         index_dir = Path(config.index_dir)
         if not (index_dir / INDEX_FILE).exists():
-            raise FileNotFoundError(
-                f"No index in {index_dir}. Run scripts/build_knowledge_base.py first."
-            )
+            raise FileNotFoundError(f"No index in {index_dir}. Run scripts/build_knowledge_base.py first.")
         with open(index_dir / MANIFEST_FILE, encoding="utf-8") as manifest_file:
             manifest = json.load(manifest_file)
         if manifest["embedding_model"] != config.embedding_model:
@@ -70,24 +68,21 @@ class KnowledgeRetriever:
                 f"Index was built with {manifest['embedding_model']}, "
                 f"config asks for {config.embedding_model}. Rebuild the index."
             )
-        if check_freshness and manifest["documents"] != docs_fingerprint(
-            config.docs_dir
-        ):
+        if check_freshness and manifest["documents"] != docs_fingerprint(config.docs_dir):
             raise ValueError("Documents changed since the index was built. Rebuild.")
         if embedder is None:
             embedder = SentenceTransformerEmbedder(
                 config.embedding_model,
                 config.embedding_batch_size,
                 config.max_seq_length,
+                config.embedding_device,
             )
         rows = pd.read_parquet(index_dir / CHUNKS_FILE).to_dict("records")
         chunks = [Chunk(**{**row, "intents": list(row["intents"])}) for row in rows]
         index = faiss.read_index(str(index_dir / INDEX_FILE))
         return cls(chunks, index, embedder, config.top_k, config.min_score)
 
-    def search(
-        self, query: str, top_k: int | None = None, intent: str | None = None
-    ) -> list[RetrievedChunk]:
+    def search(self, query: str, top_k: int | None = None, intent: str | None = None) -> list[RetrievedChunk]:
         """Best chunks for one query, optionally only those tagged with ``intent``."""
         return self.search_many([query], top_k, intent)[0]
 
@@ -149,9 +144,7 @@ class KeywordRetriever:
             chunks = load_chunks(config.docs_dir, config.max_chunk_chars)
         return cls(chunks, config.top_k)
 
-    def search(
-        self, query: str, top_k: int | None = None, intent: str | None = None
-    ) -> list[RetrievedChunk]:
+    def search(self, query: str, top_k: int | None = None, intent: str | None = None) -> list[RetrievedChunk]:
         return self.search_many([query], top_k, intent)[0]
 
     def search_many(
