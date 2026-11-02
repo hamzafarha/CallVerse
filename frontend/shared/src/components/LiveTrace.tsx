@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { humanize, num } from "../lib/format";
 import type { LiveState, StageEvent } from "../lib/session";
-import { TOOL_LABEL } from "./chat";
+import { CALLER_LABEL, TOOL_LABEL } from "./chat";
 import { Bar } from "./motion";
 import { Bot, Cpu, Headset, ScanSearch, ShieldCheck, User, Wrench } from "lucide-react";
 
@@ -20,14 +20,27 @@ function describe(stage: StageEvent): { icon: any; title: string; detail?: strin
         .map((h: any) => `${h.section} (${Number(h.score).toFixed(2)})`)
         .join(" · "),
     };
-  if (stage.step === "tool")
+  if (stage.step === "tool") {
+    const ok = stage.ok && stage.passed !== false;
+    const who = stage.caller ? ` · ${CALLER_LABEL[stage.caller] ?? stage.caller}` : "";
     return {
-      icon: Wrench,
-      title: `${TOOL_LABEL[stage.name] ?? stage.name} ${stage.ok ? "✓" : "✗"}`,
-      detail: stage.arguments?.order_id ? `order ${String(stage.arguments.order_id).slice(0, 10)}… · ${num(stage.latency_ms, 0)} ms` : `${num(stage.latency_ms, 0)} ms`,
+      icon: stage.caller === "llm" ? Bot : stage.caller === "safety_net" ? ShieldCheck : Wrench,
+      title: `${TOOL_LABEL[stage.name] ?? stage.name} ${ok ? "✓" : "✗"}${who}`,
+      detail: [stage.summary, `${num(stage.latency_ms, 0)} ms`].filter(Boolean).join(" · "),
     };
-  if (stage.step === "generation")
-    return { icon: Cpu, title: stage.round > 0 ? "LLM writes again with the tool results" : "LLM writes the reply", detail: String(stage.model ?? "").split("/").pop() };
+  }
+  if (stage.step === "generation") {
+    const title =
+      stage.reason === "fact_check"
+        ? "Fact check failed: the LLM rewrites its draft"
+        : stage.round > 0
+          ? "LLM writes again with the tool results"
+          : "LLM writes the reply";
+    const offered = (stage.offered ?? []).map((n: string) => TOOL_LABEL[n] ?? n).join(", ");
+    const model = String(stage.model ?? "").split("/").pop();
+    const offer = stage.tool_choice === "required" ? "must call one of" : "tools offered";
+    return { icon: Cpu, title, detail: offered ? `${model} · ${offer}: ${offered}` : model };
+  }
   return null;
 }
 

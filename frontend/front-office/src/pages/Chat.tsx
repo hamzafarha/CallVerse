@@ -4,14 +4,20 @@ import {
   AdvisorAvatar,
   AgentPipeline,
   AnimatePresence,
+  CallPanel,
   ChatBubble,
   QualityScore,
+  type AvatarState,
   Segmented,
   StreamingBubble,
+  ToolBox,
+  VoiceControls,
   motion,
   stageLabel,
   useApi,
+  useAutoSpeak,
   useLiveSession,
+  useVoice,
 } from "@callverse/shared";
 import { Cpu, Eye, EyeOff, RefreshCw, SendHorizonal, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -35,12 +41,15 @@ function Chat({ contactId }: { contactId: string }) {
   const session = useLiveSession();
   const { state } = session;
   const [engine, setEngine] = useState<Engine>("auto");
-  const [variant, setVariant] = useState<"rag_policy" | "rag">("rag_policy");
+  const [variant, setVariant] = useState<"rag_policy" | "rag" | "agentic">("agentic");
   const [text, setText] = useState("");
   const [showTrace, setShowTrace] = useState(true);
   const [rating, setRating] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  // Voice mode: you are the customer, so only the Advisor agent's replies are read aloud
+  const voice = useVoice();
+  useAutoSpeak(state.messages, voice, (m) => (m.speaker === "advisor" && m.meta?.mode !== "human" ? { role: "advisor" } : null));
 
   useEffect(() => {
     session.start({ contact_id: contactId, customer: "human", advisor: "agent", mode: engine, variant });
@@ -64,9 +73,13 @@ function Chat({ contactId }: { contactId: string }) {
   const first = data?.name?.split(" ")[0] ?? "there";
   const ended = state.status === "done";
   const busy = session.busy;
+  // Call band faces: the Advisor agent thinks while it works; you are "typing" while you write
+  const advisorFace: AvatarState = voice.speakingRole === "advisor" ? "speaking" : busy ? "thinking" : "listening";
+  const customerFace: AvatarState = text.trim() ? "typing" : voice.speakingRole === "advisor" ? "listening" : "idle";
   const canSend = !busy && !ended && state.status === "running" && text.trim().length > 0;
   const send = (message: string) => {
     if (!message.trim() || busy || ended) return;
+    voice.stop(); // like on a call: talking over the advisor interrupts it
     session.sendCustomer(message.trim());
     setText("");
   };
@@ -93,6 +106,7 @@ function Chat({ contactId }: { contactId: string }) {
               {state.ready ? (state.ready.llm ? <>AI · {String(state.ready.model).split("/").pop()?.replace("-bnb-4bit", "")} on GPU</> : "offline backups · approved templates") : "connecting…"}
             </div>
           </div>
+          <VoiceControls voice={voice} roles={["advisor"]} />
           <Segmented
             id="engine"
             size="sm"
@@ -107,6 +121,17 @@ function Chat({ contactId }: { contactId: string }) {
             {showTrace ? <EyeOff size={15} /> : <Eye size={15} />}
           </button>
         </div>
+        <AnimatePresence initial={false}>
+          {voice.enabled && (
+            <CallPanel
+              key="call"
+              voice={voice}
+              startedAt={state.startedAt}
+              left={{ kind: "agent", name: "CallVerse assistant", subtitle: "Advisor agent", state: advisorFace }}
+              right={{ kind: "person", name: data?.name ?? "You", subtitle: "you · the customer", state: customerFace }}
+            />
+          )}
+        </AnimatePresence>
 
         {/* messages */}
         <div ref={scroller} className="scroll-fade flex-1 space-y-5 overflow-y-auto bg-raised/40 px-4 py-6 sm:px-6">
@@ -120,7 +145,15 @@ function Chat({ contactId }: { contactId: string }) {
             message={{ speaker: "advisor", text: `Hi ${first}! I'm the CallVerse assistant. How can I help you today?` }}
           />
           {state.messages.map((m, i) => (
-            <ChatBubble key={i} message={m} mine={m.speaker === "customer"} name={data?.name} animate={m.speaker === "advisor" && m.meta?.mode !== "llm" && i === state.messages.length - 1} />
+            <ChatBubble
+              key={i}
+              message={m}
+              mine={m.speaker === "customer"}
+              name={data?.name}
+              animate={m.speaker === "advisor" && m.meta?.mode !== "llm" && i === state.messages.length - 1}
+              speaking={voice.speaking === String(i)}
+              onListen={m.speaker === "advisor" && voice.supported ? () => voice.replay(String(i), m.text, "advisor") : undefined}
+            />
           ))}
           <AnimatePresence>
             {state.streaming && state.streaming.kind === "reply" && (
@@ -193,14 +226,22 @@ function Chat({ contactId }: { contactId: string }) {
                   options={[
                     { value: "rag_policy", label: "Hybrid" },
                     { value: "rag", label: "Pure RAG" },
+                    { value: "agentic", label: "Agentic" },
                   ]}
                 />
               </div>
               <p className="mb-4 text-xs text-muted">
-                {variant === "rag_policy" ? "Rules engine decides, LLM writes (production)." : "The LLM decides alone with tools (ablation)."}
+                {variant === "rag_policy"
+                  ? "Rules engine decides, LLM writes (production)."
+                  : variant === "agentic"
+                    ? "The LLM picks its tools; the rules engine still decides; every draft is fact-checked."
+                    : "The LLM decides alone with tools (ablation)."}
               </p>
               <div className="mb-5">
                 <AgentPipeline active={state.activeAgent} visited={state.visited} stages={state.stages} done={!!state.review} humanCustomer vertical />
+              </div>
+              <div className="mb-5">
+                <ToolBox stages={state.stages} variant={variant} offline={state.ready ? !state.ready.llm : engine === "template"} />
               </div>
               <LiveTrace state={state} />
             </div>

@@ -2,6 +2,7 @@
 export * from "./lib/api";
 export * from "./lib/format";
 export * from "./lib/session";
+export * from "./lib/voice";
 export * from "./lib/theme";
 export * from "./components/ui";
 export * from "./components/motion";
@@ -12,4 +13,8 @@ export * from "./components/AgentPipeline";
 export * from "./components/QualityScore";
 export * from "./components/Markdown";
 export * from "./components/LiveTrace";
+export * from "./components/ToolBox";
+export * from "./components/VoiceControls";
+export * from "./components/TalkingAvatar";
+export * from "./components/CallPanel";
 export * from "./components/ErrorBoundary";

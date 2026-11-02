@@ -46,7 +46,7 @@ export interface StartOptions {
   customer: "human" | "agent";
   advisor: "human" | "agent";
   mode?: "auto" | "llm" | "template";
-  variant?: "rag_policy" | "rag";
+  variant?: "rag_policy" | "rag" | "agentic";
   seed?: number;
 }
 

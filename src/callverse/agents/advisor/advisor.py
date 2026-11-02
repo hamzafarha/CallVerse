@@ -8,6 +8,12 @@ Backup (DSO2): question sorting + approved templates. The intent classifier
 predicts the problem type, the order tools give the facts, the company rules
 choose the outcome and an approved template is filled in. No generation, so no
 invented answers. It also runs when Ollama is not available.
+
+Variants of the LLM advisor: ``rag`` (the LLM decides alone with tools, ablation),
+``rag_policy`` (pipeline steps open the order and run the rules engine, the LLM
+writes) and ``agentic`` (the LLM chooses its tools in a ReAct loop with gating; the
+rules engine still decides, safety nets catch what the LLM forgot and every draft is
+fact-checked before it is sent).
 """
 
 import re
@@ -19,13 +25,25 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from callverse.agents.advisor.draft_check import looks_portuguese
 from callverse.agents.advisor.intent_classifier import IntentClassifier
-from callverse.agents.advisor.prompts import ADVISOR_SYSTEM, ENGLISH_ONLY, NO_CONTEXT, format_context
-from callverse.agents.advisor.tools import AdvisorTools, tool_schemas
+from callverse.agents.advisor.prompts import (
+    ADVISOR_SYSTEM,
+    AGENTIC_RULES,
+    ENGLISH_ONLY,
+    NO_CONTEXT,
+    REWRITE_DRAFT,
+    SAFETY_NET_NOTE,
+    format_context,
+)
+from callverse.agents.advisor.tools import AdvisorTools, agentic_tool_schemas, tool_schemas
 from callverse.data.conversations import (
+    BANK_CODE_OK,
+    BANK_CODE_UNKNOWN,
     CLOSINGS,
     ESCALATION_CHUNK,
     GREETINGS,
+    SUPERVISOR_PROMISE,
     SUPERVISOR_REPLIES,
     SUPERVISOR_SUMMARY,
     VERIFY_CHUNK,
@@ -35,19 +53,12 @@ from callverse.data.conversations import (
 from callverse.data.tickets import REFUND_INTENTS, decide_outcome
 from callverse.llm import LLMClient, LLMUnavailableError
 
+VARIANTS = ("rag", "rag_policy", "agentic")
+BANK_POLICY_CHUNK = "refund_policy__s05"  # boleto refunds: bank transfer after the bank details
 ORDER_ID = re.compile(r"\b[0-9a-f]{32}\b")
 ASKS_ORDER = re.compile(r"order (number|id|no)", re.I)
-# Small models drift to Portuguese (the orders, cities and names are Brazilian)
-PORTUGUESE = re.compile(
-    r"\b(obrigad[oa]|voc[eê]|pedido|desculp\w*|n[uú]mero|por favor|ol[aá]|n[aã]o|sua|seu|"
-    r"est[aá]|entrega|reembolso|ajudar|compra)\b",
-    re.I,
-)
-
-
-def looks_portuguese(text: str) -> bool:
-    """At least three common Portuguese words: the reply is not in English."""
-    return len(PORTUGUESE.findall(text)) >= 3
+# A bank code written by the customer ("my bank code is 341"), for the boleto refund check
+BANK_CODE = re.compile(r"\b(?:bank|code)\b\D{0,25}?\b(\d{1,5})\b", re.I)
 NO_ORDER_YET = (
     "You do not have the order number yet. Greet the customer and ask for the order number "
     "before anything else. Never invent an order number."
@@ -60,6 +71,16 @@ POLICY_DECISION = (
     "reply to the customer's latest message consistently with it (close politely if they thank you)."
 )
 SUPERVISOR_WORDS = re.compile(r"supervisor|manager|someone (more )?senior|not acceptable", re.I)
+# Playbook: a legal complaint, the consumer-protection agency (PROCON) or the press
+LEGAL_WORDS = re.compile(
+    r"\b(procon|lawyer|attorney|legal action|sue|court|press|journalist|newspaper|reclame aqui)\b", re.I
+)
+
+
+def escalation_due(last: str, answered_before: bool) -> bool:
+    """Playbook "When to escalate": a legal threat at any time, or a supervisor request
+    once the advisor has offered a solution."""
+    return bool(LEGAL_WORDS.search(last)) or (answered_before and bool(SUPERVISOR_WORDS.search(last)))
 
 
 @dataclass
@@ -126,6 +147,8 @@ class AdvisorAgent:
         self.max_tool_rounds = max_tool_rounds
         self.no_answer_score = no_answer_score
         self.rng = np.random.default_rng(seed)
+        if variant not in VARIANTS:
+            raise ValueError(f"Unknown advisor variant '{variant}' ({', '.join(VARIANTS)}).")
         self.variant = variant
 
     def use_llm(self) -> bool:
@@ -155,7 +178,10 @@ class AdvisorAgent:
                     "name": call.name,
                     "arguments": call.arguments,
                     "ok": call.ok,
+                    "caller": call.caller,
+                    "summary": call.summary,
                     "latency_ms": round(call.latency_ms, 1),
+                    **({"passed": call.result["passed"]} if "passed" in call.result else {}),
                 },
             )
         try:
@@ -180,7 +206,10 @@ class AdvisorAgent:
         calls_before = len(tools.calls)
         if self.use_llm():
             try:
-                reply = self._llm_reply(messages, memory, tools, on_token, on_event)
+                if self.variant == "agentic":
+                    reply = self._agentic_reply(messages, memory, tools, on_token, on_event)
+                else:
+                    reply = self._llm_reply(messages, memory, tools, on_token, on_event)
             except LLMUnavailableError:
                 reply = self._template_reply(messages, memory, tools)
                 reply.mode = "template_fallback"
@@ -192,6 +221,8 @@ class AdvisorAgent:
                 "arguments": c.arguments,
                 "ok": c.ok,
                 "result": c.result,
+                "caller": c.caller,
+                "summary": c.summary,
                 "latency_ms": round(c.latency_ms, 1),
             }
             for c in tools.calls[calls_before:]
@@ -214,7 +245,7 @@ class AdvisorAgent:
         started = time.perf_counter()
         last = str(messages[-1]["text"]) if messages else ""
         if memory.answered and SUPERVISOR_WORDS.search(last) and not memory.escalated:
-            tools.open_ticket(memory.order_id or "unknown", "customer asked for a supervisor", "supervisor")
+            tools.escalate_to_human("customer asked for a supervisor", memory.order_id or "")
             memory.escalated = True
             memory.summary += SUPERVISOR_SUMMARY
             return AdvisorReply(
@@ -257,6 +288,15 @@ class AdvisorAgent:
             return AdvisorReply(
                 answer, "template", "answer", [chunk], latency_ms=(time.perf_counter() - started) * 1000
             )
+        bank_reply = self._bank_code_reply(last, tools)
+        if bank_reply is not None:
+            return AdvisorReply(
+                bank_reply,
+                "template",
+                "bank_check",
+                [BANK_POLICY_CHUNK],
+                latency_ms=(time.perf_counter() - started) * 1000,
+            )
         return AdvisorReply(
             self._pick(CLOSINGS).format(summary=memory.summary),
             "template",
@@ -276,15 +316,24 @@ class AdvisorAgent:
             return None
         if memory.intent in REFUND_INTENTS or memory.intent == "cancel_order":
             tools.check_refund_eligibility(memory.order_id)
+        return self._forced_decision(memory, tools)
+
+    def _forced_decision(self, memory: AdvisorMemory, tools: AdvisorTools) -> dict[str, Any] | None:
+        """Rules engine, always run by code once the order is open (DSO2: the small LLM must
+        not choose the action); opens the policy hand-over ticket."""
+        if memory.decision is not None:
+            return memory.decision
         result = tools.recommend_resolution(memory.order_id, memory.intent or "track_order")
         if "error" in result:
             return None
-        memory.outcome, memory.handed_to = result["recommended_action"], result["hand_over_to"]
+        memory.outcome = result["recommended_action"]
+        memory.handed_to = result["hand_over_to"] or memory.handed_to
         if result["hand_over_to"]:
             tools.open_ticket(
                 memory.order_id, result["recommended_action"].replace("_", " "), result["hand_over_to"]
             )
-        memory.answered, memory.summary = True, result["summary"]
+        memory.answered = True
+        memory.summary = result["summary"] + (SUPERVISOR_SUMMARY if memory.escalated else "")
         memory.decision = {
             "action": result["recommended_action"],
             "handover": result["hand_over_to"] or "nobody",
@@ -292,6 +341,17 @@ class AdvisorAgent:
             "policy_section": result["policy_section"],
         }
         return memory.decision
+
+    def _policy_context(self, hits: list) -> str:
+        """Retrieved policy extracts, or the "no answer" note when the best match is weak."""
+        if (
+            self.no_answer_score is not None
+            and hits
+            and hits[0].score < self.no_answer_score
+            and type(self.retriever).__name__ == "KnowledgeRetriever"
+        ):
+            return NO_CONTEXT
+        return format_context(hits)
 
     def _llm_reply(
         self,
@@ -308,14 +368,7 @@ class AdvisorAgent:
                 "retrieval",
                 {"hits": [{"section": h.chunk.section, "score": round(h.score, 3)} for h in hits]},
             )
-        context = format_context(hits)
-        if (
-            self.no_answer_score is not None
-            and hits
-            and hits[0].score < self.no_answer_score
-            and type(self.retriever).__name__ == "KnowledgeRetriever"
-        ):
-            context = NO_CONTEXT
+        context = self._policy_context(hits)
         system = ADVISOR_SYSTEM.format(
             today=tools.as_of.strftime("%Y-%m-%d"), intent=memory.intent, context=context
         )
@@ -344,7 +397,14 @@ class AdvisorAgent:
         total_tokens, latency, model = 0, 0.0, None
         for round_number in range(self.max_tool_rounds + 1):
             if on_event is not None:
-                on_event("generation", {"round": round_number, "model": self.llm.resolve_model("advisor")})
+                on_event(
+                    "generation",
+                    {
+                        "round": round_number,
+                        "model": self.llm.resolve_model("advisor"),
+                        "offered": [t["function"]["name"] for t in offered],
+                    },
+                )
             response = self.llm.chat(
                 "advisor", chat, tools=offered or None, agent="advisor", on_token=on_token
             )
@@ -408,6 +468,251 @@ class AdvisorAgent:
             model=model,
             latency_ms=latency,
             tokens=total_tokens,
+        )
+
+    # -------------------------------------------------------------- agentic mode
+    @staticmethod
+    def _stage(memory: AdvisorMemory) -> str:
+        """``verify`` (no order number), ``investigate`` (no decision yet) or ``follow_up``."""
+        if not memory.order_id:
+            return "verify"
+        return "investigate" if memory.decision is None else "follow_up"
+
+    @staticmethod
+    def _looked_up(memory: AdvisorMemory, tools: AdvisorTools) -> bool:
+        return any(
+            c.name == "lookup_order"
+            and c.ok
+            and str(c.arguments.get("order_id", "")).strip() == memory.order_id
+            for c in tools.calls
+        )
+
+    @staticmethod
+    def _paid_by_boleto(tools: AdvisorTools) -> bool:
+        return any(c.ok and c.result.get("payment_type") == "boleto" for c in tools.calls)
+
+    @staticmethod
+    def _mark_escalated(memory: AdvisorMemory, sources: list[str]) -> None:
+        memory.escalated = True
+        memory.handed_to = memory.handed_to or "supervisor"
+        memory.summary += SUPERVISOR_SUMMARY
+        sources.append(ESCALATION_CHUNK)
+
+    def _remember(
+        self, name: str, arguments: dict[str, Any], result: str, memory: AdvisorMemory, sources: list[str]
+    ) -> None:
+        """What a tool call chosen by the LLM changes in the conversation memory."""
+        data = eval_json(result)
+        if name == "search_knowledge_base":
+            sources += [r["chunk_id"] for r in data.get("results", [])]
+        elif name == "open_ticket" and "error" not in data:
+            memory.handed_to = arguments.get("handed_to") or memory.handed_to
+        elif name == "escalate_to_human" and "error" not in data and not memory.escalated:
+            self._mark_escalated(memory, sources)
+
+    def _inject_decision(
+        self,
+        memory: AdvisorMemory,
+        tools: AdvisorTools,
+        chat: list[dict[str, Any]],
+        sources: list[str],
+        note: str | None = None,
+    ) -> bool:
+        """Forced step: once the order is open, the rules engine decides and its decision
+        joins the chat for the LLM to put into words."""
+        decision = self._forced_decision(memory, tools)
+        if decision is None:
+            return False
+        sources.append(decision["policy_section"])
+        text = POLICY_DECISION.format(**decision)
+        chat.append({"role": "system", "content": f"{note}\n{text}" if note else text})
+        return True
+
+    def _bank_code_reply(self, last: str, tools: AdvisorTools) -> str | None:
+        """Boleto refund: the customer wrote a bank code, so check it (external API) and
+        answer with the approved text. Used by the template backup and as a safety net."""
+        match = BANK_CODE.search(last)
+        if match is None or not self._paid_by_boleto(tools):
+            return None
+        result = tools.validate_bank_code(match.group(1))
+        if "error" in result:
+            return None
+        if result["valid"]:
+            return BANK_CODE_OK.format(code=result["bank_code"], bank=result["bank_name"])
+        return BANK_CODE_UNKNOWN.format(code=result["bank_code"])
+
+    def _safe_text(self, memory: AdvisorMemory, decided_now: bool, escalated_now: bool) -> str:
+        """Approved text when the LLM's draft cannot be used (empty or failed the check twice)."""
+        if memory.order_id is None:
+            return f"{self._pick(GREETINGS)} {self._pick(VERIFY_REQUESTS)}"
+        if decided_now and memory.decision:
+            return memory.decision["answer"] + (f" {SUPERVISOR_PROMISE}" if escalated_now else "")
+        if escalated_now:
+            return self._pick(SUPERVISOR_REPLIES)
+        if memory.decision:
+            return self._pick(CLOSINGS).format(summary=memory.summary)
+        return "I could not find this order number. Could you check it and send it again, please?"
+
+    def _agentic_reply(
+        self,
+        messages: list[dict[str, Any]],
+        memory: AdvisorMemory,
+        tools: AdvisorTools,
+        on_token: Callable[[str], None] | None = None,
+        on_event: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> AdvisorReply:
+        """Agentic variant: a ReAct loop (think -> call tools -> read the results -> answer).
+
+        Each round the LLM only sees the tools of the current stage (gating) and chooses
+        which ones to call; while the order is not opened yet a tool call is required
+        (tool_choice "required": SmolLM3 never called a tool on its own). Code keeps three
+        duties: the rules engine decides as soon as the order is open (forced); safety nets
+        open the order, check a bank code or escalate when the LLM forgot or failed; every
+        draft is fact-checked before it is sent (reflection: one rewrite, then the
+        approved text).
+        """
+        assert self.llm is not None
+        llm = self.llm
+        hits = self.retrieve(messages, memory.intent)
+        if on_event is not None:
+            on_event(
+                "retrieval",
+                {"hits": [{"section": h.chunk.section, "score": round(h.score, 3)} for h in hits]},
+            )
+        system = ADVISOR_SYSTEM.format(
+            today=tools.as_of.strftime("%Y-%m-%d"), intent=memory.intent, context=self._policy_context(hits)
+        )
+        chat: list[dict[str, Any]] = [{"role": "system", "content": f"{system}\n{AGENTIC_RULES}"}]
+        order_note = f"The customer's order number is {memory.order_id}." if memory.order_id else NO_ORDER_YET
+        chat.append({"role": "system", "content": order_note})
+        if memory.decision:
+            chat.append({"role": "system", "content": POLICY_DECISION.format(**memory.decision)})
+        for message in messages:
+            role = "user" if message["speaker"] == "customer" else "assistant"
+            chat.append({"role": role, "content": str(message["text"])})
+        sources = [h.chunk.chunk_id for h in hits]
+        last = next((str(m["text"]) for m in reversed(messages) if m["speaker"] == "customer"), "")
+        decided_before, escalated_before = memory.decision is not None, memory.escalated
+        escalate = not memory.escalated and escalation_due(last, decided_before)
+        calls_before = len(tools.calls)
+        usage: dict[str, Any] = {"tokens": 0, "latency": 0.0, "model": None}
+
+        def generate(
+            round_number: int, schemas: list[dict[str, Any]] | None, choice: str | None = None, **event: Any
+        ) -> Any:
+            if on_event is not None:
+                data = {"round": round_number, "model": llm.resolve_model("advisor"), "tool_choice": choice}
+                on_event("generation", {**data, **event})
+            response = llm.chat(
+                "advisor", chat, tools=schemas or None, agent="advisor", on_token=on_token, tool_choice=choice
+            )
+            usage["tokens"] += response.prompt_tokens + response.completion_tokens
+            usage["latency"] += response.latency_ms
+            usage["model"] = response.model
+            return response
+
+        text, round_number = "", 0
+        for round_number in range(self.max_tool_rounds + 1):
+            stage = self._stage(memory)
+            offered = agentic_tool_schemas(stage, memory.intent_group, self._paid_by_boleto(tools))
+            names = [t["function"]["name"] for t in offered]
+            # A tool call is required when the playbook demands an action: open the order before
+            # answering (investigate), or escalate (first round). The LLM still chooses which
+            # of the offered tools to call, and its arguments.
+            must_escalate = escalate and round_number == 0 and not memory.escalated
+            choice = "required" if stage == "investigate" or must_escalate else None
+            response = generate(round_number, offered, choice, stage=stage, offered=names)
+            if response.tool_calls:  # Act: run the tools the LLM chose, then let it read the results
+                chat.append(
+                    {
+                        "role": "assistant",
+                        "content": response.content or "",
+                        "tool_calls": [
+                            {"function": {"name": c["name"], "arguments": c["arguments"]}}
+                            for c in response.tool_calls
+                        ],
+                    }
+                )
+                for call in response.tool_calls:
+                    result = tools.execute(call["name"], dict(call["arguments"]))
+                    self._remember(call["name"], dict(call["arguments"]), result, memory, sources)
+                    chat.append({"role": "tool", "content": result, "tool_name": call["name"]})
+                if stage == "investigate" and self._looked_up(memory, tools):
+                    self._inject_decision(memory, tools, chat, sources)
+                continue
+            text = response.content.strip()
+            if stage == "investigate" and not self._looked_up(memory, tools):
+                # Safety net: the LLM answered without opening the order, so code opens it.
+                with tools.called_by("safety_net"):
+                    opened = "error" not in tools.lookup_order(memory.order_id)
+                if opened and self._inject_decision(memory, tools, chat, sources, SAFETY_NET_NOTE):
+                    text = ""
+                    continue
+            elif stage == "investigate" and self._inject_decision(memory, tools, chat, sources):
+                text = ""  # opened in an earlier turn but not decided yet: decide, then write
+                continue
+            break
+        else:
+            text = ""
+
+        mode = "llm"
+        if escalate and not memory.escalated:
+            # Safety net: the playbook says to escalate and the LLM did not.
+            legal = bool(LEGAL_WORDS.search(last))
+            reason = "legal threat (PROCON, lawyer or press)" if legal else "customer asked for a supervisor"
+            with tools.called_by("safety_net"):
+                tools.escalate_to_human(reason, memory.order_id or "", "high" if legal else "normal")
+            self._mark_escalated(memory, sources)
+            if text and "supervisor" not in text.lower():
+                text = f"{text} {SUPERVISOR_PROMISE}"
+        bank_checked = any(c.name == "validate_bank_code" for c in tools.calls[calls_before:])
+        if decided_before and not bank_checked and BANK_CODE.search(last) and self._paid_by_boleto(tools):
+            # Safety net: the customer gave a bank code and the LLM did not check it.
+            with tools.called_by("safety_net"):
+                bank_text = self._bank_code_reply(last, tools)
+            if bank_text:
+                text, mode, bank_checked = bank_text, "template_fallback", True
+
+        # Reflection: every draft is fact-checked; one rewrite, then the approved text.
+        decided_now = memory.decision is not None and not decided_before
+        escalated_now = memory.escalated and not escalated_before
+        approved = memory.decision["answer"] if memory.decision else ""
+        policy = [h.chunk.text for h in hits]
+        if not text:
+            text, mode = self._safe_text(memory, decided_now, escalated_now), "template_fallback"
+        elif mode == "llm":
+            check = tools.check_draft_reply(text, approved, policy, memory.order_id)
+            if not check["passed"]:
+                problems = "\n".join(f"- {p}" for p in check["problems"])
+                chat += [
+                    {"role": "assistant", "content": text},
+                    {"role": "user", "content": REWRITE_DRAFT.format(problems=problems)},
+                ]
+                retry = generate(round_number + 1, None, reason="fact_check", problems=check["problems"])
+                text = retry.content.strip()
+                if not text or not tools.check_draft_reply(text, approved, policy, memory.order_id)["passed"]:
+                    text, mode = self._safe_text(memory, decided_now, escalated_now), "template_fallback"
+        if memory.order_id is None and not ASKS_ORDER.search(text):
+            # Compliance guardrail (playbook rule 1): verify the order before helping further.
+            text = f"{text}\n\n{self._pick(VERIFY_REQUESTS)}"
+        if memory.order_id is None:
+            stage = "verify"
+        elif escalated_now:
+            stage = "escalate"
+        else:
+            stage = "bank_check" if bank_checked else "answer"
+        return AdvisorReply(
+            text,
+            mode,
+            stage,
+            list(dict.fromkeys(sources)),
+            [
+                {"chunk_id": h.chunk.chunk_id, "section": h.chunk.section, "score": round(h.score, 3)}
+                for h in hits
+            ],
+            model=usage["model"],
+            latency_ms=usage["latency"],
+            tokens=usage["tokens"],
         )
 
 

@@ -28,7 +28,7 @@ export default function AgentsPage() {
   const contacts = useApi<any[]>("/api/agents/contacts?n=30");
   const [contactId, setContactId] = useState("");
   const [engine, setEngine] = useState<"auto" | "template">("auto");
-  const [variant, setVariant] = useState<"rag_policy" | "rag">("rag_policy");
+  const [variant, setVariant] = useState<"rag_policy" | "rag" | "agentic">("rag_policy");
   const session = useLiveSession();
   const { state } = session;
   const scroller = useRef<HTMLDivElement>(null);
@@ -106,6 +106,7 @@ export default function AgentsPage() {
               options={[
                 { value: "rag_policy", label: "Hybrid (prod.)" },
                 { value: "rag", label: "Pure RAG" },
+                { value: "agentic", label: "Agentic" },
               ]}
             />
           </div>

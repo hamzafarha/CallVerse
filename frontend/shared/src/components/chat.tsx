@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Bot, CheckCircle2, FileSearch, Sparkles, Wrench, XCircle } from "lucide-react";
+import { AudioLines, Bot, CheckCircle2, FileSearch, ShieldCheck, Sparkles, Volume2, Wrench, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ChatMessage, StageEvent } from "../lib/session";
 import { Typewriter, TypingDots } from "./motion";
@@ -8,10 +8,21 @@ import { Avatar, clsx } from "./ui";
 export const TOOL_LABEL: Record<string, string> = {
   lookup_order: "Order lookup",
   get_ticket_history: "Ticket history",
+  get_customer_history: "Customer history",
   check_refund_eligibility: "Refund eligibility",
   recommend_resolution: "Rules engine",
+  validate_bank_code: "Bank check",
   open_ticket: "Ticket opened",
+  escalate_to_human: "Escalated to a human",
   search_knowledge_base: "Knowledge base",
+  check_draft_reply: "Fact check",
+};
+
+/** Who decided to call a tool: the LLM itself, a fixed pipeline step, or a safety net. */
+export const CALLER_LABEL: Record<string, string> = {
+  llm: "chosen by the AI",
+  code: "pipeline step",
+  safety_net: "safety net",
 };
 
 /** Short, human description of what an agent is doing right now. */
@@ -22,7 +33,7 @@ export function stageLabel(stage: StageEvent | undefined): string {
   if (stage.agent === "quality") return "Quality agent is reviewing the conversation…";
   if (stage.step === "retrieval") return "Searching the help centre…";
   if (stage.step === "tool") return `${TOOL_LABEL[stage.name] ?? stage.name} ${stage.ok ? "✓" : "✗"}`;
-  if (stage.step === "generation") return "Writing the answer…";
+  if (stage.step === "generation") return stage.reason === "fact_check" ? "Fixing the draft after the fact check…" : "Writing the answer…";
   return stage.kind === "draft" ? "Copilot is drafting…" : "Advisor is thinking…";
 }
 
@@ -37,10 +48,16 @@ export function AdvisorAvatar({ size = 32 }: { size?: number }) {
   );
 }
 
-export function ToolChip({ name, ok }: { name: string; ok?: boolean }) {
+export function ToolChip({ name, ok, caller, summary }: { name: string; ok?: boolean; caller?: string; summary?: string }) {
+  const title = [caller ? CALLER_LABEL[caller] ?? caller : null, summary].filter(Boolean).join(" · ");
   return (
-    <span className="inline-flex items-center gap-1 rounded-md bg-black/5 px-1.5 py-0.5 font-mono text-[10px] dark:bg-white/10">
+    <span
+      title={title || undefined}
+      className="inline-flex items-center gap-1 rounded-md bg-black/5 px-1.5 py-0.5 font-mono text-[10px] dark:bg-white/10"
+    >
       {ok === false ? <XCircle size={10} /> : <CheckCircle2 size={10} />} {TOOL_LABEL[name] ?? name}
+      {caller === "llm" && <Bot size={10} className="text-brand" aria-label="chosen by the AI" />}
+      {caller === "safety_net" && <ShieldCheck size={10} aria-label="safety net" />}
     </span>
   );
 }
@@ -62,12 +79,16 @@ export function ChatBubble({
   name,
   animate = false,
   showMeta = true,
+  speaking = false,
+  onListen,
 }: {
   message: ChatMessage;
   mine: boolean;
   name?: string;
   animate?: boolean;
   showMeta?: boolean;
+  speaking?: boolean; // voice mode is reading this message
+  onListen?: () => void; // read this message aloud
 }) {
   const advisor = message.speaker === "advisor";
   const tools: any[] = message.meta?.tools ?? [];
@@ -88,15 +109,35 @@ export function ChatBubble({
             "whitespace-pre-wrap break-words rounded-2xl px-4 py-2.5 text-[14.5px] leading-relaxed shadow-soft",
             mine ? "rounded-br-md text-white" : "rounded-bl-md border border-line bg-surface text-ink",
           )}
-          style={mine ? { background: "linear-gradient(135deg, var(--brand), color-mix(in srgb, var(--brand) 60%, var(--brand-2)))" } : undefined}
+          style={{
+            ...(mine ? { background: "linear-gradient(135deg, var(--brand), color-mix(in srgb, var(--brand) 60%, var(--brand-2)))" } : {}),
+            ...(speaking ? { boxShadow: "0 0 0 2px var(--brand)" } : {}),
+          }}
         >
           {animate ? <Typewriter text={message.text} /> : message.text}
         </div>
-        {showMeta && (label || tools.length > 0 || sources.length > 0) && (
+        {showMeta && (label || tools.length > 0 || sources.length > 0 || onListen || speaking) && (
           <div className={clsx("mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted", mine && "justify-end")}>
+            {onListen && (
+              <button
+                type="button"
+                onClick={onListen}
+                title="Listen to this message"
+                className={clsx("inline-flex items-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:text-brand", speaking && "text-brand")}
+              >
+                {speaking ? <AudioLines size={12} className="animate-pulse" /> : <Volume2 size={12} />}
+                {speaking ? "speaking…" : "Listen"}
+              </button>
+            )}
             {label && <span>{label}</span>}
             {tools.map((t, i) => (
-              <ToolChip key={i} name={t.name} ok={t.ok} />
+              <ToolChip
+                key={i}
+                name={t.name}
+                ok={t.name === "check_draft_reply" ? t.result?.passed !== false : t.ok}
+                caller={t.caller}
+                summary={t.summary}
+              />
             ))}
             {sources.length > 0 && (
               <span className="inline-flex items-center gap-1">

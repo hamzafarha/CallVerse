@@ -32,7 +32,7 @@ class ConversationRequest(BaseModel):
 
     contact_id: str | None = None
     mode: Literal["auto", "llm", "template"] = "template"
-    variant: Literal["rag_policy", "rag"] = "rag_policy"
+    variant: Literal["rag_policy", "rag", "agentic"] = "rag_policy"
     seed: int = 0
 
 

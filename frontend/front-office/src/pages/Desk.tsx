@@ -4,7 +4,9 @@ import {
   AgentPipeline,
   AnimatePresence,
   Avatar,
+  CallPanel,
   ChatBubble,
+  type AvatarState,
   EmptyState,
   GROUP_COLOR,
   GROUP_LABEL,
@@ -13,6 +15,8 @@ import {
   QualityScore,
   Segmented,
   StreamingBubble,
+  ToolBox,
+  VoiceControls,
   clock,
   clsx,
   dateLabel,
@@ -21,14 +25,17 @@ import {
   num,
   stageLabel,
   useApi,
+  useAutoSpeak,
   useLiveSession,
+  useVoice,
 } from "@callverse/shared";
-import { Bot, CheckCheck, Clock, Headset, Inbox, Pencil, RefreshCw, SendHorizonal, Sparkles, User, Wand2 } from "lucide-react";
+import { Bot, CheckCheck, Clock, Headset, Inbox, Pencil, RefreshCw, SendHorizonal, Sparkles, User, Wand2, Wrench } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { OrderTimeline } from "../components/OrderTimeline";
 
-type Tab = "customer" | "copilot" | "quality";
+type Tab = "tools" | "customer" | "copilot" | "quality";
+type Variant = "rag_policy" | "rag" | "agentic";
 
 export default function DeskPage() {
   const [seed, setSeed] = useState(0);
@@ -39,12 +46,20 @@ export default function DeskPage() {
   const [handled, setHandled] = useState<{ id: string; overall: number; seconds: number }[]>([]);
   const [autopilot, setAutopilot] = useState(false);
   const [engine, setEngine] = useState<"auto" | "template">("auto");
-  const [tab, setTab] = useState<Tab>("customer");
+  const [variant, setVariant] = useState<Variant>("agentic");
+  const [chatVariant, setChatVariant] = useState<Variant>("agentic"); // the mode of the chat in progress
+  const [tab, setTab] = useState<Tab>("tools");
   const [text, setText] = useState("");
   const session = useLiveSession();
   const { state } = session;
   const scroller = useRef<HTMLDivElement>(null);
   const details = useApi<any>(selected ? `/api/portal/customers/${selected.contact_id}` : null);
+  // Voice mode: the agents speak (the Client agent, and the Advisor agent on autopilot),
+  // each with its own voice; what you type yourself is never read back.
+  const voice = useVoice();
+  useAutoSpeak(state.messages, voice, (m) =>
+    m.meta?.mode === "human" ? null : m.speaker === "advisor" ? { role: "advisor" } : { role: "customer", persona: selected?.persona },
+  );
 
   useEffect(() => setLoadedAt(Date.now()), [queue.data]);
   useEffect(() => {
@@ -73,13 +88,16 @@ export default function DeskPage() {
   const elapsed = (q: any) => q.waiting_seconds + (now - loadedAt) / 1000;
   const longest = waiting.length ? Math.max(...waiting.map(elapsed)) : 0;
   const accept = (item: any) => {
+    voice.stop();
     setSelected(item);
-    setTab("customer");
+    setTab("tools");
     setText("");
-    session.start({ contact_id: item.contact_id, customer: "agent", advisor: autopilot ? "agent" : "human", mode: engine });
+    setChatVariant(variant);
+    session.start({ contact_id: item.contact_id, customer: "agent", advisor: autopilot ? "agent" : "human", mode: engine, variant });
   };
   const sendAdvisor = (message: string) => {
     if (!message.trim()) return;
+    voice.stop(); // like on a call: answering interrupts the customer
     session.sendAdvisor(message.trim());
     setText("");
   };
@@ -89,6 +107,12 @@ export default function DeskPage() {
   };
   const ended = state.status === "done";
   const stage = state.stages[state.stages.length - 1];
+  // Call band faces: the advisor side is the Advisor agent on autopilot, otherwise you
+  const advisorWorking = session.busy && state.activeAgent === "advisor";
+  const advisorFace: AvatarState =
+    voice.speakingRole === "advisor" ? "speaking" : advisorWorking ? "thinking" : !autopilot && text.trim() ? "typing" : "listening";
+  const customerFace: AvatarState =
+    voice.speakingRole === "customer" ? "speaking" : session.busy && state.activeAgent === "client" ? "typing" : "listening";
   const avgQuality = handled.length ? handled.reduce((s, h) => s + h.overall, 0) / handled.length : null;
   const avgHandle = handled.length ? handled.reduce((s, h) => s + h.seconds, 0) / handled.length : null;
 
@@ -105,6 +129,17 @@ export default function DeskPage() {
         <Metric label="Avg quality" value={avgQuality ? `${avgQuality.toFixed(1)}/5` : "–"} />
         <Metric label="Avg handle time" value={avgHandle ? clock(avgHandle) : "–"} />
         <div className="ml-auto flex items-center gap-2">
+          <Segmented
+            id="desk-variant"
+            size="sm"
+            value={variant}
+            onChange={setVariant}
+            options={[
+              { value: "rag_policy", label: "Hybrid" },
+              { value: "rag", label: "Pure RAG" },
+              { value: "agentic", label: "Agentic" },
+            ]}
+          />
           <Segmented id="desk-engine" size="sm" value={engine} onChange={setEngine} options={[{ value: "auto", label: "Local LLM" }, { value: "template", label: "Offline" }]} />
           <button className="btn btn-ghost py-1 text-xs" onClick={() => setSeed((s) => s + 1)}>
             <RefreshCw size={13} /> New queue
@@ -191,6 +226,7 @@ export default function DeskPage() {
                     {humanize(selected.intent)} · <span className="capitalize">{selected.persona}</span> customer · simulated by the Client agent
                   </div>
                 </div>
+                <VoiceControls voice={voice} />
                 <Segmented
                   id="pilot"
                   size="sm"
@@ -205,13 +241,51 @@ export default function DeskPage() {
                   <CheckCheck size={14} /> Wrap up
                 </button>
               </div>
+              <AnimatePresence initial={false}>
+                {voice.enabled && (
+                  <CallPanel
+                    key="call"
+                    voice={voice}
+                    startedAt={state.startedAt}
+                    left={
+                      autopilot
+                        ? { kind: "agent", name: "Advisor agent", subtitle: "autopilot", state: advisorFace }
+                        : {
+                            kind: "person",
+                            headset: true,
+                            name: "You",
+                            subtitle: "advisor · AI copilot",
+                            state: advisorFace,
+                            note: advisorWorking ? "copilot drafting…" : undefined,
+                          }
+                    }
+                    right={{
+                      kind: "person",
+                      name: selected.name,
+                      subtitle: `${selected.persona} customer · Client agent`,
+                      persona: selected.persona,
+                      state: customerFace,
+                    }}
+                  />
+                )}
+              </AnimatePresence>
               <div className="border-b border-line bg-raised/40 px-4 py-3 sm:px-6">
                 <AgentPipeline active={state.activeAgent} visited={state.visited} stages={state.stages} done={!!state.review} />
               </div>
               <div ref={scroller} className="scroll-fade flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-6">
-                {state.messages.map((m, i) => (
-                  <ChatBubble key={i} message={m} mine={m.speaker === "advisor"} name={selected.name} />
-                ))}
+                {state.messages.map((m, i) => {
+                  const role = m.speaker === "advisor" ? "advisor" : "customer";
+                  return (
+                    <ChatBubble
+                      key={i}
+                      message={m}
+                      mine={m.speaker === "advisor"}
+                      name={selected.name}
+                      speaking={voice.speaking === String(i)}
+                      onListen={m.meta?.mode !== "human" && voice.supported ? () => voice.replay(String(i), m.text, role, selected.persona) : undefined}
+                    />
+                  );
+                })}
                 <AnimatePresence>
                   {state.streaming?.kind === "reply" && <StreamingBubble key="s" mine text={state.streaming.text} label={stageLabel(stage)} />}
                   {session.busy && !state.streaming && <ActivityRow key="a" text={stageLabel(stage)} who={state.activeAgent === "client" ? "customer" : "advisor"} />}
@@ -288,6 +362,7 @@ export default function DeskPage() {
               value={tab}
               onChange={setTab}
               options={[
+                { value: "tools", label: <><Wrench size={12} /> Tools</> },
                 { value: "customer", label: "Customer" },
                 { value: "copilot", label: <><Sparkles size={12} /> Copilot</> },
                 { value: "quality", label: "Quality", disabled: !state.review },
@@ -296,6 +371,7 @@ export default function DeskPage() {
           </div>
           <div className="flex-1 overflow-y-auto px-4 pb-6">
             {!selected && <EmptyState title="No customer selected" text="Accept a chat to see the customer's order and history." />}
+            {selected && tab === "tools" && <ToolBox stages={state.stages} variant={chatVariant} offline={state.ready ? !state.ready.llm : engine === "template"} />}
             {selected && tab === "customer" && <Customer360 data={details.data} />}
             {selected && tab === "copilot" && (
               <div className="space-y-4">

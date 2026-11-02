@@ -188,7 +188,7 @@ def fidelity() -> None:
 def chat(
     contact: Optional[str] = typer.Option(None, help="Contact id (SC000123); random if empty."),
     mode: str = typer.Option("auto", help="auto, llm or template."),
-    variant: str = typer.Option("rag_policy", help="rag_policy or rag (LLM advisor)."),
+    variant: str = typer.Option("rag_policy", help="rag_policy, rag or agentic (LLM advisor)."),
     seed: int = typer.Option(0),
 ) -> None:
     """Run one LangGraph conversation (client <-> advisor -> quality) and print it."""
@@ -218,7 +218,7 @@ def chat(
 @app.command()
 def agents(
     n: int = typer.Option(20, help="Conversations per variant."),
-    variants: str = typer.Option("template", help="Comma list: template, rag, rag_policy."),
+    variants: str = typer.Option("template", help="Comma list: template, rag, rag_policy, agentic."),
 ) -> None:
     """DSO2: conversation batches and BO2 KPIs per advisor variant."""
     from callverse.evaluation.experiments import agents_experiment, merge_tables
@@ -277,7 +277,7 @@ def llm_pin() -> None:
 def evaluate(
     seeds: int = typer.Option(10, help="Replications per configuration."),
     conversations: int = typer.Option(40, help="Template conversations for BO2."),
-    llm_variants: str = typer.Option("", help="Also run LLM variants, e.g. 'rag_policy,rag' (slow)."),
+    llm_variants: str = typer.Option("", help="Also run LLM variants, e.g. 'rag_policy,rag,agentic' (slow)."),
 ) -> None:
     """Every experiment (DSO1-DSO4), the component metrics and the BO/DSO scorecard."""
     from callverse.evaluation.experiments import run_all_experiments

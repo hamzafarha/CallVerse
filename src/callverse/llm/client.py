@@ -207,6 +207,7 @@ class LLMClient:
         return ModelOptions(
             chat_template_kwargs=dict(entry.get("chat_template_kwargs", {})),
             tools_kwarg=str(entry.get("tools_kwarg", "tools")),
+            tool_call_opener=str(entry.get("tool_call_opener", ModelOptions.tool_call_opener)),
         )
 
     def load(self, role: str):
@@ -288,12 +289,17 @@ class LLMClient:
         agent: str | None = None,
         temperature: float | None = None,
         on_token: Callable[[str], None] | None = None,
+        tool_choice: str | None = None,
     ) -> LLMResponse:
         """One chat completion for an agent role (``client``, ``advisor``, ``judge``).
 
         ``on_token`` receives the visible text as it is generated (tool-call
-        markup is hidden), for live streaming to the UI.
+        markup is hidden), for live streaming to the UI. ``tool_choice``: ``None`` or
+        ``"auto"`` (the model may answer or call a tool) or ``"required"`` (it must call
+        one of ``tools``, and still chooses which one).
         """
+        if tool_choice not in (None, "auto", "required"):
+            raise ValueError(f"tool_choice must be 'auto' or 'required', not {tool_choice!r}")
         ok, reason = self.can_run()
         if not ok:
             raise LLMUnavailableError(reason)
@@ -312,6 +318,8 @@ class LLMClient:
             "seed": self.settings.seed,
             "max_new_tokens": max_new_tokens,
         }
+        if tool_choice == "required":  # only then, so earlier cached answers keep their keys
+            payload["tool_choice"] = tool_choice
         key = cache_key(payload)
         if self.cache is not None:
             hit = self.cache.get(key)
@@ -328,7 +336,14 @@ class LLMClient:
                 model = self.load(role)
                 with self.pool.generate_lock:
                     raw, prompt_tokens, completion_tokens = model.generate(
-                        messages, tools, json_mode, temperature, self.settings.seed, max_new_tokens, gate
+                        messages,
+                        tools,
+                        json_mode,
+                        temperature,
+                        self.settings.seed,
+                        max_new_tokens,
+                        gate,
+                        tool_choice=tool_choice,
                     )
             except LLMUnavailableError:
                 raise

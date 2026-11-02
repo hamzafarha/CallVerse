@@ -80,9 +80,17 @@ advisor:
   # Agentic RAG: Ask -> Retrieve -> LLM (+ tools) -> Reply
   # variant rag_policy: the LLM also calls the company rules engine (recommend_resolution);
   # variant rag: pure agentic RAG (ablation).
+  # variant agentic: the LLM chooses its tools (at most 5 offered per stage), the rules
+  #   engine still decides, safety nets call what the LLM forgot, every draft is fact-checked.
   variant: rag_policy
   max_tool_rounds: 4
   retrieval_top_k: 3
+  # External API of the validate_bank_code tool: Brazilian bank codes from BrasilAPI,
+  # downloaded once and cached (one call takes 1-5 s; the cache is fast, offline, repeatable).
+  bank_directory:
+    url: https://brasilapi.com.br/api/banks/v1
+    cache_file: data/external/brasilapi_banks.json
+    timeout_seconds: 8
   # Backup (DSO2): intent classifier + approved templates filled with order facts.
   intent_classifier:
     model: tfidf_logreg

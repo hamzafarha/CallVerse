@@ -14,10 +14,24 @@ from typing import Any
 import numpy as np
 
 from callverse.agents.client.profiles import CustomerProfile
-from callverse.data.conversations import GOODBYES, REACTIONS, SUPERVISOR_REQUESTS, VERIFY_REPLIES
+from callverse.data.conversations import (
+    BANK_CODE_CORRECTIONS,
+    BANK_CODE_QUESTIONS,
+    GOODBYES,
+    REACTIONS,
+    SUPERVISOR_REQUESTS,
+    VERIFY_REPLIES,
+)
 from callverse.llm import LLMClient, LLMUnavailableError
 
 ASKS_FOR_ORDER = re.compile(r"order (number|id|no)|which order|order #|confirm your order", re.I)
+# Boleto refund: the advisor asks for bank details (sent by e-mail), or rejects a bank code
+ASKS_FOR_BANK = re.compile(r"bank details|bank, branch|bank code|bank account details", re.I)
+BANK_CODE_PROBLEM = re.compile(
+    r"could not find|couldn't find|not (?:a )?valid|invalid|not found|does ?n[o']t exist|"
+    r"check (?:the|your|that|this) (?:bank )?code|3 digits|three digits",
+    re.I,
+)
 ASKS_ANYTHING_ELSE = re.compile(r"anything else|help you with anything|can i help", re.I)
 NEGATIVE = re.compile(
     r"sorry|unfortunately|cannot|can't|unable|no longer|late|investigation|"
@@ -92,6 +106,9 @@ class ClientAgent:
             # sometimes swap roles and ask the advisor for *its* order number).
             reply = self._pick(VERIFY_REPLIES).format(order_id=profile.order_id)
             return ClientTurn(reply, False, None, "rule")
+        bank_turn = self._bank_turn(profile, messages)
+        if bank_turn is not None:
+            return bank_turn
         if self.use_llm():
             try:
                 turn = self._llm_turn(profile, messages)
@@ -102,6 +119,26 @@ class ClientAgent:
             except (LLMUnavailableError, ValueError):
                 pass
         return self._rule_turn(profile, messages)
+
+    def _bank_turn(self, profile: CustomerProfile, messages: list[dict[str, Any]]) -> ClientTurn | None:
+        """Guardrail: bank codes are given deterministically, like the order number. The
+        customer checks the code in the chat (the rest goes by e-mail) and corrects a typo
+        when the advisor says the code does not exist."""
+        if not profile.bank_code:
+            return None
+        last = str(messages[-1]["text"])
+        said = " ".join(str(m["text"]) for m in messages if m["speaker"] == "customer")
+        if ASKS_FOR_BANK.search(last) and not re.search(rf"\b{profile.bank_code_typed}\b", said):
+            text = self._pick(BANK_CODE_QUESTIONS).format(code=profile.bank_code_typed)
+            return ClientTurn(text, False, None, "rule")
+        if (
+            profile.bank_code_typed != profile.bank_code
+            and BANK_CODE_PROBLEM.search(last)
+            and not re.search(rf"\b{profile.bank_code}\b", said)
+        ):
+            text = self._pick(BANK_CODE_CORRECTIONS).format(code=profile.bank_code)
+            return ClientTurn(text, False, None, "rule")
+        return None
 
     # ---------------------------------------------------------------- rule mode
     def _pick(self, options: list[str]) -> str:

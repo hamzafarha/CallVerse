@@ -65,7 +65,8 @@ def make_session(
     """Agents for one conversation.
 
     ``mode``: auto, llm, or template (offline). ``variant`` of the LLM advisor:
-    ``rag_policy`` (RAG + tools + rules engine, default) or ``rag`` (pure agentic RAG).
+    ``rag_policy`` (RAG + tools + rules engine, default), ``rag`` (pure agentic RAG) or
+    ``agentic`` (the LLM chooses gated tools; rules engine, safety nets, draft check).
     """
     runtime = runtime or get_runtime()
     settings = runtime.settings
@@ -242,6 +243,13 @@ def kpi_row(
         "judge_correct": card["correct"],
         "tool_calls": len(tools),
         "tool_success_rate": (sum(t["ok"] for t in tools) / len(tools)) if tools else None,
+        # Who chose the tools: the LLM itself, or a safety net when the LLM forgot
+        "llm_tool_calls": sum(t.get("caller") == "llm" for t in tools),
+        "safety_net_calls": sum(t.get("caller") == "safety_net" for t in tools),
+        "drafts_rejected": sum(
+            t["name"] == "check_draft_reply" and not (t.get("result") or {}).get("passed", True)
+            for t in tools
+        ),
         "expected_wait_seconds": routing.get("expected_wait_seconds"),
         "expected_handle_seconds": routing.get("expected_handle_seconds"),
         **{f"score_{k}": v for k, v in card["scores"].items()},
@@ -461,6 +469,9 @@ def conversation_kpis(frame: pd.DataFrame) -> dict[str, float]:
         "verified_action_rate": mean("action_correct") if "action_correct" in frame else float("nan"),
         "judge_correct_rate": mean("judge_correct") if "judge_correct" in frame else float("nan"),
         "tool_success_rate": mean("tool_success_rate"),
+        "llm_tool_calls_mean": mean("llm_tool_calls") if "llm_tool_calls" in frame else float("nan"),
+        "safety_net_calls_mean": mean("safety_net_calls") if "safety_net_calls" in frame else float("nan"),
+        "drafts_rejected_mean": mean("drafts_rejected") if "drafts_rejected" in frame else float("nan"),
         "intent_accuracy": mean("intent_correct"),
         "mean_turns": mean("turns"),
         "quality_overall": float(

@@ -7,11 +7,32 @@ drives tone and patience. Repeat contacts on the same order are more often
 impatient.
 """
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any
+
 import numpy as np
 import pandas as pd
+
 from callverse.config import load_yaml
+
+# Big Brazilian banks (COMPE codes): Banco do Brasil, Santander, Caixa, Bradesco, Itaú,
+# Nubank, Inter, C6. A customer refunded by bank transfer names one of them.
+CUSTOMER_BANKS = ["001", "033", "104", "237", "341", "260", "077", "336"]
+BANK_TYPO_SHARE = 0.2  # share of customers who first type the code with an extra digit
+
+
+def customer_bank(contact_id: str) -> tuple[str, str]:
+    """(bank code, code as first typed) of a customer, fixed by the contact id.
+
+    A hash, not the profile's random generator, so adding banks does not change the
+    personas of existing samples. A typo repeats the last digit ("3411"): a 4-digit code
+    never exists, so the advisor's bank check has something to catch.
+    """
+    digest = int(hashlib.sha256(contact_id.encode("utf-8")).hexdigest(), 16)
+    code = CUSTOMER_BANKS[digest % len(CUSTOMER_BANKS)]
+    typo = (digest // len(CUSTOMER_BANKS)) % 100 < BANK_TYPO_SHARE * 100
+    return code, (code + code[-1] if typo else code)
 
 SITUATION_TEXT = {
     "overdue_never_delivered": "Your order has not arrived and the promised delivery date has passed.",
@@ -41,6 +62,8 @@ class CustomerProfile:
     persona: str
     tone: str
     is_repeat_contact: bool
+    bank_code: str = ""  # for a refund by bank transfer (boleto)
+    bank_code_typed: str = ""  # what the customer types first (sometimes a typo)
 
     def situation_text(self) -> str:
         return SITUATION_TEXT.get(self.situation, "You have a question about your order.")
@@ -65,6 +88,7 @@ def build_profile(contact: pd.Series, rng: np.random.Generator, is_repeat: bool)
     else:
         shares = np.array([personas[n]["share"] for n in names], dtype=float)
         persona = names[int(rng.choice(len(names), p=shares / shares.sum()))]
+    bank_code, bank_code_typed = customer_bank(str(contact["contact_id"]))
     return CustomerProfile(
         contact_id=str(contact["contact_id"]),
         order_id=str(contact["order_id"]),
@@ -77,6 +101,8 @@ def build_profile(contact: pd.Series, rng: np.random.Generator, is_repeat: bool)
         persona=persona,
         tone=str(personas[persona]["tone"]),
         is_repeat_contact=is_repeat,
+        bank_code=bank_code,
+        bank_code_typed=bank_code_typed,
     )
 
 

@@ -227,6 +227,8 @@ class ModelOptions:
 
     chat_template_kwargs: dict[str, Any] = field(default_factory=dict)
     tools_kwarg: str = "tools"
+    # How the template opens a tool call (tool_choice "required" starts the reply with it)
+    tool_call_opener: str = "<tool_call>\n"
 
 
 class LocalModel:
@@ -291,8 +293,13 @@ class LocalModel:
         seed: int,
         max_new_tokens: int,
         on_token: Callable[[str], None] | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, int, int]:
-        """(text, prompt tokens, completion tokens) for one chat turn."""
+        """(text, prompt tokens, completion tokens) for one chat turn.
+
+        ``tool_choice="required"``: the model must call one of ``tools`` (it still picks
+        which one and its arguments), like the tool_choice option of hosted LLM APIs.
+        """
         import torch
         from transformers import StoppingCriteriaList, TextIteratorStreamer, set_seed
 
@@ -300,6 +307,11 @@ class LocalModel:
         # No prefill for JSON: a lone "{" tokenizes unlike the model's own '{"' token and
         # makes small models stop at once. Generation stops when the object is closed.
         prefix = ""
+        if tools and tool_choice == "required":
+            # The reply starts with the template's own tool-call tag (one whole token and a
+            # newline), so the next words can only be a call. SmolLM3 never called a tool by
+            # itself (0 of 186 traced advisor calls); with the tag it did in 6 of 6 test turns.
+            prefix = self.options.tool_call_opener
         inputs = self.tokenizer(prompt + prefix, return_tensors="pt", add_special_tokens=False).to(
             self.device
         )
@@ -315,6 +327,10 @@ class LocalModel:
             kwargs.update(temperature=None, top_p=None, top_k=None)
         if json_mode:
             kwargs["stopping_criteria"] = StoppingCriteriaList([JsonStop(self.tokenizer, start, prefix)])
+        if prefix and not json_mode:  # required tool call: stop once the call is closed
+            closing = self.tokenizer.convert_tokens_to_ids(prefix.strip().replace("<", "</", 1))
+            if isinstance(closing, int) and closing != self.tokenizer.unk_token_id:
+                kwargs["eos_token_id"] = [self.tokenizer.eos_token_id, closing]
         set_seed(seed)
         if on_token is None:
             with torch.inference_mode():

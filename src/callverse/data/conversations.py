@@ -81,7 +81,22 @@ CLOSINGS = [
     "So, {summary} Can I help you with anything else today?",
 ]
 SUPERVISOR_SUMMARY = " A supervisor will also contact you within 1 business day."
+SUPERVISOR_PROMISE = "A supervisor will contact you within 1 business day."
 GOODBYES = ["No, that's all. Bye!", "No, thank you.", "That's everything, thanks."]
+# Boleto refunds: bank details go by e-mail (refund policy); in the chat the customer may
+# only check the bank code, which the advisor's validate_bank_code tool can verify.
+BANK_CODE_QUESTIONS = [
+    "Ok, I'll e-mail the rest. My bank code is {code}, is that accepted?",
+    "Fine. Just to check: my bank is code {code}, can you transfer there?",
+]
+BANK_CODE_CORRECTIONS = ["Sorry, my mistake: the code is {code}.", "Oops, the right code is {code}."]
+BANK_CODE_OK = (
+    "Thank you: code {code} is {bank}, so we can transfer your refund there. Please send the "
+    "branch, account number and the account holder's CPF by e-mail, as explained."
+)
+BANK_CODE_UNKNOWN = (
+    "I could not find bank code {code}. Brazilian bank codes have 3 digits: could you check it, please?"
+)
 
 
 def fmt_date(timestamp: pd.Timestamp) -> str:

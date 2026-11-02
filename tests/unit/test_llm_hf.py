@@ -105,3 +105,65 @@ def test_profiles_point_to_hugging_face_repositories():
     assert all("/" in repo for repo in settings.models.values())  # owner/name on the Hub
     families = {settings.catalog[settings.models[r]]["family"] for r in ("advisor", "judge")}
     assert len(families) == 2  # the judge is from a different family than the advisor
+
+
+class _Encoding(dict):
+    def to(self, device):
+        return self
+
+
+class _FakeTokenizer:
+    """Just enough of a tokenizer for LocalModel.generate (no model files)."""
+
+    eos_token_id, pad_token_id, unk_token_id = 2, 0, None
+
+    def apply_chat_template(self, chat, tokenize=False, add_generation_prompt=True, **kwargs):
+        return "PROMPT|"
+
+    def __call__(self, text, return_tensors="pt", add_special_tokens=False):
+        import torch
+
+        self.text = text
+        ids = torch.tensor([[1, 1, 1]])
+        return _Encoding(input_ids=ids, attention_mask=torch.ones_like(ids))
+
+    def convert_tokens_to_ids(self, token):
+        return {"</tool_call>": 99}.get(token)
+
+    def decode(self, ids, skip_special_tokens=True):
+        return '{"name": "lookup_order", "arguments": {"order_id": "abc"}}\n</tool_call>'
+
+
+class _FakeModel:
+    def generate(self, **kwargs):
+        import torch
+
+        self.kwargs = kwargs
+        return torch.cat([kwargs["input_ids"], torch.tensor([[5, 6]])], dim=1)
+
+
+def _local_model():
+    from callverse.llm.hf_local import LocalModel, ModelOptions
+
+    model = LocalModel.__new__(LocalModel)  # skip loading weights
+    model.tokenizer, model.model, model.device = _FakeTokenizer(), _FakeModel(), "cpu"
+    model.options, model.native_tools = ModelOptions(), False
+    return model
+
+
+def test_required_tool_choice_starts_the_reply_with_the_tool_call_tag():
+    model = _local_model()
+    messages = [{"role": "system", "content": "rules"}, {"role": "user", "content": "where is it?"}]
+    tools = [{"type": "function", "function": {"name": "lookup_order", "parameters": {}}}]
+    raw, _, completion = model.generate(messages, tools, False, 0.0, 42, 16, tool_choice="required")
+    assert model.tokenizer.text == "PROMPT|<tool_call>\n"  # the reply is pre-started
+    assert model.model.kwargs["eos_token_id"] == [2, 99]  # stops once the call is closed
+    assert parse_tool_calls(raw, TOOLS)[1] == [{"name": "lookup_order", "arguments": {"order_id": "abc"}}]
+    assert completion == 2
+
+
+def test_auto_tool_choice_leaves_the_reply_free():
+    model = _local_model()
+    tools = [{"type": "function", "function": {"name": "lookup_order", "parameters": {}}}]
+    model.generate([{"role": "system", "content": "rules"}], tools, False, 0.0, 42, 16)
+    assert model.tokenizer.text == "PROMPT|" and "eos_token_id" not in model.model.kwargs
