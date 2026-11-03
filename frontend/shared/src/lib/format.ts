@@ -1,5 +1,6 @@
 /** Number formatting and the fixed color assignment of every entity. */
 
+// The 4 problem groups, with their labels and fixed colors.
 export const GROUPS = ["wismo", "cancel_refund", "post_delivery", "order_admin"] as const;
 
 export const GROUP_LABEL: Record<string, string> = {
@@ -46,6 +47,9 @@ export const MODEL_COLOR: Record<string, string> = {
   prophet: "var(--series-5)",
 };
 
+/**
+ * Formatters: numbers, percentages, euros and signed changes. A missing value shows as "–".
+ */
 export function num(value: unknown, digits = 1): string {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "–";
   return Number(value).toLocaleString("en-US", {

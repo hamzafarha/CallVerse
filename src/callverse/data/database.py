@@ -1,5 +1,7 @@
 """SQLite store of orders, contacts, tickets and chat messages."""
 
+# How to read this file: TABLES describes the 9 tables (primary keys, foreign keys, indexes); build_database()
+# writes them into a new SQLite file and checks every link; connect() opens it read-only for the agents.
 import os
 import sqlite3
 from dataclasses import dataclass, field
@@ -103,6 +105,8 @@ def sqlite_type(dtype: object) -> str:
 
 def create_table_sql(spec: TableSpec, frame: pd.DataFrame) -> str:
     """CREATE TABLE statement with types, NOT NULL keys, primary and foreign keys."""
+    # Build the CREATE TABLE text column by column: name, type, NOT NULL for keys, then the primary and
+    # foreign keys.
     lines = []
     for column, dtype in frame.dtypes.items():
         not_null = " NOT NULL" if column in spec.primary_key else ""
@@ -123,11 +127,13 @@ def build_database(tables: dict[str, pd.DataFrame], path: str | Path) -> dict[st
     The file is built under a temporary name and only replaces ``path`` once every
     table is loaded and the foreign-key check passes.
     """
+    # Every table must be present before anything is written.
     missing = [spec.name for spec in TABLES if spec.name not in tables]
     if missing:
         raise ValueError(f"Missing tables: {missing}.")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Build into a temporary file first: the real database is only replaced when everything worked.
     temporary = path.with_suffix(".building")
     temporary.unlink(missing_ok=True)
 
@@ -135,15 +141,18 @@ def build_database(tables: dict[str, pd.DataFrame], path: str | Path) -> dict[st
     try:
         for spec in TABLES:
             frame = tables[spec.name]
+            # A duplicated primary key would break the lookups: refuse it.
             if frame.duplicated(spec.primary_key).any():
                 raise ValueError(f"Duplicate primary keys in table '{spec.name}'.")
             connection.execute(create_table_sql(spec, frame))
+            # pandas writes the rows; the indexes make lookups by order or by customer fast.
             frame.to_sql(spec.name, connection, if_exists="append", index=False)
             for columns in spec.indexes:
                 name = f"idx_{spec.name}_{'_'.join(columns)}"
                 quoted = ", ".join(f'"{c}"' for c in columns)
                 connection.execute(f'CREATE INDEX "{name}" ON "{spec.name}" ({quoted})')
         connection.commit()
+        # SQLite checks that every foreign key points to an existing parent row.
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
             raise ValueError(
@@ -157,6 +166,7 @@ def build_database(tables: dict[str, pd.DataFrame], path: str | Path) -> dict[st
         }
     finally:
         connection.close()
+    # Atomic swap: the new file replaces the old one in a single step.
     os.replace(temporary, path)
     return counts
 
@@ -168,6 +178,7 @@ def connect(path: str | Path, read_only: bool = True) -> sqlite3.Connection:
         raise FileNotFoundError(
             f"No database at {path}. Run scripts/build_database.py."
         )
+    # Read-only mode (?mode=ro): the agents can never change the history by mistake.
     if read_only:
         connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     else:

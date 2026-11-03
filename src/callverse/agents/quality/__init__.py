@@ -1,5 +1,6 @@
 """Quality analyst agent: scorecard, LLM judge (and checklist backup), judge calibration."""
 
+# Re-export the reviewer, the scorecard and the agreement helpers.
 from callverse.agents.quality.reviewer import QualityReviewer
 from callverse.agents.quality.rubric import CRITERIA, Scorecard, rubric
 from callverse.agents.quality.validation import agreement, load_human_labels, save_human_label

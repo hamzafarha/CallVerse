@@ -1,4 +1,6 @@
 """KPI engine statistics and judge-agreement metrics."""
+# Tests evaluation/business_kpis.py (statistics) and the Quality agent's rule-based reviewer and agreement
+# metrics.
 
 import numpy as np
 import pandas as pd
@@ -10,12 +12,14 @@ from callverse.evaluation.business_kpis import mean_ci, paired_difference, summa
 
 
 def test_mean_ci_contains_mean():
+    """The 95% confidence interval contains the mean."""
     stats = mean_ci(pd.Series([1.0, 2.0, 3.0, 4.0]))
     assert stats["mean"] == 2.5
     assert stats["ci_low"] < 2.5 < stats["ci_high"]
 
 
 def test_paired_difference_detects_a_real_gain():
+    """The paired difference finds a real improvement (its confidence interval excludes 0)."""
     runs = pd.DataFrame(
         {
             "router": ["fifo"] * 5 + ["ppo"] * 5,
@@ -29,12 +33,14 @@ def test_paired_difference_detects_a_real_gain():
 
 
 def test_summarize_runs_long_table():
+    """Run results are summarised into a long table (one row per KPI)."""
     runs = pd.DataFrame({"plan": ["a", "a", "b", "b"], "service_level": [0.8, 0.9, 0.7, 0.75]})
     table = summarize_runs(runs, ["plan"], ["service_level"])
     assert list(table["plan"]) == ["a", "b"]
 
 
 def test_quadratic_kappa_perfect_and_chance():
+    """Quadratic kappa is 1 for perfect agreement and close to 0 for chance."""
     perfect = agreement(pd.Series([1, 2, 3, 4, 5]), pd.Series([1, 2, 3, 4, 5]))
     assert perfect["quadratic_kappa"] == pytest.approx(1.0)
     rng = np.random.default_rng(0)
@@ -43,6 +49,7 @@ def test_quadratic_kappa_perfect_and_chance():
 
 
 def test_rule_reviewer_rewards_a_compliant_answer():
+    """The rule-based reviewer gives a compliant answer a good score."""
     messages = [
         {"speaker": "customer", "text": "where is my order"},
         {"speaker": "advisor", "text": "Could you give me your order number and e-mail?"},

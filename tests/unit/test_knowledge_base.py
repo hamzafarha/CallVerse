@@ -1,4 +1,6 @@
 """Unit tests for the advisor knowledge base (indexing and retrieval)."""
+# Tests the knowledge base of agents/advisor/ (parsing, chunking, indexing, search) with a tiny fake embedder,
+# so no bge-m3 download is needed.
 
 import re
 from pathlib import Path
@@ -62,12 +64,14 @@ class WordHashEmbedder:
 
 
 def order_linked_intents() -> set[str]:
+    """The 17 order-linked intents listed in configs/data.yaml."""
     with open(PROJECT_ROOT / "configs" / "data.yaml", encoding="utf-8") as file:
         groups = yaml.safe_load(file)["generation"]["contacts"]["intent_groups"]
     return {intent for intents in groups.values() for intent in intents}
 
 
 def make_config(tmp_path: Path, docs_dir: Path) -> KnowledgeBaseConfig:
+    """Knowledge-base settings for a temporary folder and the fake embedder."""
     return KnowledgeBaseConfig(
         docs_dir=docs_dir,
         index_dir=tmp_path / "index",
@@ -82,6 +86,7 @@ def make_config(tmp_path: Path, docs_dir: Path) -> KnowledgeBaseConfig:
 
 
 def test_parse_document_reads_front_matter() -> None:
+    """A document's YAML front matter (title, intents...) is read."""
     meta, body = parse_document(DOC)
     assert meta.doc_id == "test_doc"
     assert meta.intents == ["cancel_order"]
@@ -89,6 +94,7 @@ def test_parse_document_reads_front_matter() -> None:
 
 
 def test_parse_document_rejects_bad_documents() -> None:
+    """A document without valid front matter is rejected."""
     with pytest.raises(ValueError, match="front matter"):
         parse_document("# No front matter\n")
     with pytest.raises(ValidationError):
@@ -96,6 +102,7 @@ def test_parse_document_rejects_bad_documents() -> None:
 
 
 def test_chunk_document_one_chunk_per_section_with_intent_override() -> None:
+    """One chunk per "##" section; a section can override the document's intents."""
     meta, body = parse_document(DOC)
     chunks = chunk_document(meta, body, max_chars=1500)
     assert [c.section for c in chunks] == ["Cancel before shipping", "Refund timing"]
@@ -106,6 +113,7 @@ def test_chunk_document_one_chunk_per_section_with_intent_override() -> None:
 
 
 def test_long_sections_are_split_on_paragraphs() -> None:
+    """Long sections are split on paragraph breaks."""
     meta, _ = parse_document(DOC)
     paragraphs = "\n\n".join(f"Paragraph {i} " + "word " * 40 for i in range(5))
     chunks = chunk_document(meta, f"## Long\n\n{paragraphs}\n", max_chars=500)
@@ -116,6 +124,7 @@ def test_long_sections_are_split_on_paragraphs() -> None:
 
 
 def test_real_documents_cover_every_order_linked_intent() -> None:
+    """The real knowledge base covers every order-linked intent."""
     intents = order_linked_intents()
     chunks = load_chunks(DOCS_DIR, max_chars=1500, allowed_intents=intents)
     covered = {intent for chunk in chunks for intent in chunk.intents}
@@ -124,6 +133,7 @@ def test_real_documents_cover_every_order_linked_intent() -> None:
 
 
 def test_unknown_intent_is_rejected(tmp_path: Path) -> None:
+    """A document that names an unknown intent is rejected."""
     (tmp_path / "doc.md").write_text(
         DOC.replace("cancel_order", "cancel_ordr"), encoding="utf-8"
     )
@@ -132,6 +142,7 @@ def test_unknown_intent_is_rejected(tmp_path: Path) -> None:
 
 
 def test_search_ranks_matching_section_first(tmp_path: Path) -> None:
+    """A search returns the matching section first."""
     pytest.importorskip("faiss")
     (tmp_path / "doc.md").write_text(DOC, encoding="utf-8")
     chunks = load_chunks(tmp_path, max_chars=1500)
@@ -148,6 +159,7 @@ def test_search_ranks_matching_section_first(tmp_path: Path) -> None:
 
 
 def test_saved_index_round_trip_and_staleness_check(tmp_path: Path) -> None:
+    """A saved index loads back the same, and is flagged as stale when a document changes."""
     pytest.importorskip("faiss")
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()

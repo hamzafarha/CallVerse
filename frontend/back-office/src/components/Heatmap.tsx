@@ -1,5 +1,6 @@
 import { DAYS } from "@callverse/shared";
 
+// Five shades of one color, light to dark (a sequential scale: darker = more agents).
 const STEPS = ["var(--seq-100)", "var(--seq-250)", "var(--seq-400)", "var(--seq-550)", "var(--seq-700)"];
 
 /** Day x hour grid of a staffing plan (sequential one-hue ramp, value printed in each cell). */
@@ -14,8 +15,10 @@ export function StaffingHeatmap({
   open?: number[];
   highlight?: (row: any) => boolean;
 }) {
+  // Columns = opening hours (08:00 to 22:00), rows = days.
   const hours = Array.from({ length: open[1] - open[0] }, (_, i) => open[0] + i);
   const days = Array.from(new Set(rows.map((r) => r.day))).sort((a, b) => a - b);
+  // The largest value during opening hours gets the darkest shade.
   const max = Math.max(1, ...rows.filter((r) => r.hour >= open[0] && r.hour < open[1]).map(value));
   const cell = (day: number, hour: number) => rows.find((r) => r.day === day && r.hour === hour);
   return (
@@ -38,6 +41,7 @@ export function StaffingHeatmap({
               {hours.map((hour) => {
                 const row = cell(day, hour);
                 const v = row ? value(row) : 0;
+                // Which of the 5 shades this value gets (0 = lightest).
                 const step = Math.min(STEPS.length - 1, Math.floor((v / max) * (STEPS.length - 1) + 0.0001));
                 return (
                   <td

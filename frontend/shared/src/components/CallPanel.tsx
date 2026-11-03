@@ -1,3 +1,7 @@
+/**
+ * The "On call" band shown in voice mode: the two participants face each other, with a call timer and a sound
+ * wave in the middle. Their faces react live (speaking, thinking, typing, listening).
+ */
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { clock } from "../lib/format";
@@ -5,6 +9,9 @@ import type { Voice } from "../lib/voice";
 import { TalkingAvatar, type AvatarState } from "./TalkingAvatar";
 import { clsx } from "./ui";
 
+/**
+ * One side of the call: an AI agent or a person, with a name, a subtitle and what they are doing.
+ */
 export interface CallParticipant {
   kind: "agent" | "person";
   name: string;
@@ -15,6 +22,7 @@ export interface CallParticipant {
   note?: string; // replaces the state label, e.g. "copilot drafting…"
 }
 
+// Text under the name for each state.
 const STATE_LABEL: Record<AvatarState, string> = {
   speaking: "speaking…",
   thinking: "thinking…",
@@ -38,11 +46,13 @@ export function CallPanel({
   compact?: boolean; // slim band (advisor desk), so the conversation keeps the room
 }) {
   const [now, setNow] = useState(() => Date.now());
+  // Re-render every second so the call timer moves.
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
   const seconds = startedAt ? Math.max(0, (now - startedAt) / 1000) : 0;
+  // Who is speaking now (if anyone).
   const talker = left.state === "speaking" ? left : right.state === "speaking" ? right : null;
   return (
     <motion.div
@@ -52,11 +62,13 @@ export function CallPanel({
       className="overflow-hidden border-b border-line bg-raised/40"
     >
       <div className={clsx("flex items-center justify-between gap-3 px-4 sm:px-6", compact ? "py-1.5" : "py-3")}>
+        {/* The left participant looks right and the right one looks left: they face each other. */}
         <Participant p={left} voice={voice} lookAt="right" compact={compact} />
         <div className={clsx("flex shrink-0 items-center text-[11px] text-muted", compact ? "gap-2" : "flex-col gap-1.5")}>
           <span className="inline-flex items-center gap-1.5 font-semibold text-ink">
             <span className="live-dot" /> On call · <span className="tabular">{clock(seconds)}</span>
           </span>
+          {/* The bars move while someone speaks. */}
           <Wave active={!!talker} />
           {!compact && <span className="max-w-[150px] truncate">{talker ? `${talker.name} is speaking` : "voice mode"}</span>}
         </div>
@@ -66,6 +78,9 @@ export function CallPanel({
   );
 }
 
+/**
+ * One participant: animated face (with a pulsing ring while speaking), name, subtitle and status.
+ */
 function Participant({ p, voice, lookAt, compact = false }: { p: CallParticipant; voice: Voice; lookAt: "left" | "right"; compact?: boolean }) {
   const speaking = p.state === "speaking";
   const status = p.note ?? STATE_LABEL[p.state];
@@ -108,6 +123,9 @@ function Participant({ p, voice, lookAt, compact = false }: { p: CallParticipant
   );
 }
 
+/**
+ * Five small bars that bounce like a sound wave while someone speaks.
+ */
 function Wave({ active }: { active: boolean }) {
   return (
     <div className="flex h-5 items-center gap-[3px]" aria-hidden>

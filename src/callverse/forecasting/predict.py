@@ -15,6 +15,7 @@ from callverse.forecasting.features import (
     contact_series,
 )
 
+# Files written to artifacts/forecasts/.
 BACKTEST_FILE = "contact_forecast_backtest_predictions.parquet"
 METRICS_FILE = "contact_forecast_backtest_metrics.csv"
 MODEL_FILE = "lightgbm_contact_forecast.txt"
@@ -52,11 +53,14 @@ def weekly_forecast(
     first 7 are taken from the next origin, so each day is still forecast 1-7 days
     ahead.
     """
+    # The twin uses OUT-OF-SAMPLE forecasts: each day as it was forecast from the Sunday before (the model
+    # never saw that day when it made the forecast).
     backtest = load_backtest(forecast_dir)
     rows = backtest[(backtest["model"] == model) & (backtest["intent_group"] != "total")]
     wanted = pd.date_range(week_start, periods=days)
     picked = []
     for day in wanted:
+        # The Sunday before the day (or one week earlier when the day itself is a Sunday).
         origin = day - pd.Timedelta(days=((day.dayofweek + 1) % 7) or 7)
         part = rows[(rows["date"] == day) & (rows["origin"] == origin)]
         if part.empty:
@@ -68,6 +72,7 @@ def weekly_forecast(
 
 def forecast_next_week(inputs: ForecastInputs, origin: pd.Timestamp = EVAL_END) -> pd.DataFrame:
     """Train on all history up to ``origin`` and forecast the 7 following days."""
+    # Extend the series with 7 empty future days; their lag features still come from known days.
     series = contact_series(inputs.daily_group, end=origin)
     future_days = pd.date_range(origin + pd.Timedelta(days=1), periods=HORIZON)
     extended = series.reindex(series.index.append(future_days))

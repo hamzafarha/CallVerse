@@ -18,6 +18,7 @@ from typing import Any
 
 import pandas as pd
 
+# The four kinds of files and their labels (shown on the attachment card).
 EVIDENCE_KINDS = {
     "product_photo": "Photo of the product",
     "packaging_photo": "Photo of the packaging",
@@ -37,19 +38,23 @@ DEFECT = ["it does not switch on", "a part is missing from the box", "it stopped
 
 
 def _variant(contact_id: str, options: list[str], salt: str) -> str:
+    """Pick one option from a list, always the same for a given customer (a hash of its id)."""
     digest = int(hashlib.sha256(f"{salt}:{contact_id}".encode()).hexdigest(), 16)
     return options[digest % len(options)]
 
 
 def _day(value: Any) -> str | None:
+    """A date as YYYY-MM-DD text, or None."""
     return None if value is None or pd.isna(value) else pd.Timestamp(value).strftime("%Y-%m-%d")
 
 
 def _known(value: Any) -> bool:
+    """True when a value exists (not None, not NaN)."""
     return value is not None and not pd.isna(value)
 
 
 def _reached(value: Any, as_of: pd.Timestamp) -> bool:
+    """True when a date exists and is on or before the chat date (it has already happened)."""
     return value is not None and not pd.isna(value) and pd.Timestamp(value) <= as_of
 
 
@@ -58,8 +63,10 @@ def make_evidence(kind: str, profile: Any) -> dict[str, Any]:
     cannot exist yet (the tool result either way)."""
     from callverse.agents.advisor.tools import AdvisorTools
 
+    # Validation 1: an unknown kind is refused.
     if kind not in EVIDENCE_KINDS:
         return {"error": f"unknown kind {kind!r}; use one of {', '.join(EVIDENCE_KINDS)}"}
+    # The order record as of the chat date (the twin replays history).
     as_of = pd.Timestamp(profile.contact_timestamp)
     facts = AdvisorTools(as_of=as_of).order_facts(profile.order_id, profile.intent)
     if facts is None:
@@ -69,9 +76,11 @@ def make_evidence(kind: str, profile: Any) -> dict[str, Any]:
     delivered = _reached(facts.get("order_delivered_customer_date"), as_of)
     cid = profile.contact_id
 
+    # Validation 2: no photo of a parcel that has not arrived yet.
     if kind in {"product_photo", "packaging_photo"} and not delivered:
         return {"error": "you have not received the parcel yet, so there is nothing to photograph"}
     if kind == "product_photo":
+        # The photo shows the customer's TRUE problem (its real intent), even if the advisor misunderstood it.
         items = int(facts["item_count"]) if _known(facts.get("item_count")) else 1
         description = {
             "damaged_delivery": f"the {product} is {_variant(cid, DAMAGE, 'damage')}",
@@ -90,6 +99,7 @@ def make_evidence(kind: str, profile: Any) -> dict[str, Any]:
             else "the box is intact"
         )
     elif kind == "shipping_label_photo":
+        # Validation 3: no shipping label before the order was shipped.
         if not _reached(facts.get("order_delivered_carrier_date"), as_of):
             return {"error": "the order has not been shipped yet, so there is no shipping label"}
         description = (
@@ -98,12 +108,15 @@ def make_evidence(kind: str, profile: Any) -> dict[str, Any]:
             f"{str(facts.get('customer_city', '')).title()}/{facts.get('customer_state', '')}"
         )
     else:  # payment_statement
+        # Validation 4: no statement line before the payment was taken.
         if not _reached(facts.get("order_approved_at"), as_of):
             return {"error": "no payment has been taken yet, so there is no statement line"}
         total = float(facts["payment_total"]) if _known(facts.get("payment_total")) else 0.0
         payment = str(facts.get("primary_payment_type") or "")
         installments = int(facts["max_installments"]) if _known(facts.get("max_installments")) else 1
         paid_on = _day(facts["order_approved_at"])
+        # What the statement shows depends on how the customer paid: boleto (a Brazilian bank slip), card in
+        # installments (one installment a month), or card in one go.
         if payment == "boleto":
             description = f"boleto of R$ {total:.2f} paid on {paid_on}"
         elif installments > 1:
@@ -116,6 +129,7 @@ def make_evidence(kind: str, profile: Any) -> dict[str, Any]:
         if _known(facts.get("uses_voucher")) and bool(facts["uses_voucher"]):
             description += ", part of the order paid with a voucher"
 
+    # A stable fake file name (IMG_1234.jpg), the same for the same customer and kind.
     digest = int(hashlib.sha256(f"{kind}:{cid}".encode()).hexdigest(), 16)
     prefix, extension = ("Screenshot", "png") if kind == "payment_statement" else ("IMG", "jpg")
     return {
@@ -134,6 +148,7 @@ def send_files(kinds: Any, profile: Any, sent: set[str]) -> dict[str, Any]:
         kinds = [kinds]
     attached: list[dict[str, Any]] = []
     refused: list[dict[str, str]] = []
+    # dict.fromkeys keeps the order and removes duplicates.
     for kind in dict.fromkeys(str(k) for k in kinds or []):  # each kind once, in order
         if kind in sent:
             refused.append({"kind": kind, "error": f"you already sent your {EVIDENCE_KINDS[kind].lower()}"})
@@ -152,6 +167,8 @@ def attachments_text(message: dict[str, Any]) -> str:
     """The message as the other side sees it: its text, then one line per attachment."""
     text = str(message.get("text", ""))
     files = (message.get("meta") or {}).get("attachments") or []
+    # Example: "[Attached photo of the product (IMG_8829.jpg): the furniture decor is broken into two
+    # pieces]".
     lines = [f"[Attached {f['label'].lower()} ({f['file']}): {f['description']}]" for f in files]
     return "\n".join([text, *lines]) if lines else text
 
@@ -160,6 +177,7 @@ def summarize_evidence(result: dict[str, Any]) -> str:
     """One line for the UI."""
     parts = []
     if result.get("attached"):
+        # For example "sent 3 files (product, packaging, shipping label)".
         names = ", ".join(f["label"].lower().replace("photo of the ", "") for f in result["attached"])
         count = len(result["attached"])
         parts.append(f"sent {count} file{'s' if count > 1 else ''} ({names})")

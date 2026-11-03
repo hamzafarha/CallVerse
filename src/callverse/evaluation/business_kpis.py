@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+# Each business objective (BO), its data-science objective (DSO), and its KPIs with the good direction
+# ("lower" or "higher").
 BO_KPIS: dict[str, dict[str, Any]] = {
     "BO1": {
         "title": "Reduce customer waiting time",
@@ -59,6 +61,7 @@ BO_KPIS: dict[str, dict[str, Any]] = {
     },
 }
 
+# Readable names for the dashboard.
 KPI_LABELS = {
     "mean_wait_seconds": "Average wait, all live customers (s)",
     "asa_seconds": "Average speed of answer (ASA, s)",
@@ -82,6 +85,8 @@ KPI_LABELS = {
 
 def mean_ci(values: pd.Series, confidence: float = 0.95) -> dict[str, float]:
     """Mean and t-based confidence interval of a series of replications."""
+    # Confidence interval: mean +/- t x standard deviation / sqrt(n). With few seeds the interval is wide; a
+    # difference only counts when its interval excludes 0.
     values = pd.to_numeric(values, errors="coerce").dropna()
     n = len(values)
     mean = float(values.mean()) if n else float("nan")
@@ -113,6 +118,8 @@ def paired_difference(
     runs: pd.DataFrame, by: str, baseline: str, kpis: list[str], pair_on: list[str]
 ) -> pd.DataFrame:
     """Difference of each option vs a baseline, paired on the same seeds (95% CI)."""
+    # Paired comparison: for the same seed, option minus baseline. Pairing removes the noise of the random
+    # customers, so smaller real differences become visible.
     base = runs[runs[by] == baseline].set_index(pair_on)
     rows = []
     for option in runs[by].unique():
@@ -135,6 +142,7 @@ def paired_difference(
                     "ci_low": stats_row["ci_low"],
                     "ci_high": stats_row["ci_high"],
                     "relative_percent": stats_row["mean"] / base_mean * 100 if base_mean else np.nan,
+                    # significant: the whole interval is above 0, or below 0.
                     "significant": bool(stats_row["ci_low"] > 0 or stats_row["ci_high"] < 0),
                 }
             )

@@ -1,5 +1,8 @@
 """Knowledge retrieval engine over contact center documentation."""
 
+# Two retrievers with the same interface (search, search_many):
+# - KnowledgeRetriever: semantic search with bge-m3 vectors + FAISS (the main one);
+# - KeywordRetriever: TF-IDF keyword search (the baseline, and the offline fallback).
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +43,7 @@ class KnowledgeRetriever:
         top_k: int = 4,
         min_score: float = 0.0,
     ) -> None:
+        # Sanity check: one vector per chunk.
         if index.ntotal != len(chunks):
             raise ValueError("Index size does not match the number of chunks.")
         self.chunks = chunks
@@ -63,6 +67,7 @@ class KnowledgeRetriever:
             raise FileNotFoundError(f"No index in {index_dir}. Run scripts/build_knowledge_base.py first.")
         with open(index_dir / MANIFEST_FILE, encoding="utf-8") as manifest_file:
             manifest = json.load(manifest_file)
+        # Refuse an index built with another model, or older than the documents: it would give wrong results.
         if manifest["embedding_model"] != config.embedding_model:
             raise ValueError(
                 f"Index was built with {manifest['embedding_model']}, "
@@ -77,6 +82,7 @@ class KnowledgeRetriever:
                 config.max_seq_length,
                 config.embedding_device,
             )
+        # Load the chunks and the FAISS index from disk.
         rows = pd.read_parquet(index_dir / CHUNKS_FILE).to_dict("records")
         chunks = [Chunk(**{**row, "intents": list(row["intents"])}) for row in rows]
         index = faiss.read_index(str(index_dir / INDEX_FILE))
@@ -94,15 +100,18 @@ class KnowledgeRetriever:
     ) -> list[list[RetrievedChunk]]:
         """Best chunks for each query; queries are embedded in one batch."""
         top_k = top_k or self.top_k
+        # Turn the queries into vectors with the same model as the chunks.
         vectors = np.ascontiguousarray(self.embedder.encode(queries), dtype=np.float32)
         # With an intent filter, rank every chunk and keep the matching ones;
         # the corpus is small, so this costs nothing.
         depth = self.index.ntotal if intent else min(top_k, self.index.ntotal)
+        # For each query FAISS returns the best scores and the positions of the matching chunks.
         scores, positions = self.index.search(vectors, depth)
         results = []
         for query_scores, query_positions in zip(scores, positions):
             hits: list[RetrievedChunk] = []
             for score, position in zip(query_scores, query_positions):
+                # Skip empty slots (-1) and weak matches below min_score.
                 if position < 0 or score < self.min_score:
                     continue
                 chunk = self.chunks[position]
@@ -128,6 +137,7 @@ class KeywordRetriever:
 
         self.chunks = chunks
         self.top_k = top_k
+        # TF-IDF: a word counts more when it is frequent in this chunk but rare in the other chunks.
         self.vectorizer = TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True, stop_words="english")
         self.matrix = self.vectorizer.fit_transform([c.embedding_text() for c in chunks])
 
@@ -145,12 +155,14 @@ class KeywordRetriever:
         return cls(chunks, config.top_k)
 
     def search(self, query: str, top_k: int | None = None, intent: str | None = None) -> list[RetrievedChunk]:
+        """Best chunks for one query (the same interface as KnowledgeRetriever)."""
         return self.search_many([query], top_k, intent)[0]
 
     def search_many(
         self, queries: list[str], top_k: int | None = None, intent: str | None = None
     ) -> list[list[RetrievedChunk]]:
         top_k = top_k or self.top_k
+        # Score = TF-IDF similarity between each query and each chunk, then the best first.
         scores = (self.vectorizer.transform(queries) @ self.matrix.T).toarray()
         results = []
         for row in scores:

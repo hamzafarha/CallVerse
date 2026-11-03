@@ -11,10 +11,17 @@ import QualityPage from "./pages/Quality";
 import TwinPage from "./pages/Twin";
 import WorkforcePage from "./pages/Workforce";
 
+/**
+ * The pages of the back office (control room), one per URL path, inside the Layout (sidebar + top bar). The
+ * sections follow the project's layers: data, simulation and forecasting, agents, evaluation, serving and
+ * MLOps.
+ */
 export default function App() {
   const location = useLocation();
   return (
     <Layout>
+      {/* mode="wait": the old page fades out before the new one comes in. A crash in one page shows an
+         error box; changing page resets it. */}
       <AnimatePresence mode="wait">
         <PageTransition id={location.pathname} key={location.pathname}>
           <ErrorBoundary resetKey={location.pathname}>

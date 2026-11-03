@@ -12,6 +12,9 @@ import pandas as pd
 
 from callverse.forecasting.features import TRAIN_START, FeatureSet
 
+# LightGBM settings: Poisson objective (contacts are counts), 400 small trees learned slowly (learning_rate
+# 0.05), random subsets of rows and columns against overfitting (subsample, colsample), and a fixed seed +
+# deterministic mode for reproducible results.
 LIGHTGBM_PARAMS = {
     "objective": "poisson",
     "learning_rate": 0.05,
@@ -33,9 +36,11 @@ def fit_lightgbm(feature_set: FeatureSet, train_end: pd.Timestamp, train_start: 
     import lightgbm as lgb
 
     panel = feature_set.panel
+    # Training rows: from the first day with every lag feature up to the origin (never after).
     train = panel[(panel["date"] >= train_start) & (panel["date"] <= train_end)]
     train = train[train["contacts"].notna()]
     model = lgb.LGBMRegressor(**LIGHTGBM_PARAMS)
+    # group_code tells the single model which of the 4 problem groups a row belongs to.
     model.fit(train[feature_set.features], train["contacts"], categorical_feature=["group_code"])
     return model
 
@@ -43,6 +48,7 @@ def fit_lightgbm(feature_set: FeatureSet, train_end: pd.Timestamp, train_start: 
 def predict_days(model, feature_set: FeatureSet, days: pd.DatetimeIndex) -> pd.DataFrame:
     """Forecast every group for the given days (columns date, intent_group, forecast)."""
     rows = feature_set.panel[feature_set.panel["date"].isin(days)]
+    # Lags are at least 7 days old, so at most 7 days ahead can be forecast.
     if rows[feature_set.features].isna().any().any():
         raise ValueError("Missing feature values: the days are too far ahead (max 7).")
     result = rows[["date", "intent_group"]].copy()
@@ -52,6 +58,7 @@ def predict_days(model, feature_set: FeatureSet, days: pd.DatetimeIndex) -> pd.D
 
 def feature_importance(model, features: list[str]) -> pd.DataFrame:
     """Share of total gain per feature (%), largest first."""
+    # Gain = how much each feature reduced the error inside the trees.
     gain = pd.Series(model.booster_.feature_importance(importance_type="gain"), index=features)
     share = (gain / gain.sum() * 100).sort_values(ascending=False).round(2)
     return share.rename("gain_percent").rename_axis("feature").reset_index()

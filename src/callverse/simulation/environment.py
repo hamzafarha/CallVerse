@@ -1,5 +1,7 @@
 """SimPy simulation environment and execution coordinator."""
 
+# Version 1 of the simulator (one FIFO queue, identical agents). Kept as a reference: the engine (version 2)
+# reproduces it with every skill at 1.0 and FIFO routing.
 from collections.abc import Generator
 from typing import Any
 
@@ -15,6 +17,7 @@ def _arrival_process(
 ) -> Generator[Any, Any, None]:
     """Release each contact into the FIFO queue at its arrival time."""
     for contact in contacts:
+        # Wait until the arrival time, put the customer in the queue, and start its patience timer.
         yield env.timeout(contact.arrival - env.now)
         queue.put(contact)
         if contact.abandon_at is not None:
@@ -48,6 +51,7 @@ def _agent_process(
             yield env.timeout(next_boundary - env.now)
             continue
 
+        # Wait for a customer OR the end of the hour, whichever comes first.
         request = queue.get()
         yield request | env.timeout(next_boundary - env.now)
         if not request.triggered:
@@ -74,6 +78,7 @@ def run_simulation(contacts: list[Contact], staffing: np.ndarray) -> pd.DataFram
         contact.start, contact.end, contact.abandoned = None, None, False
 
     env = simpy.Environment()
+    # simpy.Store = a FIFO queue.
     queue = simpy.Store(env)
     env.process(_arrival_process(env, contacts, queue))
     for agent_index in range(int(staffing.max(initial=0))):

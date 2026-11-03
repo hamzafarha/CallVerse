@@ -1,4 +1,5 @@
 """Forecast features (no leakage), metrics and the rolling backtest."""
+# Tests forecasting/ (features, metrics, baselines, rolling backtest) on a synthetic series.
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ from callverse.forecasting.baselines import seasonal_naive, weekday_mean_4w
 
 @pytest.fixture
 def series() -> pd.DataFrame:
+    """Six months of Poisson daily contacts for two groups, busier on Mondays and Tuesdays."""
     rng = np.random.default_rng(0)
     days = pd.date_range("2017-01-01", "2017-06-30")
     weekly = 1 + 0.4 * (days.dayofweek < 2)
@@ -20,6 +22,7 @@ def series() -> pd.DataFrame:
 
 @pytest.fixture
 def date_features(series) -> pd.DataFrame:
+    """Calendar features: day of the week and a weekend flag."""
     features = pd.DataFrame(index=series.index)
     features["day_of_week"] = series.index.dayofweek
     features["is_weekend"] = (series.index.dayofweek >= 5).astype(int)
@@ -27,6 +30,7 @@ def date_features(series) -> pd.DataFrame:
 
 
 def test_lag_features_are_at_least_seven_days_old(series, date_features):
+    """Lag features only use values at least 7 days old, so a 7-day-ahead forecast never sees the future."""
     fs = build_panel(series, date_features)
     row = fs.panel[(fs.panel["intent_group"] == "wismo") & (fs.panel["date"] == "2017-03-15")]
     assert row["lag_7"].iloc[0] == series.loc["2017-03-08", "wismo"]
@@ -34,6 +38,7 @@ def test_lag_features_are_at_least_seven_days_old(series, date_features):
 
 
 def test_accuracy_metrics():
+    """wMAPE and the other error metrics give the expected values on a small example."""
     table = pd.DataFrame({"forecast": [10.0, 12.0, 8.0], "actual": [10.0, 10.0, 10.0]})
     metrics = accuracy(table)
     assert metrics["wMAPE_percent"] == pytest.approx(4 / 30 * 100)
@@ -42,6 +47,7 @@ def test_accuracy_metrics():
 
 
 def test_baselines_use_only_the_past(series):
+    """The baselines (same day last week, 4-week weekday mean) use only past values."""
     origin = pd.Timestamp("2017-05-07")
     naive = seasonal_naive(series, origin, "wismo")
     assert list(naive) == list(series.loc["2017-05-01":"2017-05-07", "wismo"])

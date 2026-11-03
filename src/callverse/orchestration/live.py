@@ -12,6 +12,10 @@ When the chat ends, the Quality agent grades it and the KPI row is computed with
 the same helpers as the automatic graph, so live chats count like simulated ones.
 """
 
+# How it works: the browser opens a WebSocket (api/app.py) and sends messages such as {"type":
+# "advisor_message", "text": ...}. handle() sends each message to a step; each step calls the agents and
+# reports progress with emit(kind, data), which the server sends back to the browser as JSON events (message,
+# token, stage, routing, suggestion, review, done).
 from collections.abc import Callable
 from typing import Any
 
@@ -28,6 +32,7 @@ from callverse.orchestration.graph import (
     save_transcript,
 )
 
+# Emit = the callback that sends one event to the browser.
 Emit = Callable[[str, dict[str, Any]], None]
 SIDES = {"customer": ("human", "agent"), "advisor": ("human", "agent")}
 
@@ -50,6 +55,7 @@ class LiveSession:
             raise ValueError("customer and advisor must be 'human' or 'agent'")
         if customer == "human" and advisor == "human":
             raise ValueError("at least one side must be an agent")
+        # The same agents as an automatic run (make_session).
         self.session = make_session(profile, mode, seed, variant=variant)
         self.emit = emit
         self.customer, self.advisor = customer, advisor
@@ -67,12 +73,14 @@ class LiveSession:
         return self.session.profile
 
     def _add(self, speaker: str, text: str, meta: dict[str, Any]) -> dict[str, Any]:
+        # Add a message to the transcript and tell the browser about it.
         message = {"speaker": speaker, "text": text, "meta": meta}
         self.messages.append(message)
         self.emit("message", {"message": message, "index": len(self.messages) - 1})
         return message
 
     def _customer_turns(self) -> int:
+        """How many messages the customer wrote so far."""
         return sum(m["speaker"] == "customer" for m in self.messages)
 
     def _run_advisor(self, kind: str) -> Any:
@@ -82,6 +90,7 @@ class LiveSession:
             self.messages,
             self.session.memory,
             self.session.tools,
+            # Stream every generated word to the browser (live typing) and every pipeline step ("stage").
             on_token=lambda text: self.emit("token", {"text": text, "kind": kind}),
             on_event=lambda step, data: self.emit(
                 "stage", {"agent": "advisor", "step": step, "kind": kind, **data}
@@ -97,6 +106,8 @@ class LiveSession:
             self._after_customer()
 
     def _after_customer(self) -> None:
+        # First customer message: the Workforce agent routes the chat, and the customer's chat timer gets its
+        # queue wait (the desk's queue card, or the twin's Erlang C wait).
         if self.routing is None:
             self.emit("stage", {"agent": "workforce", "step": "routing"})
             self.routing = route_contact(self.session, self.messages[0]["text"])
@@ -107,15 +118,19 @@ class LiveSession:
             )
             self.emit("routing", {"routing": self.routing})
         self.draft = None
+        # Autopilot: the Advisor agent answers alone. Otherwise it drafts a suggestion for the human advisor
+        # (the copilot).
         if self.advisor == "agent":
             self.advisor_turn()
         else:
             self.suggest()
 
     def advisor_turn(self) -> None:
+        """The Advisor agent answers (autopilot, or the customer portal)."""
         self._commit_advisor(advisor_message(self._run_advisor("reply")))
 
     def _commit_advisor(self, message: dict[str, Any]) -> None:
+        # Save the advisor's message; if the customer is the Client agent, it answers next.
         self.messages.append(message)
         self.emit("message", {"message": message, "index": len(self.messages) - 1})
         self.emit("advisor_state", {"advisor": advisor_state(self.session)})
@@ -129,6 +144,8 @@ class LiveSession:
         self.emit("suggestion", {"message": self.draft, "advisor": advisor_state(self.session)})
 
     def human_advisor(self, text: str) -> None:
+        # A human advisor sent a message: record whether it sent the copilot draft as is, edited it, or wrote
+        # its own (for the "human + AI" analysis).
         draft = self.draft or {"text": "", "meta": {}}
         meta = {
             "mode": "human",
@@ -143,6 +160,7 @@ class LiveSession:
             self.customer_turn()
 
     def human_customer(self, text: str) -> None:
+        """A human customer wrote (customer portal)."""
         self._add("customer", text.strip(), {"mode": "human"})
         self._after_customer()
 
@@ -158,12 +176,14 @@ class LiveSession:
             clock=self.session.clock,
         )
         self._add("customer", turn.text, turn.meta())
+        # End when the customer leaves or after max_turns; otherwise the advisor's turn again.
         if turn.end or turns + 1 > self.session.max_turns:
             self.finish(turn.csat)
         else:
             self._after_customer()
 
     def set_autopilot(self, on: bool) -> None:
+        """Switch autopilot on or off in the middle of a chat."""
         self.advisor = "agent" if on else "human"
         waiting = self.messages and self.messages[-1]["speaker"] == "customer"
         if on and waiting and not self.finished:
@@ -183,6 +203,7 @@ class LiveSession:
             self.emit("done", {"reviewed": False})
             return
         self.emit("stage", {"agent": "quality", "step": "reviewing"})
+        # The same grading and KPIs as the automatic graph: live chats count like simulated ones.
         reference, card = review_conversation(self.session, self.messages)
         scorecard = card.to_dict()
         kpis = kpi_row(self.session, self.messages, self.routing or {}, scorecard, self.csat, reference)
@@ -206,6 +227,7 @@ class LiveSession:
     # ------------------------------------------------------------- dispatcher
     def handle(self, message: dict[str, Any]) -> None:
         """One message from the UI."""
+        # The message types the browser can send.
         kind = message.get("type")
         text = str(message.get("text", "")).strip()
         if self.finished:

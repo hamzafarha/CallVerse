@@ -1,8 +1,14 @@
+/**
+ * Forecast page (DSO4, part 1): how many contacts per day, 1 to 7 days ahead. It compares LightGBM (the main
+ * model) with baselines (same day last week, 4-week weekday mean, SARIMA, Prophet) over a rolling-origin
+ * backtest.
+ */
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, ChartTooltip, ErrorBox, Legend, Loading, PageHeader, Stat } from "@callverse/shared";
 import { useApi } from "@callverse/shared";
 import { GROUPS, GROUP_COLOR, GROUP_LABEL, MODEL_COLOR, num, signed } from "@callverse/shared";
 
+// The five models of the backtest, and their labels.
 const MODELS = ["lightgbm", "seasonal_naive", "weekday_mean_4w", "sarima", "prophet"];
 const MODEL_LABEL: Record<string, string> = {
   lightgbm: "LightGBM (main)",
@@ -17,10 +23,14 @@ export default function ForecastPage() {
   if (error) return <ErrorBox error={error} />;
   if (loading || !data) return <Loading />;
   const s = data.summary;
+  // Actual vs forecast per day (total of all groups), for the line chart.
   const series = data.total_series.map((r: any) => ({ ...r, date: String(r.date).slice(0, 10) }));
   const levels = ["total", ...GROUPS];
+  // wMAPE table: one row per level (total + each group), one column per model.
   const wmape: Record<string, any> = Object.fromEntries(s.wmape.map((r: any) => [r.intent_group, r]));
   const available = MODELS.filter((m) => wmape.total?.[m] !== undefined);
+  // Next week: reshape the rows (date, group, contacts) into one object per day with a key per group, for the
+  // stacked bars.
   const nextWeek = Object.values(
     data.next_week.reduce((acc: any, r: any) => {
       const day = String(r.date).slice(0, 10);
@@ -29,6 +39,7 @@ export default function ForecastPage() {
       return acc;
     }, {}),
   );
+  // Error by horizon: one object per horizon (D+1 ... D+7) with a key per model.
   const horizon = Object.values(
     data.by_horizon.reduce((acc: any, r: any) => {
       acc[r.horizon] = acc[r.horizon] ?? { horizon: `D+${r.horizon}` };
@@ -45,6 +56,8 @@ export default function ForecastPage() {
         subtitle="Daily contacts per problem type, forecast 1 to 7 days ahead. Rolling-origin backtest: every Sunday from Oct 2017 to Aug 2018, each model only sees the past. Features: lagged orders, deliveries, late deliveries, overdue backlog, promotions and holidays."
       />
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        {/* wMAPE = sum of |actual - forecast| / sum of actual, in %. The gain is the error reduction vs the
+           naive baseline. */}
         <Stat label="LightGBM wMAPE (total)" value={`${num(s.main_wmape, 1)}%`} hint="weighted mean absolute % error" />
         <Stat label="Naive baseline wMAPE" value={`${num(s.naive_wmape, 1)}%`} hint="same day last week" />
         <Stat label="Gain vs baseline" value={signed(-s.gain_vs_naive_percent, 1)} hint={s.beats_baseline ? "error reduced: main idea kept" : "does not beat baseline"} tone={s.beats_baseline ? "good" : "bad"} />
@@ -81,6 +94,7 @@ export default function ForecastPage() {
             <table className="data">
               <thead><tr><th>Level</th>{available.map((m) => <th key={m} className="text-right">{MODEL_LABEL[m].split(" (")[0]}</th>)}</tr></thead>
               <tbody>
+                {/* The best (lowest) error of each row is in bold. */}
                 {levels.filter((l) => wmape[l]).map((level) => {
                   const best = Math.min(...available.map((m) => wmape[level][m]));
                   return (

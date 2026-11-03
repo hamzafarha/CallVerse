@@ -1,5 +1,8 @@
 # CallVerse Data Generation and Preprocessing Configuration
 
+# Four parts: generation (how contacts, the promotion calendar and tickets are made), database (the SQLite
+# file), pipeline (the data notebooks run by `callverse data`) and validation (minimums of the data
+# contracts).
 generation:
   # Synthetic data volume, date ranges, and contact channel distributions
 

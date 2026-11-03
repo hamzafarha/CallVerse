@@ -14,6 +14,9 @@ Three planners, all driven by the forecast through the Erlang C requirement
 Each planner returns a ``SchedulePlan`` the twin can simulate and cost.
 """
 
+# Vocabulary: Erlang C = a classic queueing formula that gives the agents needed per hour for a service target
+# (80% of chats answered within 20 s). CP-SAT = Google OR-Tools' constraint solver: we describe variables,
+# rules and a cost, and it finds the cheapest plan that respects every rule.
 import math
 import time
 from dataclasses import dataclass, field
@@ -29,6 +32,8 @@ from callverse.config import load_yaml
 class SchedulingRules:
     """Labour rules and solver settings (``workforce.scheduling`` in agents.yaml)."""
 
+    # Labour rules (shift lengths, max days, max hours, rest), overtime limits, the penalty per missing agent-
+    # hour, and the solver settings.
     shift_lengths: tuple[int, ...]
     max_days_per_week: int
     max_regular_hours_per_week: int
@@ -85,10 +90,12 @@ class SchedulePlan:
 
     @property
     def days(self) -> int:
+        """Number of planned days."""
         return self.regular.shape[0]
 
     @property
     def headcount(self) -> int:
+        """How many different agents the plan uses."""
         if self.roster.empty:
             return int(self.regular.max(initial=0))
         return int(self.roster["agent_id"].nunique())
@@ -99,6 +106,7 @@ class SchedulePlan:
 
     def planned_cost(self, regular_hourly: float, overtime_multiplier: float) -> dict[str, float]:
         """Planned paid hours and cost (before simulation)."""
+        # Paid hours x hourly cost; overtime hours cost more (multiplier).
         regular_hours = float(self.regular.sum())
         overtime_hours = float(self.overtime.sum())
         return {
@@ -116,6 +124,7 @@ class SchedulePlan:
         Drain days repeat the first day's pattern (they only serve the backlog and
         are not costed).
         """
+        # One true/false row per agent: True when the agent works that hour. The simulator reads these.
         hours = (self.days + drain_days) * 24
         if not self.roster.empty:
             agents = sorted(self.roster["agent_id"].unique())
@@ -151,6 +160,7 @@ class SchedulePlan:
 
 
 def _open_hours(requirement: np.ndarray, open_hour: int, close_hour: int) -> list[int]:
+    """The opening hours, as a list."""
     return list(range(open_hour, close_hour))
 
 
@@ -163,6 +173,8 @@ def fixed_schedule(
     quantile and accepts some understaffed hours (sensitivity check).
     """
     quantile = rules.fixed_tuned_quantile if tuned else rules.fixed_quantile
+    # The level = a quantile of the hourly need: 1.0 = staff for the busiest hour all day long (expensive but
+    # safe).
     open_values = requirement[:, open_hour:close_hour].ravel()
     level = int(math.ceil(np.quantile(open_values, quantile)))
     regular = np.zeros_like(requirement)
@@ -186,6 +198,7 @@ def erlang_hourly_schedule(requirement: np.ndarray) -> SchedulePlan:
 
 def rule_schedule(requirement: np.ndarray, rules: SchedulingRules) -> SchedulePlan:
     """Backup: Erlang C + morning/afternoon templates; overtime by queue rule in the twin."""
+    # Two fixed shifts per day (morning and afternoon), each sized for its busiest hour.
     (m_start, m_end), (a_start, a_end) = rules.rule_templates["morning"], rules.rule_templates["afternoon"]
     regular = np.zeros_like(requirement)
     for day in range(requirement.shape[0]):
@@ -233,6 +246,7 @@ def cpsat_schedule(
     """Main DSO3 planner: cheapest legal shifts + overtime covering the requirement."""
     from ortools.sat.python import cp_model
 
+    # Stage 1 decides HOW MANY agents work each shift; Stage 2 decides WHO works which shift.
     started = time.perf_counter()
     days = requirement.shape[0]
     templates = shift_templates(rules.shift_lengths, open_hour, close_hour)
@@ -242,6 +256,8 @@ def cpsat_schedule(
 
     # ---- Stage 1: how many agents on each shift template, and overtime per hour
     model = cp_model.CpModel()
+    # Variables: x = agents starting shift template t on day d; o = overtime agents per hour; s = missing
+    # agents per hour (allowed, but expensive).
     x = {(d, t): model.new_int_var(0, big, f"x_{d}_{t}") for d in range(days) for t in range(len(templates))}
     o = {
         (d, h): model.new_int_var(0, rules.max_overtime_agents_per_hour, f"o_{d}_{h}")
@@ -251,11 +267,13 @@ def cpsat_schedule(
     s = {
         (d, h): model.new_int_var(0, int(requirement[d, h]), f"s_{d}_{h}") for d in range(days) for h in hours
     }
+    # Constraint: every open hour is covered: agents on shift + overtime + missing >= the Erlang C need.
     for d in range(days):
         for h in hours:
             covering = [x[d, t] for t, (a, b) in enumerate(templates) if a <= h < b]
             model.add(sum(covering) + o[d, h] + s[d, h] >= int(requirement[d, h]))
         model.add(sum(x[d, t] for t in range(len(templates))) <= big)
+    # Limit the total overtime of the week.
     model.add(sum(o.values()) <= rules.max_overtime_hours_per_week)
     if rules.headcount:
         model.add(
@@ -263,14 +281,17 @@ def cpsat_schedule(
             <= rules.headcount * rules.max_regular_hours_per_week
         )
         model.add(sum(x.values()) <= rules.headcount * rules.max_days_per_week)
+    # Costs in cents (CP-SAT works with whole numbers only).
     regular_cents = int(round(regular_hourly * 100))
     overtime_cents = int(round(regular_hourly * overtime_multiplier * 100))
     penalty_cents = int(round(rules.understaffing_penalty_eur * 100))
+    # Objective: minimise regular pay + overtime pay + the penalty for missing agents.
     model.minimize(
         sum(regular_cents * (templates[t][1] - templates[t][0]) * var for (d, t), var in x.items())
         + overtime_cents * sum(o.values())
         + penalty_cents * sum(s.values())
     )
+    # Solve with a time limit.
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = rules.time_limit_seconds
     solver.parameters.random_seed = rules.random_seed
@@ -285,6 +306,7 @@ def cpsat_schedule(
         overtime[d, h] = int(solver.value(var))
 
     # ---- Stage 2: give the shifts to named agents within the labour rules
+    # Each planned shift becomes one item to assign; estimate the smallest team that can work them all.
     shifts = [(d, t) for (d, t), n in counts.items() for _ in range(n)]
     total_hours = sum(templates[t][1] - templates[t][0] for d, t in shifts)
     daily_max = max((sum(1 for dd, _ in shifts if dd == d) for d in range(days)), default=0)
@@ -295,6 +317,7 @@ def cpsat_schedule(
         1,
     )
     roster = None
+    # Try with that headcount; if no legal roster exists, add one agent and try again.
     for extra in range(0, 12):
         roster = _assign_roster(counts, templates, days, headcount + extra, rules)
         if roster is not None:
@@ -334,11 +357,15 @@ def _assign_roster(
 
     model = cp_model.CpModel()
     used = [(d, t) for (d, t), n in counts.items() if n > 0]
+    # y[a, d, t] = 1 when agent a works shift t on day d.
     y = {(a, d, t): model.new_bool_var(f"y_{a}_{d}_{t}") for a in range(headcount) for d, t in used}
+    # Every planned shift gets exactly the planned number of agents.
     for d, t in used:
         model.add(sum(y[a, d, t] for a in range(headcount)) == counts[d, t])
     hours_of = {}
     for a in range(headcount):
+        # Labour rules per agent: one shift a day, a maximum of days and hours a week, and at least
+        # min_rest_hours between two shifts on consecutive days.
         for d in range(days):
             model.add(sum(y[a, dd, t] for dd, t in used if dd == d) <= 1)
         model.add(sum(y[a, d, t] for d, t in used) <= rules.max_days_per_week)
@@ -373,6 +400,7 @@ def _assign_roster(
 
 def roster_compliance(roster: pd.DataFrame, rules: SchedulingRules) -> dict[str, bool]:
     """Labour-rule checks of a roster (DSO3: no schedule breaks the limits)."""
+    # An independent check of the final roster against every labour rule (used by the tests and the CLI).
     if roster.empty:
         return {"max_days": True, "max_hours": True, "one_shift_per_day": True, "min_rest": True}
     per_agent = roster.groupby("agent_id")

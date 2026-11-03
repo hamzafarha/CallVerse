@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from typing import Any
 
+# matplotlib with the "Agg" backend draws charts into files without opening a window (works on servers).
 import matplotlib
 
 matplotlib.use("Agg")
@@ -80,19 +81,24 @@ def run_forecast_stage(fast: bool = False, log: Callable[[str], None] = print) -
         inputs.daily_activity, inputs.orders, inputs.daily_calendar, inputs.events
     )
     feature_set = build_panel(series, date_features)
+    # Safety check before training: no leakage.
     if not leakage_check(feature_set, series, "2018-03-15"):
         raise RuntimeError("Leakage guard failed: lag_7 is not 7 days old.")
     models = FAST_MODELS if fast else ALL_MODELS
     log(f"Backtesting {len(models)} models: {', '.join(models)}")
     result = run_backtest(series, feature_set, inputs.daily_calendar, models, log=log)
+    # Sanity checks of the backtest table (one forecast per origin, day, group and model; no gaps; no negative
+    # values).
     checks = integrity_checks(result, len(feature_set.groups), len(models))
     if not checks["passed"].all():
         raise RuntimeError(f"Backtest integrity checks failed:\n{checks}")
 
+    # The final model is trained on all the history; then the next week is forecast.
     final_model = fit_lightgbm(feature_set, train_end=EVAL_END)
     importance = feature_importance(final_model, feature_set.features)
     next_week = forecast_next_week(inputs)
 
+    # Save everything in artifacts/forecasts/.
     result.predictions.to_parquet(FORECAST_DIR / BACKTEST_FILE, index=False)
     result.metrics.to_csv(FORECAST_DIR / METRICS_FILE, index=False)
     save_model(final_model, FORECAST_DIR / MODEL_FILE)
@@ -103,6 +109,7 @@ def run_forecast_stage(fast: bool = False, log: Callable[[str], None] = print) -
 
     wmape = result.wmape_table()
     gain = result.beats_naive("lightgbm", "total")
+    # Log the settings, the metrics and the files to MLflow.
     with mlflow_run("forecast", "lightgbm_rolling_backtest", {"dso": "DSO4"}) as run:
         run.log_params(
             {

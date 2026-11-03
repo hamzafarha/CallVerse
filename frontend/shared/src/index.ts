@@ -1,4 +1,6 @@
 /** CallVerse design system, shared by the front office and the back office. */
+// One entry point: both apps import everything (components, hooks, helpers) from "@callverse/shared" through
+// this file.
 export * from "./lib/api";
 export * from "./lib/format";
 export * from "./lib/session";

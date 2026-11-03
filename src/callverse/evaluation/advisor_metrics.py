@@ -23,11 +23,13 @@ import pandas as pd
 from callverse.agents.advisor.intent_classifier import BITEXT_FILE, intent_groups
 from callverse.config import TRACE_DIR
 
+# Splits a text into sentences (after . ! or ?).
 SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
 
 def retrieval_test_set(per_intent: int = 15, seed: int = 7) -> pd.DataFrame:
     """Bitext questions of the 17 order-linked intents (never used to build the KB)."""
+    # Test questions: 15 Bitext messages per intent, never used to write the knowledge base.
     data = pd.read_csv(BITEXT_FILE)
     data = data[data["intent"].isin(intent_groups())]
     data = data[~data["tags"].fillna("").str.contains("W")]
@@ -41,6 +43,8 @@ def retrieval_test_set(per_intent: int = 15, seed: int = 7) -> pd.DataFrame:
 def retrieval_metrics(retriever: Any, test_set: pd.DataFrame, k: int = 4) -> dict[str, float]:
     """Context recall@1/@k and MRR: a hit is a retrieved chunk tagged with the intent."""
     results = retriever.search_many(test_set["instruction"].tolist(), top_k=k)
+    # A hit = a retrieved section tagged with the question's intent. MRR (mean reciprocal rank) = 1 / rank of
+    # the first hit, averaged: 1 means always first.
     hit_at_1, hit_at_k, reciprocal = [], [], []
     for hits, intent in zip(results, test_set["intent"]):
         ranks = [h.rank for h in hits if intent in h.chunk.intents]
@@ -56,6 +60,7 @@ def retrieval_metrics(retriever: Any, test_set: pd.DataFrame, k: int = 4) -> dic
 
 
 def _sentences(text: str) -> list[str]:
+    """The sentences of a text that are longer than 12 characters."""
     return [s.strip() for s in SENTENCE.split(text or "") if len(s.strip()) > 12]
 
 
@@ -73,6 +78,7 @@ def faithfulness_and_relevance(
         for message in messages:
             if message["speaker"] != "advisor" or message["meta"].get("stage") == "verify":
                 continue
+            # Evidence = the tool results of the turn + the policy sections it cited or retrieved.
             evidence = []
             for tool in message["meta"].get("tools", []):
                 evidence += _sentences(json.dumps(tool.get("result", {})).replace('"', " "))
@@ -84,12 +90,15 @@ def faithfulness_and_relevance(
             if not answer:
                 continue
             if evidence:
+                # Faithfulness: each answer sentence gets its best cosine similarity with an evidence
+                # sentence; the share above the threshold = the sentences backed by evidence.
                 vectors = embedder.encode(answer + evidence)
                 a, e = vectors[: len(answer)], vectors[len(answer) :]
                 support = (a @ e.T).max(axis=1)
                 faithful = float((support >= threshold).mean())
             else:
                 faithful = float("nan")
+            # Relevance: cosine similarity between the question and the whole answer.
             q, ans = embedder.encode([question, message["text"]])
             rows.append(
                 {
@@ -110,6 +119,7 @@ def load_saved_conversations(folder: Path = TRACE_DIR / "conversations") -> list
     conversations = []
     for path in sorted(folder.glob("*.json")):
         state = json.loads(path.read_text(encoding="utf-8"))
+        # The variant (template, rag, agentic...) is in the file name, e.g. SC000014_agentic.json.
         state["_variant"] = path.stem.split("_", 1)[1] if "_" in path.stem else "unlabelled"
         conversations.append(state)
     return conversations
@@ -136,6 +146,7 @@ def answer_similarity(conversations: list[dict[str, Any]], embedder: Any) -> pd.
         answer = main_answer(state)
         if not reference or not answer:
             continue
+        # Cosine similarity between the advisor's answer and the approved answer (1 = same meaning).
         vectors = embedder.encode([answer, reference])
         rows.append(
             {

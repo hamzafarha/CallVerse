@@ -5,6 +5,7 @@
    for the OS setting and for the explicit toggle (data-theme). */
 :root {
   color-scheme: light;
+  /* Page background, three surface levels (cards, raised areas, sunken tracks) and three text levels. */
   --page: #f4f6fb;
   --surface-1: #ffffff;
   --surface-2: #f7f8fc;
@@ -12,18 +13,24 @@
   --text-primary: #0b1020;
   --text-secondary: #46506a;
   --text-muted: #838ca3;
+  /*
+   * hairline: thin borders; baseline: chart axes and idle lines; shadow: RGB numbers used by the box shadows.
+   */
   --hairline: #e2e6f0;
   --baseline: #c5cad8;
   --shadow: 15 23 42;
+  /* Brand: indigo, sky and magenta, plus soft and glow versions for highlights. */
   --brand: #5b4fe6;
   --brand-2: #0ea5e9;
   --brand-3: #c026d3;
   --brand-soft: rgba(91, 79, 230, 0.1);
   --glow: rgba(91, 79, 230, 0.32);
+  /* Background decorations: the dot grid and the three blurred "aurora" color fields. */
   --grid-dot: rgba(15, 23, 42, 0.07);
   --aurora-1: rgba(91, 79, 230, 0.16);
   --aurora-2: rgba(14, 165, 233, 0.14);
   --aurora-3: rgba(192, 38, 211, 0.08);
+  /* Chart colors (categorical): always used in this order, so a series keeps the same color everywhere. */
   --series-1: #2a78d6;
   --series-2: #eb6834;
   --series-3: #1baf7a;
@@ -32,6 +39,7 @@
   --series-6: #008300;
   --series-7: #6250d6;
   --series-8: #e34948;
+  /* Sequential scale (light to dark blue) for heatmaps, and the text color readable on each step. */
   --seq-100: #cde2fb;
   --seq-250: #86b6ef;
   --seq-400: #3987e5;
@@ -42,11 +50,13 @@
   --seq-ink-2: #ffffff;
   --seq-ink-3: #ffffff;
   --seq-ink-4: #ffffff;
+  /* Status colors (reserved: never used for ordinary chart series). */
   --good: #0ca30c;
   --good-text: #006300;
   --warning: #fab219;
   --serious: #ec835a;
   --critical: #d03b3b;
+  /* One color per architecture layer (sidebar sections, page tags). */
   --layer-data: #eb6834;
   --layer-sim: #1baf7a;
   --layer-agents: #6250d6;
@@ -54,6 +64,7 @@
   --layer-serve: #2a78d6;
 }
 
+/* Dark theme, case 1: the operating system is in dark mode and the user did not force the light theme. */
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
     color-scheme: dark;
@@ -103,6 +114,10 @@
   }
 }
 
+/*
+ * Dark theme, case 2: the user chose dark with the theme button (<html data-theme="dark">). Same values as
+ * above.
+ */
 :root[data-theme="dark"] {
   color-scheme: dark;
   --page: #05070e;

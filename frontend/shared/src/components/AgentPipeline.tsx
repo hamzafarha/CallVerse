@@ -1,9 +1,15 @@
+/**
+ * The row of agent cards shown above a conversation: Client -> Workforce -> Advisor -> Quality -> KPI engine
+ * (the same order as the LangGraph graph in orchestration/graph.py). Each card is idle (grey), active
+ * (glowing) or done (green tick), following the stage events sent by the server.
+ */
 import { motion } from "framer-motion";
 import { Bot, Check, Database, Gauge, Headset, ScanSearch, ShieldCheck, Sparkles, User, type LucideIcon } from "lucide-react";
 import { Fragment } from "react";
 import type { AgentName, StageEvent } from "../lib/session";
 import { clsx } from "./ui";
 
+// The four agents + the KPI engine (the last node of the graph).
 type NodeId = AgentName | "kpi";
 
 const NODES: { id: NodeId; label: string; sub: string; icon: LucideIcon; color: string }[] = [
@@ -35,18 +41,23 @@ export function AgentPipeline({
   vertical?: boolean;
   compact?: boolean; // one slim line (advisor desk), so the conversation keeps the room
 }) {
+  // Keep only the stages of the advisor's latest turn (from its last "start" event).
   const lastStart = stages.map((s) => s.agent === "advisor" && s.step === "start").lastIndexOf(true);
   const turn = lastStart >= 0 ? stages.slice(lastStart) : [];
+  // Which sub-steps of that turn happened: retrieval (bge-m3 search), tool calls, LLM generation.
   const steps = {
     retrieval: turn.find((s) => s.step === "retrieval"),
     tools: turn.filter((s) => s.step === "tool"),
     generation: turn.find((s) => s.step === "generation"),
   };
+  // State of one node: active if it works now, done if it already ran (or the chat ended), idle otherwise.
+  // The KPI engine only runs at the end.
   const state = (id: NodeId): "active" | "done" | "idle" => {
     if (id === "kpi") return done ? "done" : "idle";
     if (active === id) return "active";
     return visited.includes(id) || done ? "done" : "idle";
   };
+  // Compact mode: one slim line of pills (used on the advisor desk, to leave room for the chat).
   if (compact) {
     return (
       <div className="flex items-center overflow-x-auto">
@@ -93,6 +104,7 @@ export function AgentPipeline({
       </div>
     );
   }
+  // Full mode: big cards side by side (or stacked when `vertical`).
   return (
     <div className={clsx("flex flex-col", !vertical && "gap-2 md:flex-row md:items-stretch md:gap-0")}>
       {NODES.map((node, index) => {
@@ -134,6 +146,7 @@ export function AgentPipeline({
                   <div className="truncate text-[11px] text-muted">{node.sub}</div>
                 </div>
               </div>
+              {/* The advisor's three sub-steps light up during its turn. */}
               {node.id === "advisor" && (
                 <div className="mt-2.5 flex flex-wrap gap-1">
                   <SubStep icon={ScanSearch} label="bge-m3" on={!!steps.retrieval} hot={active === "advisor" && !!steps.retrieval && !steps.generation} />
@@ -142,6 +155,7 @@ export function AgentPipeline({
                 </div>
               )}
             </motion.div>
+            {/* Line to the next node; a dot moves along it while the next node is working. */}
             {next && <Connector flowing={!!flowing} lit={state(next.id) !== "idle"} vertical={vertical} />}
           </Fragment>
         );
@@ -150,6 +164,9 @@ export function AgentPipeline({
   );
 }
 
+/**
+ * One sub-step pill of the advisor (retrieval, tools, LLM): blue once it happened, pulsing while it runs.
+ */
 function SubStep({ icon: Icon, label, on, hot }: { icon: LucideIcon; label: string; on: boolean; hot: boolean }) {
   return (
     <span
@@ -164,6 +181,9 @@ function SubStep({ icon: Icon, label, on, hot }: { icon: LucideIcon; label: stri
   );
 }
 
+/**
+ * The dashed line between two nodes: blue once the next node has started, animated while it works.
+ */
 function Connector({ flowing, lit, vertical, slim = false }: { flowing: boolean; lit: boolean; vertical: boolean; slim?: boolean }) {
   const stroke = lit ? "var(--brand)" : "var(--baseline)";
   const dash = flowing ? { animation: "flow 0.6s linear infinite" } : undefined;

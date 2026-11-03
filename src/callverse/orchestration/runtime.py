@@ -18,6 +18,7 @@ from callverse.agents.advisor.intent_classifier import IntentClassifier
 from callverse.config import PROJECT_ROOT, config_path, load_yaml
 from callverse.llm import LLMClient, get_llm
 
+# A lock, so two threads (two chats) never load the same model at the same time.
 _lock = threading.Lock()
 
 
@@ -25,6 +26,7 @@ class AgentRuntime:
     """Retriever, intent classifier and LLM client shared by every conversation."""
 
     def __init__(self, retriever_kind: str | None = None, llm: LLMClient | None = None) -> None:
+        # Each resource is loaded the first time it is needed ("lazy loading").
         self.retriever_kind = retriever_kind or os.environ.get("CALLVERSE_RETRIEVER", "auto")
         self.llm = llm or get_llm()
         self._retriever: Any = None
@@ -35,9 +37,11 @@ class AgentRuntime:
 
     @property
     def kb_config(self):
+        """Knowledge-base settings from configs/agents.yaml."""
         return load_knowledge_base_config(config_path("agents"), PROJECT_ROOT)
 
     def keyword_retriever(self) -> KeywordRetriever:
+        """The TF-IDF retriever (instant and always available)."""
         if self._keyword is None:
             self._keyword = KeywordRetriever.from_config(self.kb_config)
         return self._keyword
@@ -46,6 +50,8 @@ class AgentRuntime:
         with _lock:
             if self._retriever is not None:
                 return self._retriever
+            # Try the bge-m3 + FAISS retriever; if it cannot load (no index, no model), use keyword search,
+            # unless "embedding" was explicitly required.
             if self.retriever_kind in ("embedding", "auto"):
                 try:
                     self._retriever = KnowledgeRetriever.from_config(self.kb_config)
@@ -60,11 +66,13 @@ class AgentRuntime:
 
     def classifier(self) -> IntentClassifier:
         with _lock:
+            # Load the saved intent classifier (or train it the first time).
             if self._classifier is None:
                 self._classifier = IntentClassifier.load_or_train()
             return self._classifier
 
     def status(self) -> dict[str, Any]:
+        """What the API reports about the agents' resources."""
         llm = self.llm.status()
         return {
             "llm_available": llm["available"],
@@ -84,6 +92,7 @@ _runtime: AgentRuntime | None = None
 
 
 def get_runtime() -> AgentRuntime:
+    """The shared runtime of this process (created on first use)."""
     global _runtime
     if _runtime is None:
         _runtime = AgentRuntime()
@@ -91,5 +100,6 @@ def get_runtime() -> AgentRuntime:
 
 
 def set_runtime(runtime: AgentRuntime | None) -> None:
+    """Replace the shared runtime (used by the tests)."""
     global _runtime
     _runtime = runtime

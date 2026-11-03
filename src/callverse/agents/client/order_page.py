@@ -26,10 +26,12 @@ STATUS_LABEL = {
 def order_timeline(facts: dict[str, Any], as_of: pd.Timestamp) -> list[dict[str, Any]]:
     """Order journey at the contact date: done, current, upcoming or late steps."""
 
+    # stamp(): a date of the order record, or None when it is missing (e.g. not delivered yet).
     def stamp(key: str) -> pd.Timestamp | None:
         value = facts.get(key)
         return None if value is None or pd.isna(value) else pd.Timestamp(value)
 
+    # The 4 steps of an order: (label, when it happened, when it was promised).
     steps = [
         ("Order placed", stamp("order_purchase_timestamp"), None),
         ("Payment approved", stamp("order_approved_at"), None),
@@ -37,6 +39,8 @@ def order_timeline(facts: dict[str, Any], as_of: pd.Timestamp) -> list[dict[str,
         ("Delivered", stamp("order_delivered_customer_date"), stamp("order_estimated_delivery_date")),
     ]
     rows, current_set = [], False
+    # Each step is "done" (happened before the chat), "late" (its promised date has passed), "current" (the
+    # next step to happen) or "upcoming".
     for label, done_at, due in steps:
         done = done_at is not None and done_at <= as_of
         late = not done and due is not None and as_of > due
@@ -44,17 +48,21 @@ def order_timeline(facts: dict[str, Any], as_of: pd.Timestamp) -> list[dict[str,
         if not done:
             current_set = True
         rows.append({"label": label, "state": state, "at": done_at if done else None, "due": due})
+    # A canceled order gets an extra, red step.
     if facts.get("order_status") == "canceled":
         rows.append({"label": "Order canceled", "state": "late", "at": None, "due": None})
     return rows
 
 
 def _day(value: Any) -> str | None:
+    """A date as YYYY-MM-DD text, or None."""
     return None if value is None or pd.isna(value) else pd.Timestamp(value).strftime("%Y-%m-%d")
 
 
 def my_order_page(order_id: str, as_of: pd.Timestamp) -> dict[str, Any] | None:
     """The customer's order page at ``as_of`` (None if the order does not exist)."""
+    # The advisor's database lookup returns the raw order facts; this function keeps only what a customer's
+    # app would show.
     from callverse.agents.advisor.tools import AdvisorTools
 
     facts = AdvisorTools(as_of=as_of).order_facts(order_id)
@@ -68,6 +76,7 @@ def my_order_page(order_id: str, as_of: pd.Timestamp) -> dict[str, Any] | None:
             step["expected_by"] = _day(row["due"])  # the date the store promised
         steps.append(step)
     value = facts.get("order_value")
+    # Customer-visible fields only: no internal flags, no decisions, no other orders.
     return {
         "order_id": order_id,
         "today": _day(as_of),
@@ -83,6 +92,7 @@ def my_order_page(order_id: str, as_of: pd.Timestamp) -> dict[str, Any] | None:
 
 def summarize_page(page: dict[str, Any] | None) -> str:
     """What the customer saw on the page, in one line (for the UI)."""
+    # One readable line, e.g. "status: With the carrier, estimated 2017-03-13".
     if not page:
         return "order not found"
     late = [s["step"].lower() for s in page["steps"] if s["state"] == "late"]

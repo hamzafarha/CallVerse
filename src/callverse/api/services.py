@@ -12,6 +12,7 @@ from callverse.config import EVALUATION_DIR
 from callverse.twin import DigitalTwin
 
 
+# One DigitalTwin for the whole server: creating it loads data and settings, so it is done once.
 @lru_cache(maxsize=1)
 def twin() -> DigitalTwin:
     """One digital twin per process (plans are cached inside)."""
@@ -20,6 +21,7 @@ def twin() -> DigitalTwin:
 
 def clean(value: Any) -> Any:
     """Make numpy / pandas values JSON-safe (NaN -> None, Timestamp -> ISO)."""
+    # Go through dictionaries and lists recursively, converting each value.
     if isinstance(value, dict):
         return {str(k): clean(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -44,6 +46,7 @@ def records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     """DataFrame -> list of JSON-safe dicts."""
     if frame is None or frame.empty:
         return []
+    # pandas writes the JSON, which is then parsed back into Python lists and dictionaries.
     return json.loads(frame.to_json(orient="records", date_format="iso"))
 
 

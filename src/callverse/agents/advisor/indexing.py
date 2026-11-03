@@ -1,5 +1,10 @@
 """Knowledge base document indexing and vector embeddings."""
 
+# How the knowledge base is built (RAG = Retrieval-Augmented Generation):
+# 1. Read the Markdown policy documents in data/knowledge_base/docs/. 2. Cut each document into chunks: one
+#    chunk per "## " section. 3. Turn each chunk into a vector (1024 numbers) with the bge-m3 embedding model:
+#    texts with a similar meaning get similar vectors. 4. Store the vectors in a FAISS index for fast
+#    similarity search, with a manifest (model, date, fingerprint of each document).
 import hashlib
 import json
 import re
@@ -13,10 +18,13 @@ import pandas as pd
 import yaml
 from pydantic import BaseModel, Field
 
+# File names inside the index folder.
 INDEX_FILE = "index.faiss"
 CHUNKS_FILE = "chunks.parquet"
 MANIFEST_FILE = "manifest.json"
 
+# Patterns: the "---" front matter block, the "## " section headings, and an optional <!-- intents: ... -->
+# tag.
 FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 SECTION_HEADING = re.compile(r"^## +(.+?)\s*$", re.MULTILINE)
 INTENTS_TAG = re.compile(r"<!--\s*intents:\s*(.*?)\s*-->")
@@ -26,6 +34,8 @@ INTENTS_TAG = re.compile(r"<!--\s*intents:\s*(.*?)\s*-->")
 class KnowledgeBaseConfig:
     """Knowledge-base settings, loaded from ``configs/agents.yaml``."""
 
+    # Where the documents and the index live, which embedding model, and the search settings (top_k results,
+    # minimum score, "no answer" threshold).
     docs_dir: Path
     index_dir: Path
     embedding_model: str
@@ -60,6 +70,7 @@ def load_knowledge_base_config(
     )
 
 
+# Pydantic checks the front matter: a wrong or missing field raises a clear error.
 class DocumentMeta(BaseModel):
     """Front matter of one knowledge-base document."""
 
@@ -87,6 +98,7 @@ class Chunk:
         return f"{self.doc_title} - {self.section}\n\n{self.text}"
 
 
+# A Protocol is an interface: any class with model_name and encode() works (a fake one in tests).
 class Embedder(Protocol):
     """Turns texts into L2-normalised float32 vectors (one row per text)."""
 
@@ -107,6 +119,7 @@ class SentenceTransformerEmbedder:
         max_seq_length: int = 512,
         device: str = "cpu",
     ) -> None:
+        # sentence-transformers loads the model (bge-m3: multilingual, 1024-number vectors).
         from sentence_transformers import SentenceTransformer
 
         self.model_name = model_name
@@ -116,6 +129,8 @@ class SentenceTransformerEmbedder:
 
     def encode(self, texts: list[str]) -> np.ndarray:
         """Embed texts as normalised vectors, so inner product = cosine similarity."""
+        # normalize_embeddings: every vector gets length 1, so the dot product of two vectors equals their
+        # cosine similarity (1 = same meaning, 0 = unrelated).
         vectors = self.model.encode(
             texts,
             batch_size=self.batch_size,
@@ -144,6 +159,7 @@ def split_long_text(text: str, max_chars: int) -> list[str]:
     """Group paragraphs into parts of at most ``max_chars``; paragraphs are not cut."""
     parts: list[str] = []
     current = ""
+    # Paragraphs are separated by empty lines.
     for paragraph in re.split(r"\n\s*\n", text):
         candidate = f"{current}\n\n{paragraph}" if current else paragraph
         if current and len(candidate) > max_chars:
@@ -161,6 +177,7 @@ def chunk_document(meta: DocumentMeta, body: str, max_chars: int) -> list[Chunk]
 
     A ``<!-- intents: a, b -->`` tag inside a section overrides the document's intents.
     """
+    # Find every "## " heading; a section runs until the next heading.
     headings = list(SECTION_HEADING.finditer(body))
     chunks: list[Chunk] = []
     for number, heading in enumerate(headings, start=1):
@@ -174,6 +191,7 @@ def chunk_document(meta: DocumentMeta, body: str, max_chars: int) -> list[Chunk]
         parts = split_long_text(section_text, max_chars)
         for part_number, part in enumerate(parts, start=1):
             suffix = f"_p{part_number}" if len(parts) > 1 else ""
+            # Chunk id = <document>__s<section number>[_p<part>], e.g. refund_policy__s05.
             chunks.append(
                 Chunk(
                     chunk_id=f"{meta.doc_id}__s{number:02d}{suffix}",
@@ -199,6 +217,7 @@ def load_chunks(
         raise FileNotFoundError(f"No Markdown documents found in {docs_dir}.")
     chunks: list[Chunk] = []
     seen_doc_ids: set[str] = set()
+    # Checks: every document parses, no duplicate ids, at least one section each, only known intents.
     for path in paths:
         meta, body = parse_document(path.read_text(encoding="utf-8"), str(path))
         if meta.doc_id in seen_doc_ids:
@@ -219,11 +238,14 @@ def build_index(chunks: list[Chunk], embedder: Embedder) -> Any:
     """Embed chunks into an exact inner-product FAISS index (cosine on unit vectors)."""
     import faiss
 
+    # Embed every chunk (document title + section title + text).
     vectors = embedder.encode([chunk.embedding_text() for chunk in chunks])
     if vectors.shape[0] != len(chunks):
         raise ValueError("Embedder returned a different number of vectors.")
     if not np.allclose(np.linalg.norm(vectors, axis=1), 1.0, atol=1e-3):
         raise ValueError("Embeddings must be L2-normalised.")
+    # IndexFlatIP: exact search by inner product (= cosine similarity on unit vectors). The corpus is small,
+    # so an exact search is instant.
     index = faiss.IndexFlatIP(vectors.shape[1])
     index.add(np.ascontiguousarray(vectors, dtype=np.float32))
     return index
@@ -245,6 +267,7 @@ def save_knowledge_base(
 
     index_dir = Path(index_dir)
     index_dir.mkdir(parents=True, exist_ok=True)
+    # Three files: the FAISS index, the chunk table (Parquet) and the manifest (JSON).
     faiss.write_index(index, str(index_dir / INDEX_FILE))
     pd.DataFrame([asdict(chunk) for chunk in chunks]).to_parquet(index_dir / CHUNKS_FILE, index=False)
     with open(index_dir / MANIFEST_FILE, "w", encoding="utf-8") as manifest_file:
@@ -266,6 +289,7 @@ def build_knowledge_base(
             config.embedding_device,
         )
     index = build_index(chunks, embedder)
+    # The manifest records how the index was built (reproducibility).
     manifest = {
         "embedding_model": embedder.model_name,
         "dimension": int(index.d),

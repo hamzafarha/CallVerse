@@ -7,11 +7,15 @@ future. Calendar features (weekday, holidays, promo windows) are known in advanc
 Ported from notebooks/09_contact_volume_forecasting.ipynb.
 """
 
+# Leakage = a feature that secretly contains the answer (data from the future). The rule here:
+# every history-based feature is at least 7 days old, so forecasting up to 7 days ahead never uses data that
+# would be unknown at the time.
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
+# Key dates of the data and of the backtest.
 SERIES_START = pd.Timestamp("2017-01-01")
 EVAL_END = pd.Timestamp("2018-08-19")  # last day of contact history (a Sunday)
 FIRST_ORIGIN = pd.Timestamp("2017-10-01")  # first backtest origin (a Sunday)
@@ -34,8 +38,10 @@ def contact_series(
     daily_group: pd.DataFrame, start: pd.Timestamp = SERIES_START, end: pd.Timestamp = EVAL_END
 ) -> pd.DataFrame:
     """Wide table: one column per intent group, one row per day, no gaps."""
+    # Pivot: one column per problem group, one row per day.
     series = daily_group.pivot(index="date", columns="intent_group", values="contacts")
     series = series.sort_index().loc[start:end]
+    # Checks: no missing values and no missing days.
     if series.isna().any().any():
         raise ValueError("The contact series must have no missing values.")
     if len(series) != (series.index[-1] - series.index[0]).days + 1:
@@ -93,6 +99,7 @@ def build_date_features(
     features["days_to_next_event"] = (
         calendar["days_to_next_event_day"].reindex(all_days).astype("float").fillna(60).clip(upper=60)
     )
+    # Days since the last major sale (capped at 90).
     major_days = events.loc[events["event_group"] == "major_sale", "event_day"].sort_values()
     major_days = major_days.to_numpy()
     since = []
@@ -121,13 +128,16 @@ def build_panel(series: pd.DataFrame, date_features: pd.DataFrame) -> FeatureSet
                 "contacts": values.to_numpy(),
             }
         )
+        # The group's own history: the same weekday 1 to 4 weeks earlier.
         for lag in [7, 14, 21, 28]:
             part[f"lag_{lag}"] = values.shift(lag).to_numpy()
         part["same_weekday_mean_4"] = part[["lag_7", "lag_14", "lag_21", "lag_28"]].mean(axis=1)
+        # Rolling means of the last 7 and 28 days, shifted by 7 days.
         part["mean7_lag7"] = values.shift(MIN_FEATURE_LAG).rolling(7).mean().to_numpy()
         part["mean28_lag7"] = values.shift(MIN_FEATURE_LAG).rolling(28).mean().to_numpy()
         parts.append(part)
     panel = pd.concat(parts, ignore_index=True)
+    # Add the date features (orders, calendar) to every row.
     panel = panel.merge(date_features, left_on="date", right_index=True, how="left", validate="many_to_one")
     features = [c for c in panel.columns if c not in ["date", "intent_group", "contacts"]]
     return FeatureSet(panel, features, groups)
@@ -135,6 +145,7 @@ def build_panel(series: pd.DataFrame, date_features: pd.DataFrame) -> FeatureSet
 
 def leakage_check(feature_set: FeatureSet, series: pd.DataFrame, day: str) -> bool:
     """True when ``lag_7`` on ``day`` equals the observed value 7 days before."""
+    # An automatic test: lag_7 must equal the real value exactly 7 days before.
     group = feature_set.groups[0]
     target = pd.Timestamp(day)
     row = feature_set.panel[

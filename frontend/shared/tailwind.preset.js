@@ -2,9 +2,11 @@
  * Colors are CSS variables (src/styles/tokens.css), so light/dark themes switch
  * without rebuilding and charts use the same palette as the UI. */
 export default {
+  // Dark variants (dark:...) apply when <html data-theme="dark"> is set.
   darkMode: ["class", '[data-theme="dark"]'],
   theme: {
     extend: {
+      // Short class names mapped to the CSS variables, e.g. "text-ink", "bg-surface", "border-line".
       colors: {
         page: "var(--page)",
         surface: "var(--surface-1)",
@@ -28,17 +30,21 @@ export default {
           serve: "var(--layer-serve)",
         },
       },
+      // Fonts: Inter for text, Space Grotesk for titles, JetBrains Mono for code and numbers.
       fontFamily: {
         sans: ['"Inter Variable"', "system-ui", "-apple-system", '"Segoe UI"', "sans-serif"],
         display: ['"Space Grotesk Variable"', '"Inter Variable"', "system-ui", "sans-serif"],
         mono: ['"JetBrains Mono Variable"', "ui-monospace", "SFMono-Regular", "monospace"],
       },
+      // Rounder corners, and three shadows (soft, lift, glow).
       borderRadius: { xl: "14px", "2xl": "18px", "3xl": "24px" },
       boxShadow: {
         soft: "0 1px 2px rgb(var(--shadow) / 0.06), 0 8px 24px -12px rgb(var(--shadow) / 0.18)",
         lift: "0 2px 6px rgb(var(--shadow) / 0.08), 0 24px 48px -20px rgb(var(--shadow) / 0.35)",
         glow: "0 0 0 1px var(--brand-soft), 0 8px 30px -6px var(--glow)",
       },
+      // keyframes = the steps of each animation; animation = its name, duration, easing and repeat (used as a
+      // class, e.g. "animate-float").
       keyframes: {
         "fade-up": { from: { opacity: "0", transform: "translateY(8px)" }, to: { opacity: "1", transform: "none" } },
         shimmer: { from: { backgroundPosition: "200% 0" }, to: { backgroundPosition: "-200% 0" } },

@@ -5,13 +5,20 @@ callverse serve            # FastAPI backend for the React control room
 callverse --help           # every command
 """
 
+# How to read this file: one Python function = one command of the `callverse` tool. Typer reads each
+# function's parameters and turns them into command-line options, e.g. `callverse simulate --scenario peak
+# --seeds 5`. The commands follow the pipeline order:
+# data -> forecast -> workforce (train-rl, schedule, simulate, fidelity) -> agents (chat, agents, judge-
+# calibrate, llm-pull, llm-pin) -> evaluate -> status -> serve -> all.
 import json
 import os
 import time
 from typing import Optional
 
+# Typer: a library that builds a command-line interface from plain Python functions.
 import typer
 
+# The CLI application. Every function decorated with @app.command() becomes a sub-command.
 app = typer.Typer(
     name="callverse",
     help="CallVerse: multi-agent digital twin of an e-commerce customer service center.",
@@ -21,10 +28,12 @@ app = typer.Typer(
 
 
 def say(text: str) -> None:
+    """Print one line of progress (one helper, so every command logs the same way)."""
     typer.echo(text)
 
 
 def stage(title: str) -> None:
+    """Print a coloured stage title such as "=== Data contracts (Pandera) ==="."""
     typer.secho(f"\n=== {title} ===", fg=typer.colors.CYAN, bold=True)
 
 
@@ -36,16 +45,20 @@ def data(
     knowledge_base: bool = typer.Option(True, help="Rebuild the bge-m3 FAISS index."),
 ) -> None:
     """Data layer: prepare Olist + Bitext, generate contacts, validate, build stores."""
+    # Imports are made INSIDE each command, not at the top of the file: `callverse --help` stays fast because
+    # heavy libraries (pandas, torch, ...) load only when a command needs them.
     from callverse.config import ensure_dirs
     from callverse.data import loaders
 
     ensure_dirs()
+    # Step 1: run the preparation notebooks 03-08 (cleaning, features, synthetic contacts).
     if notebooks:
         from callverse.data.pipeline import run_data_pipeline
 
         stage("Data preparation notebooks (03 -> 08)")
         run_data_pipeline(log=say)
         loaders.clear_caches()
+    # Step 2: build the tickets, the chat logs and the SQLite database (scripts/build_database.py).
     if database:
         stage("Tickets, chat logs and SQLite store")
         import runpy
@@ -53,7 +66,10 @@ def data(
         from callverse.config import PROJECT_ROOT
 
         runpy.run_path(str(PROJECT_ROOT / "scripts" / "build_database.py"), run_name="__main__")
+    # Step 3: check the data contracts (the Pandera schemas of every processed table).
     validate()
+    # Step 4: build the knowledge-base search index (bge-m3 embeddings + FAISS). If the model cannot be
+    # downloaded (offline), the advisor falls back to keyword (TF-IDF) search.
     if knowledge_base:
         stage("Knowledge base index (bge-m3 + FAISS)")
         try:
@@ -75,10 +91,12 @@ def validate() -> None:
     from callverse.data.validation import validate_processed_data
 
     stage("Data contracts (Pandera)")
+    # Each result says whether one table passed its schema checks, and how many rows it has.
     results = validate_processed_data()
     for result in results:
         mark = "PASS" if result.passed else "FAIL"
         say(f"  [{mark}] {result.table:<36} {result.rows:>8,} rows {result.errors}")
+    # Exit code 1 makes a script or a CI job fail when a data contract is broken.
     if not all(r.passed for r in results):
         raise typer.Exit(code=1)
 
@@ -89,6 +107,8 @@ def forecast(fast: bool = typer.Option(False, help="Skip SARIMA and Prophet (1 m
     """DSO4: rolling-origin backtest of 5 models, final LightGBM, next-week forecast."""
     from callverse.forecasting.train import run_forecast_stage
 
+    # The backtest compares 5 models on past weeks; LightGBM is then trained on all the data and predicts the
+    # next week of contacts.
     stage("Contact volume forecast (DSO4)")
     run_forecast_stage(fast=fast, log=say)
 
@@ -102,6 +122,8 @@ def train_rl(
     from callverse.agents.workforce.optimization import optimize_skill_weights
     from callverse.agents.workforce.train import train_routing_policy
 
+    # First the simple "skill-score" router is tuned (the safe backup), then the PPO reinforcement-learning
+    # router is trained in the simulator (the main idea of DSO1).
     stage("Skill-score weights (DSO1 backup)")
     optimize_skill_weights(log=say)
     stage("MaskablePPO routing agent (DSO1 main idea)")
@@ -118,25 +140,32 @@ def schedule(
     from callverse.agents.workforce.scheduling import roster_compliance
     from callverse.twin import DigitalTwin
 
+    # DigitalTwin bundles everything a what-if needs: scenario, forecast, staffing planner and the simulator.
     twin = DigitalTwin()
     spec = twin.scenario(scenario)
+    # The plan says how many agents work each hour (regular + overtime). "cpsat" = the Google OR-Tools CP-SAT
+    # optimizer, the other planners are simpler baselines to compare with.
     plan = twin.plan(spec, planner, prepared=not unprepared)
     costs = twin.settings.costs
     stage(f"{planner} plan for {spec.label} ({spec.week_start.date()})")
     say(
         json.dumps(
             {
+                # Planned labour cost: regular hours plus overtime hours (paid more).
                 k: round(v, 1)
                 for k, v in plan.planned_cost(costs.regular_hourly, costs.overtime_multiplier).items()
             },
             indent=2,
         )
     )
+    # Print the plan as a grid: one row per day, one number per hour from 08:00 to 21:00 ("+n" = n extra
+    # agents on overtime).
     say("Agents per hour (rows = days, 08:00-21:00):")
     for day in range(plan.days):
         regular = plan.regular[day, 8:22]
         overtime = plan.overtime[day, 8:22]
         say(f"  day {day}: " + " ".join(f"{r}{'+' + str(o) if o else ''}" for r, o in zip(regular, overtime)))
+    # The roster (who works when) must respect the labour rules: maximum hours, rest time, ...
     if not plan.roster.empty:
         say(f"Roster compliance: {roster_compliance(plan.roster, twin.rules)}")
 
@@ -156,7 +185,10 @@ def simulate(
 
     twin = DigitalTwin()
     started = time.perf_counter()
+    # Run the discrete-event simulation once per seed (each seed = different random arrivals and handle times)
+    # and collect the KPIs of every run.
     frame = runs_to_frame(twin.run(scenario, planner, router, seeds, prepared=not unprepared))
+    # Mean and 95% confidence interval of each KPI over the seeds.
     summary = summarize_runs(frame, ["scenario"], SIM_KPIS)
     stage(
         f"{scenario} | plan {planner} | router {router} | {'unprepared' if unprepared else 'prepared'}"
@@ -167,6 +199,7 @@ def simulate(
 
 
 def pd_row(row):
+    """Turn a namedtuple row into a pandas Series (format_mean_ci expects a Series)."""
     import pandas as pd
 
     return pd.Series(row._asdict())
@@ -177,6 +210,8 @@ def fidelity() -> None:
     """DSO4: twin fidelity checks (Erlang C, volume, time of day, handle time)."""
     from callverse.evaluation.twin_metrics import run_fidelity
 
+    # Fidelity = does the twin behave like reality and theory? For example, are its waiting times close to
+    # what the Erlang C queueing formula predicts?
     report = run_fidelity()
     stage("Twin fidelity")
     say(report["checks"][["check", "value", "passed", "detail"]].to_string(index=False))
@@ -196,13 +231,17 @@ def chat(
     from callverse.data import loaders
     from callverse.orchestration.graph import run_conversation, save_transcript
 
+    # Choose the customer: the given contact id, or a random one.
     profile = (
         profile_by_contact_id(loaders.contacts(), contact, seed)
         if contact
         else sample_profiles(loaders.contacts(), 1, seed)[0]
     )
     stage(f"Conversation {profile.contact_id} ({profile.intent}, {profile.persona} customer)")
+    # Run the LangGraph conversation: the client opens, the workforce agent routes, the advisor and the client
+    # talk, then the quality agent grades the chat and the KPIs are computed.
     state = run_conversation(profile, mode, seed, variant=variant)
+    # Print the transcript and what each agent did (tools used, routing, scores).
     for event in state["events"]:
         if event["node"] in ("client", "advisor"):
             say(f"  {event['node'].upper():8} {event.get('text', '')}")
@@ -223,6 +262,8 @@ def agents(
     """DSO2: conversation batches and BO2 KPIs per advisor variant."""
     from callverse.evaluation.experiments import agents_experiment, merge_tables
 
+    # Run n conversations for each advisor variant and compare their KPIs (FCR, CSAT, correct answers,
+    # compliance...).
     result = agents_experiment(n, tuple(v.strip() for v in variants.split(",")), log=say)
     merge_tables("dso2_agents", result, key="variant")
     stage("BO2 KPIs per advisor variant")
@@ -234,6 +275,7 @@ def judge_calibrate(judge: str = typer.Option("rules", help="rules or llm.")) ->
     """DSO2: agreement of the judge with human labels (or proxy labels)."""
     from callverse.evaluation.experiments import judge_calibration, merge_tables, save_tables
 
+    # Calibration: how often does the Quality judge agree with the labels? (Cohen's kappa)
     result = judge_calibration(judge_mode=judge)
     merge_tables("dso2_judge_calibration", {"agreement": result["agreement"]}, key="judge")
     save_tables(f"dso2_judge_calibration_{judge}", {k: v for k, v in result.items() if k != "agreement"})
@@ -244,6 +286,7 @@ def judge_calibrate(judge: str = typer.Option("rules", help="rules or llm.")) ->
 @app.command("llm-pull")
 def llm_pull() -> None:
     """Download the pinned Hugging Face models of the active profile, then pin their commits."""
+    # The Hugging Face hub is kept offline everywhere else (.env); allow downloads for this command.
     os.environ["HF_HUB_OFFLINE"] = "0"
     from huggingface_hub import constants, snapshot_download
 
@@ -251,7 +294,9 @@ def llm_pull() -> None:
 
     constants.HF_HUB_OFFLINE = False  # .env keeps the hub offline for everything else
     llm = get_llm()
+    # Only the files needed to run a model: weights (.safetensors), tokenizer and config files.
     patterns = ["*.json", "*.safetensors", "*.txt", "*.model", "*.jinja", "tokenizer*"]
+    # dict.fromkeys removes duplicates: the advisor and the client share the same model.
     for repo in dict.fromkeys(llm.settings.models.values()):
         stage(f"Downloading {repo}")
         say(f"  -> {snapshot_download(repo, allow_patterns=patterns)}")
@@ -265,6 +310,8 @@ def llm_pin() -> None:
     from callverse.llm import get_llm
 
     ensure_dirs()
+    # model_digests: the exact commit of each downloaded model. Saving them makes a run reproducible with
+    # exactly the same weights.
     lock = get_llm().model_digests()
     path = TRACE_DIR / "llm_models.lock.json"
     path.write_text(json.dumps(lock, indent=2), encoding="utf-8")
@@ -285,11 +332,15 @@ def evaluate(
 
     variants = tuple(v.strip() for v in llm_variants.split(",") if v.strip())
     stage("Evaluation suite")
+    # Run every experiment (DSO1 to DSO4) and save their tables in artifacts/evaluations/.
     run_all_experiments(seeds, conversations, variants, log=say)
     from callverse.config import EVALUATION_DIR
 
+    # One table with the metrics of every component (forecast, routing, planner, agents, judge).
     metrics = component_metrics()
     metrics.to_csv(EVALUATION_DIR / "component_metrics.csv", index=False)
+    # The scorecard: each Business Objective (BO), its Data Science Objective (DSO), the result, and whether
+    # the target is met.
     cards = scorecard()
     (EVALUATION_DIR / "scorecard.json").write_text(json.dumps(cards, indent=2), encoding="utf-8")
     stage("BO -> DSO scorecard")
@@ -304,6 +355,7 @@ def status() -> None:
     from callverse.config import EVALUATION_DIR, FORECAST_DIR, POLICY_DIR, PROCESSED_DIR, database_path
     from callverse.llm import get_llm
 
+    # A [x] for each piece that exists on disk, a [ ] for each one still to build.
     checks = {
         "processed data": (PROCESSED_DIR / "synthetic_contacts.parquet").exists(),
         "SQLite store": database_path().exists(),
@@ -316,6 +368,7 @@ def status() -> None:
     stage("CallVerse status")
     for name, ok in checks.items():
         say(f"  [{'x' if ok else ' '}] {name}")
+    # Which LLM provider is active (OpenRouter, the local GPU, or off) and why.
     info = get_llm().status()
     gpu = info["gpu"]
     say(f"  LLMs ({info['provider']}, profile {info['profile']}): available={info['available']}")
@@ -335,7 +388,9 @@ def serve(
     """Start the FastAPI backend (REST + WebSocket) for the React control room."""
     import uvicorn
 
+    # Keep Hugging Face offline while serving (no surprise model downloads during a demo).
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    # uvicorn is the web server that runs the FastAPI app (REST + WebSocket) on http://127.0.0.1:8000.
     uvicorn.run("callverse.api.app:app", host=host, port=port, reload=reload)
 
 
@@ -346,6 +401,7 @@ def run_all(
 ) -> None:
     """End-to-end pipeline: data -> forecast -> workforce agent -> evaluation."""
     started = time.perf_counter()
+    # The whole pipeline in order. --quick makes a faster demo version (fewer seeds, no notebooks).
     if not skip_data:
         data(notebooks=not quick, database=True, knowledge_base=not quick)
     else:
@@ -358,5 +414,6 @@ def run_all(
     say("Next: `callverse serve` and `npm run dev` in frontend/ (see docs/RUN_GUIDE.md).")
 
 
+# Allows `python -m callverse.main` as well as the `callverse` command (see pyproject.toml).
 if __name__ == "__main__":
     app()

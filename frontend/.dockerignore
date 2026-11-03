@@ -1,3 +1,4 @@
+# Folders not sent to Docker when building (they are recreated inside the image).
 node_modules
 **/node_modules
 **/dist

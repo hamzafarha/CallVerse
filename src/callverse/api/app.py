@@ -9,6 +9,10 @@ Run with ``callverse serve`` (or ``uvicorn callverse.api.app:app``).
   other route (forecast, workforce, twin, agents, quality, evaluation, MLOps).
 """
 
+# How to read this file: one Python function per URL. The decorator gives the HTTP method and the path:
+# @app.get("/api/forecast") answers GET requests on that path, and FastAPI turns the returned dictionary into
+# JSON. Sections: overview, data, forecast, twin, workforce, agents, quality, evaluation, MLOps, system
+# (LLMs), front office (portal, desk), help centre, and the live WebSocket at the end.
 import asyncio
 import json
 import threading
@@ -33,10 +37,12 @@ from callverse.data import loaders
 from callverse.evaluation.business_kpis import BO_KPIS, summarize_runs
 from callverse.evaluation.experiments import SIM_KPIS
 
+# Settings from configs/app.yaml (version, description, allowed browser origins).
 settings = load_yaml("app")
 app = FastAPI(
     title="CallVerse API", version=settings["app"]["version"], description=settings["app"]["description"]
 )
+# CORS: allow the two React apps (served on other ports, 5173 and 5174) to call this API from the browser.
 app.add_middleware(
     CORSMiddleware, allow_origins=settings["server"]["cors_origins"], allow_methods=["*"], allow_headers=["*"]
 )
@@ -45,12 +51,14 @@ app.add_middleware(
 # --------------------------------------------------------------------- overview
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    """A quick "is the server alive?" check."""
     return {"status": "ok", "version": settings["app"]["version"]}
 
 
 @app.get("/api/overview")
 def overview() -> dict[str, Any]:
     """Headline numbers, BO/DSO definitions and the scorecard."""
+    # clean() turns numpy and pandas values into plain JSON (NaN -> null).
     contacts = loaders.contacts()
     tickets = loaders.tickets()
     scorecard_path = EVALUATION_DIR / "scorecard.json"
@@ -82,6 +90,7 @@ def data_summary() -> dict[str, Any]:
     from callverse.data.validation import validate_processed_data
 
     daily = loaders.daily_contacts_by_group()
+    # Contacts per week and problem group, for the stacked chart of the Data page.
     weekly = (
         daily.assign(week=daily["date"].dt.to_period("W").dt.start_time)
         .groupby(["week", "intent_group"])["contacts"]
@@ -104,6 +113,7 @@ def data_summary() -> dict[str, Any]:
         .reset_index()
     )
     hours = pd.DataFrame({"hour": range(24), "share": loaders.hour_shares()})
+    # Run the data contracts live and show their results.
     contracts = [r.__dict__ for r in validate_processed_data()]
     return clean(
         {
@@ -140,6 +150,7 @@ def forecast() -> dict[str, Any]:
     if not summary.get("available"):
         raise HTTPException(404, "Run `callverse forecast` first.")
     backtest = pd.read_parquet(FORECAST_DIR / "contact_forecast_backtest_predictions.parquet")
+    # Keep the 1-7 day ahead forecasts and pivot them: one column per model.
     horizon1 = backtest[(backtest["horizon"].between(1, 7))]
     total = horizon1[horizon1["intent_group"] == "total"].pivot_table(
         index="date", columns="model", values="forecast", aggfunc="mean"
@@ -148,6 +159,7 @@ def forecast() -> dict[str, Any]:
     total = total.reset_index()
     by_group = horizon1[(horizon1["model"] == "lightgbm") & (horizon1["intent_group"] != "total")]
     by_group = by_group.groupby(["date", "intent_group"])[["forecast", "actual"]].mean().reset_index()
+    # wMAPE by horizon: is the forecast worse 7 days ahead than 1 day ahead?
     by_horizon = (
         horizon1[horizon1["intent_group"] == "total"]
         .groupby(["horizon", "model"])
@@ -175,12 +187,14 @@ def forecast() -> dict[str, Any]:
 # ------------------------------------------------------------------------- twin
 @app.get("/api/twin/config")
 def twin_config() -> dict[str, Any]:
+    """Scenarios, planners and routers, for the Scenario lab menus."""
     from callverse.agents.workforce.routing import ppo_available
 
     return clean({**twin().describe(), "ppo_available": ppo_available()})
 
 
 def _spec(request: TwinRunRequest):
+    """The scenario, with the custom what-if values of the page applied on top."""
     spec = twin().scenario(request.scenario)
     return spec.with_overrides(
         name=spec.name
@@ -195,6 +209,8 @@ def _spec(request: TwinRunRequest):
 @app.post("/api/twin/run")
 def twin_run(request: TwinRunRequest) -> dict[str, Any]:
     """Simulate one configuration: KPIs (mean, 95% CI), queue over the week, the plan."""
+    # Run the configuration over several seeds; a missing artifact (no forecast or no PPO model yet) gives
+    # HTTP 409 with the reason.
     try:
         spec = _spec(request)
         started = time.perf_counter()
@@ -204,8 +220,10 @@ def twin_run(request: TwinRunRequest) -> dict[str, Any]:
     except FileNotFoundError as error:
         raise HTTPException(409, str(error)) from error
     elapsed = time.perf_counter() - started
+    # Mean and 95% CI of every KPI over the seeds.
     frame = pd.DataFrame([{"seed": r.seed, **r.kpis} for r in runs]).assign(config="run")
     summary = summarize_runs(frame, ["config"], SIM_KPIS)
+    # The queue of the first seed, averaged per hour, for the chart.
     queue = runs[0].queue
     hourly = (
         queue.assign(hour_index=(queue["time"] // 3600).astype(int))
@@ -244,6 +262,7 @@ def twin_run(request: TwinRunRequest) -> dict[str, Any]:
 def twin_compare(request: TwinCompareRequest) -> dict[str, Any]:
     """Several plans / routers / preparedness on the same simulated customers."""
     rows = []
+    # The same seeds for every option (common random numbers), then one summary per option.
     for option in request.options:
         option = option.model_copy(update={"scenario": request.scenario, "seeds": request.seeds})
         label = f"{option.plan} | {option.router} | {'prepared' if option.prepared else 'unprepared'}"
@@ -301,6 +320,7 @@ def workforce_routing() -> dict[str, Any]:
     from callverse.evaluation.workforce_metrics import routing_training_curve
 
     curve = routing_training_curve()
+    # Downsample a long learning curve to about 400 points (lighter for the browser).
     if len(curve) > 400:
         curve = curve.iloc[:: max(1, len(curve) // 400)]
     return clean(
@@ -327,12 +347,14 @@ def agents_status() -> dict[str, Any]:
 def agents_contacts(n: int = 25, seed: int = 0) -> list[dict[str, Any]]:
     """Contacts the playground can replay."""
     contacts = loaders.contacts()
+    # Skip offensive messages (Bitext tag W).
     contacts = contacts[~contacts["bitext_tags"].fillna("").str.contains("W")]
     sample = contacts.sample(n, random_state=seed)
     return records(sample[["contact_id", "contact_timestamp", "intent", "intent_group", "message_text"]])
 
 
 def _profile(contact_id: str | None, seed: int):
+    """The customer profile of a given contact, or of a random one."""
     from callverse.agents.client.profiles import profile_by_contact_id, sample_profiles
 
     if contact_id:
@@ -349,6 +371,7 @@ def agents_conversation(request: ConversationRequest) -> dict[str, Any]:
         profile = _profile(request.contact_id, request.seed)
     except KeyError as error:
         raise HTTPException(404, str(error)) from error
+    # Run the whole graph at once, save the transcript, return the final state.
     state = run_conversation(profile, request.mode, request.seed, variant=request.variant)
     save_transcript(state)
     return clean(dict(state))
@@ -367,6 +390,8 @@ async def ws_conversation(websocket: WebSocket) -> None:
         await websocket.send_json({"type": "error", "message": str(error)})
         await websocket.close()
         return
+    # The graph runs in a background thread; its updates reach this async function through a queue
+    # (call_soon_threadsafe), and are then sent to the browser.
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
     await websocket.send_json({"type": "profile", "profile": clean(profile.to_dict())})
@@ -406,6 +431,7 @@ def quality_next(labeler: str = "anonymous", seed: int = 0) -> dict[str, Any]:
     from callverse.agents.quality.rubric import rubric
     from callverse.agents.quality.validation import load_human_labels
 
+    # Pick a historical chat that this person has not graded yet.
     labels = load_human_labels()
     done = set(labels.loc[labels["labeler"] == labeler, "ticket_id"]) if len(labels) else set()
     tickets = loaders.tickets()
@@ -430,6 +456,7 @@ def quality_next(labeler: str = "anonymous", seed: int = 0) -> dict[str, Any]:
 def quality_label(label: HumanLabel) -> dict[str, Any]:
     from callverse.agents.quality.validation import save_human_label
 
+    # Save one human grade (used to calibrate the judge).
     total = save_human_label({**label.model_dump(), "labeled_at": pd.Timestamp.now().isoformat()})
     return {"saved": True, "labeled_conversations": total}
 
@@ -506,6 +533,7 @@ def mlops() -> dict[str, Any]:
     from callverse.llm.tracing import Tracer
     from callverse.tracking import recent_runs, tracking_uri
 
+    # Summarise the LLM trace file per agent: calls, share answered from the cache, latency, tokens.
     traces = pd.DataFrame(Tracer(TRACE_DIR / "llm_calls.jsonl").read(2000))
     by_agent = []
     if not traces.empty and "agent" in traces:
@@ -544,7 +572,7 @@ def mlops() -> dict[str, Any]:
 # ---------------------------------------------------------------- system / LLMs
 @app.get("/api/system")
 def system() -> dict[str, Any]:
-    """Local Hugging Face models (per role), GPU and retriever."""
+    """LLM provider (OpenRouter, or the local backup), models per role, GPU and retriever."""
     from callverse.orchestration.runtime import get_runtime
 
     return clean(get_runtime().status())
@@ -556,6 +584,7 @@ def system_warmup() -> dict[str, Any]:
     from callverse.llm import LLMUnavailableError, get_llm
     from callverse.orchestration.runtime import get_runtime
 
+    # Only when an LLM can run; otherwise HTTP 409 with the reason.
     llm = get_llm()
     if not llm.available():
         raise HTTPException(409, llm.unavailable_reason() or "LLMs not available")
@@ -568,6 +597,7 @@ def system_warmup() -> dict[str, Any]:
 
 
 # ----------------------------------------------------------------- front office
+# One demo customer per main problem type, on the portal's home page.
 DEMO_INTENTS = [
     "track_order",
     "delivery_issue",
@@ -586,6 +616,7 @@ FIRST_NAMES = [
 
 
 def _display_name(customer_id: str) -> str:
+    """A friendly, stable fake name made from the customer id (e.g. "Hugo H.")."""
     number = int(customer_id[:8], 16)
     return f"{FIRST_NAMES[number % len(FIRST_NAMES)]} {chr(65 + (number // 7) % 26)}."
 
@@ -603,6 +634,7 @@ def _customer_card(contact: pd.Series, profile: Any, with_details: bool = False)
     from callverse.agents.advisor.tools import AdvisorTools
     from callverse.agents.client.order_page import order_timeline
 
+    # The order as of the chat date: the twin replays history.
     as_of = pd.Timestamp(contact["contact_timestamp"])
     facts = AdvisorTools(as_of=as_of).order_facts(str(contact["order_id"]), str(contact["intent"])) or {}
     card = {
@@ -632,6 +664,7 @@ def _customer_card(contact: pd.Series, profile: Any, with_details: bool = False)
     }
     if with_details:
         card["timeline"] = order_timeline(facts, as_of)  # the same page the Client agent can open
+        # Earlier contacts of the same customer, before this one.
         history = loaders.contacts()
         history = history[
             (history["customer_unique_id"] == contact["customer_unique_id"])
@@ -644,6 +677,7 @@ def _customer_card(contact: pd.Series, profile: Any, with_details: bool = False)
 
 
 def _chat_contacts() -> pd.DataFrame:
+    """The contacts usable in a chat demo (no offensive messages)."""
     contacts = loaders.contacts()
     return contacts[~contacts["bitext_tags"].fillna("").str.contains("W")]
 
@@ -685,6 +719,7 @@ def desk_queue(n: int = 10, seed: int = 0) -> list[dict[str, Any]]:
 
     contacts = _chat_contacts()
     sample = contacts.sample(n, random_state=seed)
+    # The queue's waiting times are random demo values (5 to 240 s); the desk page then makes them tick.
     rng = np.random.default_rng(seed)
     queue = []
     for contact in sample.itertuples(index=False):
@@ -707,6 +742,7 @@ def desk_queue(n: int = 10, seed: int = 0) -> list[dict[str, Any]]:
 
 # ------------------------------------------------------------------ help centre
 def _kb_docs() -> dict[str, Any]:
+    """The knowledge-base Markdown files, by id."""
     from callverse.agents.advisor import load_knowledge_base_config
     from callverse.config import config_path
 
@@ -723,6 +759,7 @@ def _article(path: Any) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     meta: dict[str, Any] = {}
     if text.startswith("---"):
+        # Split the "---" front matter (YAML) from the Markdown body, and drop the hidden retrieval comments.
         _, header, text = text.split("---", 2)
         meta = yaml.safe_load(header) or {}
     body = re.sub(r"<!--.*?-->\n?", "", text, flags=re.S).strip()
@@ -739,6 +776,7 @@ def _article(path: Any) -> dict[str, Any]:
         "intents": meta.get("intents", []),
         "summary": (paragraphs[0] if paragraphs else "")[:220],
         "sections": [line[3:].strip() for line in body.splitlines() if line.startswith("## ")],
+        # The advisor playbook is internal: it is not shown to customers.
         "internal": meta.get("doc_type") == "playbook" or path.stem == "advisor_playbook",
         "markdown": body,
     }
@@ -802,6 +840,8 @@ async def ws_session(websocket: WebSocket) -> None:
 
     await websocket.accept()
     loop = asyncio.get_running_loop()
+    # Bridge between the agents' thread and this async function: emit() puts events in the outbox, sender()
+    # sends them to the browser, in order.
     outbox: asyncio.Queue = asyncio.Queue()
 
     def emit(kind: str, data: dict[str, Any]) -> None:
@@ -816,9 +856,11 @@ async def ws_session(websocket: WebSocket) -> None:
 
     sending = asyncio.create_task(sender())
     try:
+        # 1) The first message configures the session (who plays which side, LLM mode, advisor variant).
         start = await websocket.receive_json()
         seed = int(start.get("seed", 0))
         profile = _profile(start.get("contact_id"), seed)
+        # asyncio.to_thread: run the slow agent code in a worker thread, so the server stays responsive.
         session = await asyncio.to_thread(
             LiveSession,
             profile,
@@ -832,6 +874,7 @@ async def ws_session(websocket: WebSocket) -> None:
         )
         advisor = session.session.advisor
         llm = advisor.use_llm()
+        # 2) Tell the browser which provider and model answer.
         emit(
             "ready",
             {
@@ -842,6 +885,8 @@ async def ws_session(websocket: WebSocket) -> None:
                 "retriever": type(advisor.retriever).__name__,
             },
         )
+        # 3) The Client agent opens (when it plays the customer); then each browser message is handled until
+        # the chat ends.
         await asyncio.to_thread(session.begin)
         while not session.finished:
             message = await websocket.receive_json()
@@ -850,6 +895,7 @@ async def ws_session(websocket: WebSocket) -> None:
         pass
     except Exception as error:  # surfaced to the UI
         emit("error", {"message": str(error)})
+    # 4) Always: stop the sender and close the socket.
     finally:
         outbox.put_nowait(None)
         await sending

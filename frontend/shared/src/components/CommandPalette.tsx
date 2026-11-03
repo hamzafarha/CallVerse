@@ -1,8 +1,16 @@
+/**
+ * The search box that opens with Ctrl+K (Cmd+K on a Mac): type a few letters to jump to a page or run an
+ * action. Built with the cmdk library, which filters the items and handles the arrow keys.
+ */
 import { Command } from "cmdk";
 import { AnimatePresence, motion } from "framer-motion";
 import { Search, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
+/**
+ * One entry of the palette: its label, its group heading, an optional icon and search keywords, and the
+ * function to run when it is chosen.
+ */
 export interface PaletteItem {
   id: string;
   label: string;
@@ -16,6 +24,8 @@ export interface PaletteItem {
 /** ⌘K / Ctrl+K command palette: jump to any page or action. */
 export function CommandPalette({ items }: { items: PaletteItem[] }) {
   const [open, setOpen] = useState(false);
+  // Keyboard shortcuts: Ctrl+K opens or closes, Escape closes. Other components open it by sending the
+  // "callverse:palette" browser event (see PaletteButton below).
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -27,14 +37,17 @@ export function CommandPalette({ items }: { items: PaletteItem[] }) {
     const onOpen = () => setOpen(true);
     window.addEventListener("keydown", onKey);
     window.addEventListener("callverse:palette", onOpen);
+    // Cleanup: remove the listeners when the component disappears.
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("callverse:palette", onOpen);
     };
   }, []);
+  // Group headings, in the order they first appear.
   const groups = Array.from(new Set(items.map((i) => i.group)));
   return (
     <AnimatePresence>
+      {/* AnimatePresence lets the palette fade out before it is removed. */}
       {open && (
         <motion.div
           className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-[14vh] backdrop-blur-sm"
@@ -43,6 +56,7 @@ export function CommandPalette({ items }: { items: PaletteItem[] }) {
           exit={{ opacity: 0 }}
           onClick={() => setOpen(false)}
         >
+          {/* The dialog box. A click inside it must not close it (stopPropagation); a click outside does. */}
           <motion.div
             initial={{ opacity: 0, scale: 0.96, y: -10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -61,6 +75,7 @@ export function CommandPalette({ items }: { items: PaletteItem[] }) {
                 />
                 <span className="kbd">Esc</span>
               </div>
+              {/* The results: cmdk hides the items that do not match what was typed. */}
               <Command.List className="max-h-[360px] overflow-y-auto p-2">
                 <Command.Empty className="px-3 py-8 text-center text-sm text-muted">Nothing found.</Command.Empty>
                 {groups.map((group) => (
@@ -106,6 +121,7 @@ export function CommandPalette({ items }: { items: PaletteItem[] }) {
 
 /** Button that opens the palette (for the top bar). */
 export function PaletteButton() {
+  // Show the Cmd sign on a Mac, "Ctrl" elsewhere.
   const mac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
   return (
     <button

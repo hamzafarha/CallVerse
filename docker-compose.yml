@@ -6,9 +6,11 @@
 #     MLflow                                http://localhost:5000
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 #     same, with the local Hugging Face LLMs on an NVIDIA GPU (NVIDIA Container Toolkit).
-# Without a GPU the agents use their offline backups (templates + rule-based judge).
+# Without a GPU the agents use the OpenRouter models (OPENROUTER_API_KEY in .env), or
+# else their offline backups (templates + rule-based judge).
 
 services:
+  # Database of the MLflow server (runs, parameters, metrics).
   postgres:
     image: postgres:16-alpine
     environment:
@@ -22,6 +24,7 @@ services:
       interval: 5s
       retries: 10
 
+  # MLflow tracking server (web page on port 5000); artifacts are kept in a Docker volume.
   mlflow:
     image: python:3.11-slim
     command: >
@@ -36,6 +39,8 @@ services:
       postgres:
         condition: service_healthy
 
+  # The FastAPI backend, built from the Dockerfile. .env gives it the OpenRouter key; data/, artifacts/ and
+  # configs/ are shared with the host machine.
   api:
     build: .
     env_file: [.env]
@@ -56,6 +61,7 @@ services:
     ports: ["8080:8080", "8081:8081"]
     depends_on: [api]
 
+# Named volumes: data that survives container restarts.
 volumes:
   mlflow-db:
   mlflow-artifacts:

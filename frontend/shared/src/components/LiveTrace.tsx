@@ -1,3 +1,7 @@
+/**
+ * The "Behind the scenes" panel: a timeline of what each agent did during the chat (routing decision,
+ * knowledge-base search, tool calls, LLM calls, the customer's tools, the review).
+ */
 import { AnimatePresence, motion } from "framer-motion";
 import { humanize, num } from "../lib/format";
 import type { LiveState, StageEvent } from "../lib/session";
@@ -5,8 +9,12 @@ import { CALLER_LABEL, TOOL_LABEL } from "./chat";
 import { Bar } from "./motion";
 import { Bot, Cpu, Headset, ScanSearch, ShieldCheck, User, Wrench } from "lucide-react";
 
+// Fallback icon per agent.
 const ICON: Record<string, any> = { workforce: Headset, client: User, quality: ShieldCheck };
 
+/**
+ * Turns one stage event from the server into a timeline line (icon, title, detail), or null to skip it.
+ */
 function describe(stage: StageEvent): { icon: any; title: string; detail?: string } | null {
   if (stage.agent === "workforce") return { icon: Headset, title: "Workforce agent routed the chat" };
   if (stage.agent === "quality") return { icon: ShieldCheck, title: "Quality agent reviewed the chat" };
@@ -20,6 +28,8 @@ function describe(stage: StageEvent): { icon: any; title: string; detail?: strin
       };
     return { icon: User, title: "Client agent answers as the customer" };
   }
+  // Advisor steps: knowledge-base search (top 3 sections with their similarity scores), tool calls, LLM
+  // calls.
   if (stage.step === "retrieval")
     return {
       icon: ScanSearch,
@@ -30,6 +40,7 @@ function describe(stage: StageEvent): { icon: any; title: string; detail?: strin
         .join(" · "),
     };
   if (stage.step === "tool") {
+    // A tool counts as failed if it raised an error, or (fact check) if the draft did not pass.
     const ok = stage.ok && stage.passed !== false;
     const who = stage.caller ? ` · ${CALLER_LABEL[stage.caller] ?? stage.caller}` : "";
     return {
@@ -39,6 +50,9 @@ function describe(stage: StageEvent): { icon: any; title: string; detail?: strin
     };
   }
   if (stage.step === "generation") {
+    // Which LLM call: the first one, a new round with the tool results, or a rewrite after a failed fact
+    // check. The detail lists the tools offered to the model ("must call one of" when tool_choice is
+    // "required").
     const title =
       stage.reason === "fact_check"
         ? "Fact check failed: the LLM rewrites its draft"
@@ -55,6 +69,7 @@ function describe(stage: StageEvent): { icon: any; title: string; detail?: strin
 
 /** "Behind the scenes" panel: what every agent did, as it happens. */
 export function LiveTrace({ state }: { state: LiveState }) {
+  // Keep only the stages that have something to show.
   const events = state.stages.map((s) => ({ stage: s, view: describe(s) })).filter((e) => e.view) as {
     stage: StageEvent;
     view: NonNullable<ReturnType<typeof describe>>;
@@ -62,6 +77,8 @@ export function LiveTrace({ state }: { state: LiveState }) {
   const routing = state.routing;
   return (
     <div className="space-y-5">
+      {/* The Workforce agent's decision: predicted problem type, confidence, desk, expected wait (Erlang C)
+         and agents on duty. */}
       {routing && (
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border border-line bg-raised p-4">
           <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted">
@@ -91,6 +108,7 @@ export function LiveTrace({ state }: { state: LiveState }) {
           </div>
         </motion.div>
       )}
+      {/* The timeline: a vertical line with one dot per event; the latest dot pulses while an agent works. */}
       <div className="relative space-y-3 pl-6">
         <div className="absolute bottom-2 left-[9px] top-2 w-px bg-line" />
         <AnimatePresence initial={false}>

@@ -49,9 +49,11 @@ back office: dark theme (control room). Toggle top right.
    While tokens stream, point at **Behind the scenes** on the right:
    - Workforce agent: predicted intent + confidence, desk, Erlang C expected wait.
    - Knowledge-base hits with cosine scores, *Order lookup ✓*, *Rules engine ✓*.
-   - *LLM writes the reply* — SmolLM3-3B from Hugging Face, 4-bit, on the laptop GPU.
+   - *LLM writes the reply* — NVIDIA Nemotron 3.5 on OpenRouter (free tier); without a key or quota,
+     SmolLM3-3B from Hugging Face, 4-bit, on the laptop GPU.
    **Say:** "The rules engine decides, the LLM only writes. That is why it never invents a refund."
-4. **End chat** → 4 stars → the Granite judge's scorecard animates (radar, verdicts, rationale).
+4. **End chat** → 4 stars → the judge's scorecard animates (radar, verdicts, rationale): Xing 4.0 on
+   OpenRouter, or the local Granite model as backup.
    **Say:** "A different model family grades every chat, against the policy-correct answer."
 
 ## Part 2 — The business problem (2 min, back office Overview)
@@ -93,7 +95,7 @@ Forecast page. **Say:** "Rolling-origin backtest over 46 weeks: LightGBM wMAPE 2
 
 ## Part 5 — The four agents together (2 min, Agent theater)
 
-Pick a contact → *Local LLMs*, *Hybrid* → **Start conversation**. The LangGraph pipeline lights
+Pick a contact → *LLMs*, *Hybrid* → **Start conversation**. The LangGraph pipeline lights
 up node by node while the transcript streams. **Say:** "No human here: the Client agent plays the
 customer, the Workforce agent routes, the Advisor answers, the Quality agent grades, the KPI
 engine records FCR, CSAT and compliance. This is how we evaluate the advisor on many

@@ -18,12 +18,14 @@ from callverse.evaluation.forecast_metrics import forecast_summary
 
 
 def _read(name: str) -> pd.DataFrame:
+    """Read a saved evaluation table (empty when the file is missing)."""
     path = EVALUATION_DIR / name
     return pd.read_csv(path) if path.exists() else pd.DataFrame()
 
 
 def component_metrics() -> pd.DataFrame:
     """Is each part good on its own? (component metrics card of the architecture)."""
+    # One row per metric: component, metric, value, baseline, unit and the good direction.
     rows: list[dict[str, Any]] = []
     forecast = forecast_summary()
     if forecast.get("available"):
@@ -144,6 +146,7 @@ def component_metrics() -> pd.DataFrame:
 
 
 def _relative(table: pd.DataFrame, **filters: str) -> float | None:
+    """Mean relative change (%) of the rows that match the filters."""
     rows = table
     for column, value in filters.items():
         rows = rows[rows[column] == value]
@@ -154,6 +157,7 @@ def scorecard() -> list[dict[str, Any]]:
     """One line per BO/DSO: measured result, baseline, rule, verdict."""
     cards: list[dict[str, Any]] = []
 
+    # BO1/DSO1: the routing result (mean wait vs FIFO in peak weeks, and ASA on stressed test days).
     routing = _read("dso1_routing_vs_fifo.csv")
     best_router, best_gain = None, None
     if not routing.empty:
@@ -189,6 +193,7 @@ def scorecard() -> list[dict[str, Any]]:
         }
     )
 
+    # BO2/DSO2: correct answers of the best LLM variant, and the judge's agreement (kappa).
     agents = _read("dso2_agents_summary.csv")
     calibration = _read("dso2_judge_calibration_agreement.csv")
     correct = None
@@ -212,6 +217,7 @@ def scorecard() -> list[dict[str, Any]]:
         }
     )
 
+    # BO3/DSO3: CP-SAT labour cost vs the fixed schedule, and its service level against the target.
     scheduling = _read("dso3_scheduling_vs_fixed.csv")
     cost = (
         _relative(scheduling, plan="cpsat", kpi="labour_cost_eur", scenario="baseline")
@@ -246,6 +252,7 @@ def scorecard() -> list[dict[str, Any]]:
         }
     )
 
+    # BO4/DSO4: the forecast vs the naive one, the twin fidelity, and the money saved by testing first.
     forecast = forecast_summary()
     savings = _read("bo4_preparedness_savings.csv")
     fidelity = _read("twin_fidelity_checks.csv")
@@ -280,6 +287,7 @@ def scorecard() -> list[dict[str, Any]]:
 
 def artifacts_inventory() -> list[dict[str, Any]]:
     """Files produced by the pipeline (for the MLOps page)."""
+    # Every file in artifacts/ (for the MLOps page).
     rows = []
     for folder in [FORECAST_DIR, EVALUATION_DIR, EVALUATION_DIR.parent / "policies"]:
         if folder.exists():

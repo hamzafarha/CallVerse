@@ -1,3 +1,8 @@
+/**
+ * Chat pieces shared by the customer chat, the advisor desk and the back office: message bubbles, the chips
+ * under a message (tools used, who wrote it), the streaming bubble, the "is typing" row, and labels that turn
+ * tool and step names into plain words.
+ */
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
@@ -19,6 +24,8 @@ import type { ChatMessage, StageEvent } from "../lib/session";
 import { Typewriter, TypingDots } from "./motion";
 import { Avatar, clsx } from "./ui";
 
+// Display names of the tools (Python name -> label under a message). The first ten are the Advisor agent's
+// tools; the last three belong to the Client agent.
 export const TOOL_LABEL: Record<string, string> = {
   lookup_order: "Order lookup",
   get_ticket_history: "Ticket history",
@@ -46,6 +53,7 @@ export const CALLER_LABEL: Record<string, string> = {
 export function stageLabel(stage: StageEvent | undefined): string {
   if (!stage) return "";
   if (stage.agent === "workforce") return "Workforce agent is routing the conversation…";
+  // The Client agent: typing, or using one of its three tools.
   if (stage.agent === "client") {
     if (stage.step !== "tool") return "Customer is typing…";
     if (stage.name === "send_evidence") return "Customer is attaching a file…";
@@ -58,6 +66,9 @@ export function stageLabel(stage: StageEvent | undefined): string {
   return stage.kind === "draft" ? "Copilot is drafting…" : "Advisor is thinking…";
 }
 
+/**
+ * Round brand-colored icon that stands for the AI advisor.
+ */
 export function AdvisorAvatar({ size = 32 }: { size?: number }) {
   return (
     <div
@@ -69,6 +80,11 @@ export function AdvisorAvatar({ size = 32 }: { size?: number }) {
   );
 }
 
+/**
+ * Small label under a message, one per tool call: a tick or a cross (did the tool succeed?), the tool's name,
+ * and who decided to call it (robot = the LLM chose it, shield = a safety net). Hover shows the tool's
+ * summary.
+ */
 export function ToolChip({ name, ok, caller, summary }: { name: string; ok?: boolean; caller?: string; summary?: string }) {
   const title = [caller ? CALLER_LABEL[caller] ?? caller : null, summary].filter(Boolean).join(" · ");
   return (
@@ -88,6 +104,10 @@ export function modelName(model: unknown): string {
   return String(model ?? "").split("/").pop()!.replace("-bnb-4bit", "").replace(/:free$/, "");
 }
 
+/**
+ * Who or what wrote the message, in plain words (e.g. "AI · gemma-4-26b-a4b-it", "approved template", "real
+ * customer message").
+ */
 function modeLabel(meta: Record<string, any> | undefined): string | null {
   if (!meta?.mode) return null;
   if (meta.mode === "llm") return `AI · ${modelName(meta.model)}`;
@@ -116,6 +136,7 @@ export function ChatBubble({
   speaking?: boolean; // voice mode is reading this message
   onListen?: () => void; // read this message aloud
 }) {
+  // Everything shown under the bubble comes from message.meta, sent by the server with each message.
   const advisor = message.speaker === "advisor";
   const tools: any[] = message.meta?.tools ?? [];
   const sources: string[] = message.meta?.sources ?? [];
@@ -134,6 +155,7 @@ export function ChatBubble({
       transition={{ type: "spring", bounce: 0.3, duration: 0.5 }}
       className={clsx("flex items-end gap-2.5", mine ? "flex-row-reverse" : "flex-row")}
     >
+      {/* Avatar, then the bubble; flex-row-reverse puts my own messages on the right. */}
       {advisor ? <AdvisorAvatar /> : <Avatar name={name ?? "Customer"} size={32} />}
       <div className={clsx("flex max-w-[80%] flex-col", mine ? "items-end" : "items-start")}>
         <div
@@ -148,7 +170,10 @@ export function ChatBubble({
         >
           {animate ? <Typewriter text={message.text} /> : message.text}
         </div>
+        {/* Files sent by the customer (Client agent tool send_evidence). */}
         {attachments.length > 0 && <Attachments files={attachments} />}
+        {/* The meta line: listen button, who wrote it, tool chips, Client agent warnings, number of
+           sources. */}
         {showMeta && (label || tools.length > 0 || sources.length > 0 || onListen || speaking || mismatch !== undefined || outOfPatience) && (
           <div className={clsx("mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted", mine && "justify-end")}>
             {onListen && (
@@ -163,6 +188,7 @@ export function ChatBubble({
               </button>
             )}
             {label && <span>{label}</span>}
+            {/* One chip per tool call. For the fact check (check_draft_reply), "ok" means the draft passed. */}
             {tools.map((t, i) => (
               <ToolChip
                 key={i}
@@ -172,6 +198,7 @@ export function ChatBubble({
                 summary={t.summary}
               />
             ))}
+            {/* The customer's order page says something else than the advisor (Client agent tool 1). */}
             {mismatch === true && (
               <span
                 title="The customer compared the advisor's answer with their order page"
@@ -182,6 +209,7 @@ export function ChatBubble({
               </span>
             )}
             {mismatch === false && tools.length > 0 && <span>matches my order page</span>}
+            {/* The customer's chat timer went past its patience (Client agent tool 2). */}
             {outOfPatience && (
               <span
                 title="The customer's chat timer showed a wait longer than its patience"
@@ -246,6 +274,7 @@ export function StreamingBubble({ text, mine = false, label }: { text: string; m
       <AdvisorAvatar />
       <div className="flex max-w-[80%] flex-col">
         <div className="ring-gradient whitespace-pre-wrap rounded-2xl rounded-bl-md bg-surface px-4 py-2.5 text-[14.5px] leading-relaxed text-ink shadow-soft">
+          {/* No text yet: three dots. Then the text grows with a blinking caret. */}
           {text ? <span className="caret">{text}</span> : <TypingDots color="var(--brand)" />}
         </div>
         {label && <div className="mt-1.5 text-[11px] text-muted">{label}</div>}
@@ -256,6 +285,7 @@ export function StreamingBubble({ text, mine = false, label }: { text: string; m
 
 /** "… is typing" row with the agent's current step. */
 export function ActivityRow({ text, who = "advisor" }: { text: string; who?: "advisor" | "customer" | "system" }) {
+  // Icon by speaker: robot for the advisor, sparkles for the customer, wrench for the system.
   const Icon = who === "advisor" ? Bot : who === "customer" ? Sparkles : Wrench;
   return (
     <motion.div

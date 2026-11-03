@@ -4,6 +4,7 @@ The scripted model returns prepared answers in order, so each test controls what
 "LLM" chooses and checks what the code does around it: gating, the forced rules
 engine, the safety nets and the reflection check of every draft.
 """
+# Tests the agentic variant of agents/advisor/advisor.py, run through the orchestration runtime.
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -50,11 +51,13 @@ class ScriptedLLM:
 
 
 def fake_banks(url: str, timeout: float) -> list[dict]:
+    """Stand-in for the BrasilAPI download: the banks the test customers use."""
     return [{"code": int(c), "name": f"BANK {c}", "fullName": f"Bank {c} S.A."} for c in CUSTOMER_BANKS]
 
 
 @pytest.fixture(scope="module")
 def runtime():
+    """One AgentRuntime for the whole file (keyword retriever: fast, no embedding model needed)."""
     from callverse.orchestration.runtime import AgentRuntime
 
     return AgentRuntime(retriever_kind="keyword")
@@ -84,10 +87,14 @@ def conversation(runtime, contact_id: str, llm: ScriptedLLM, tmp_path):
 
 
 def calls(reply) -> list[tuple[str, str]]:
+    """The tool calls of a reply, as (tool name, caller) pairs."""
     return [(c["name"], c["caller"]) for c in reply.tool_calls]
 
 
 def test_llm_chooses_its_tools_then_the_rules_engine_decides(runtime, tmp_path) -> None:
+    """The LLM picks its tools, then the rules engine decides the action (the LLM never decides the
+    policy).
+    """
     llm = ScriptedLLM()
     advisor, tools, memory, messages, profile = conversation(runtime, TRACK_ORDER, llm, tmp_path)
     llm.script = [
@@ -106,6 +113,9 @@ def test_llm_chooses_its_tools_then_the_rules_engine_decides(runtime, tmp_path) 
 
 
 def test_safety_net_opens_the_order_and_bad_drafts_fall_back_to_approved_text(runtime, tmp_path) -> None:
+    """If the LLM forgets to open the order, a safety net does; a draft that fails the fact check is
+    replaced by approved text.
+    """
     llm = ScriptedLLM()
     advisor, tools, memory, messages, _ = conversation(runtime, TRACK_ORDER_2, llm, tmp_path)
     llm.script = ["Your order arrives tomorrow!", "It will be there tomorrow, I promise.", "Yes, tomorrow."]
@@ -120,6 +130,7 @@ def test_safety_net_opens_the_order_and_bad_drafts_fall_back_to_approved_text(ru
 
 
 def test_safety_net_escalates_when_the_llm_ignores_a_supervisor_request(runtime, tmp_path) -> None:
+    """When the customer asks for a supervisor and the LLM ignores it, the safety net escalates."""
     llm = ScriptedLLM()
     advisor, tools, memory, messages, _ = conversation(runtime, TRACK_ORDER, llm, tmp_path)
     advisor._policy_decision(memory, tools)  # the order was answered in an earlier turn
@@ -136,6 +147,7 @@ def test_safety_net_escalates_when_the_llm_ignores_a_supervisor_request(runtime,
 
 
 def test_llm_escalates_a_legal_threat_before_the_order_number(runtime, tmp_path) -> None:
+    """A legal threat is escalated at once, even before the order number is known."""
     llm = ScriptedLLM()
     advisor, tools, memory, _, _ = conversation(runtime, TRACK_ORDER, llm, tmp_path)
     memory.order_id = None
@@ -153,6 +165,7 @@ def test_llm_escalates_a_legal_threat_before_the_order_number(runtime, tmp_path)
 
 
 def test_a_supervisor_request_before_any_answer_does_not_escalate_yet(runtime, tmp_path) -> None:
+    """A supervisor request before any answer does not escalate yet (the advisor tries to help first)."""
     llm = ScriptedLLM()
     advisor, tools, memory, _, _ = conversation(runtime, TRACK_ORDER, llm, tmp_path)
     memory.order_id = None
@@ -166,6 +179,7 @@ def test_a_supervisor_request_before_any_answer_does_not_escalate_yet(runtime, t
 
 @pytest.mark.parametrize("llm_checks", [True, False])
 def test_a_bank_code_is_always_checked(runtime, tmp_path, llm_checks: bool) -> None:
+    """A bank code given by the customer is always checked with validate_bank_code."""
     llm = ScriptedLLM()
     advisor, tools, memory, messages, _ = conversation(runtime, BOLETO_REFUND, llm, tmp_path)
     advisor._policy_decision(memory, tools)
@@ -187,6 +201,7 @@ def test_a_bank_code_is_always_checked(runtime, tmp_path, llm_checks: bool) -> N
 
 
 def test_template_backup_checks_the_bank_code_too(runtime, monkeypatch, tmp_path) -> None:
+    """The offline template backup also checks the bank code."""
     from callverse.agents.advisor import tools as tools_module
     from callverse.agents.client.profiles import profile_by_contact_id
     from callverse.data import loaders

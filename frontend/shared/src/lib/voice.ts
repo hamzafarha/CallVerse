@@ -54,12 +54,18 @@ export function speechChunks(text: string, max = 220): string[] {
   return chunks.filter(Boolean);
 }
 
+/**
+ * The English voices of this browser (all voices if none is English).
+ */
 function englishVoices(): SpeechSynthesisVoice[] {
   const all = window.speechSynthesis.getVoices();
   const english = all.filter((v) => v.lang?.toLowerCase().startsWith("en"));
   return english.length ? english : all;
 }
 
+/**
+ * The first voice whose name contains a hint (never the other role's voice).
+ */
 function pickVoice(voices: SpeechSynthesisVoice[], hints: string[], avoid?: string): SpeechSynthesisVoice | undefined {
   for (const hint of hints) {
     const voice = voices.find((v) => v.name.toLowerCase().includes(hint) && v.voiceURI !== avoid);
@@ -77,6 +83,9 @@ interface VoiceSettings {
 
 const STORE = "callverse.voice";
 
+/**
+ * Voice settings saved in the browser (voice mode is off by default).
+ */
 function loadSettings(): VoiceSettings {
   try {
     return { enabled: false, rate: 1, ...JSON.parse(localStorage.getItem(STORE) ?? "{}") };
@@ -116,6 +125,7 @@ export function useVoice() {
     }
   }, [settings]);
 
+  // The user's chosen voices, or good defaults; the customer never gets the advisor's voice.
   const advisorVoice = voices.find((v) => v.voiceURI === settings.advisor) ?? pickVoice(voices, ADVISOR_HINTS);
   const customerVoice =
     voices.find((v) => v.voiceURI === settings.customer) ?? pickVoice(voices, CUSTOMER_HINTS, advisorVoice?.voiceURI);
@@ -134,6 +144,7 @@ export function useVoice() {
       if (!VOICE_SUPPORTED) return;
       const voice = role === "advisor" ? advisorVoice : customerVoice;
       const prosody = role === "customer" ? PERSONA_PROSODY[persona ?? "normal"] ?? PERSONA_PROSODY.normal : PERSONA_PROSODY.normal;
+      // Clean the text for speech, then cut it into short pieces.
       const chunks = speechChunks(speechText(text));
       window.speechSynthesis.resume(); // Chrome can stay paused after the tab was hidden
       chunks.forEach((chunk, index) => {
@@ -152,6 +163,7 @@ export function useVoice() {
             setLipSync("loop");
           };
         }
+        // Each spoken word moves the avatar's mouth (lip sync).
         utterance.onboundary = (event) => {
           if (!event.name || event.name === "word") {
             setLipSync("words");
@@ -231,6 +243,7 @@ export function useAutoSpeak(messages: ChatMessage[], voice: Voice, speakerOf: S
       spoken.current = messages.length;
       return;
     }
+    // Speak only the messages that are new since the last time.
     for (let i = spoken.current; i < messages.length; i++) {
       const speaker = who.current(messages[i]);
       if (speaker) voice.speak(String(i), messages[i].text, speaker.role, speaker.persona);

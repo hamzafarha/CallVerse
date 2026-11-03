@@ -1,3 +1,8 @@
+/**
+ * Evaluation page: does each idea beat its baseline? It shows the BO -> DSO scorecard and the tables written
+ * by `callverse evaluate` (scenario weeks x 10 seeds, common random numbers, paired differences with 95%
+ * CIs), plus retrieval, component metrics and twin fidelity.
+ */
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, ChartTooltip, ErrorBox, Legend, Loading, PageHeader, Status } from "@callverse/shared";
 import { useApi } from "@callverse/shared";
@@ -7,6 +12,7 @@ export default function EvaluationPage() {
   const { data, error, loading } = useApi<any>("/api/evaluation");
   if (error) return <ErrorBox error={error} />;
   if (loading || !data) return <Loading />;
+  // No evaluation tables yet (`callverse evaluate` has not been run).
   const empty = !data.dso3.summary.length;
   return (
     <div className="space-y-6">
@@ -23,6 +29,8 @@ export default function EvaluationPage() {
           <table className="data">
             <thead><tr><th className="w-1/5">Objective</th><th className="w-1/5">Main idea vs baseline</th><th>Result and rule</th><th className="w-1/5">Verdict</th></tr></thead>
             <tbody>
+              {/* One row per business objective: main idea vs baseline, result, switch rule and verdict
+                 (with the fallback when the main idea is not kept). */}
               {data.scorecard.map((c: any) => (
                 <tr key={c.bo} className="align-top">
                   <td className="text-ink"><b>{c.bo}/{c.dso}</b> {c.objective}</td>
@@ -49,6 +57,8 @@ export default function EvaluationPage() {
               </BarChart>
             </ResponsiveContainer>
           </div>
+          {/* BO4 savings per scenario: net saving, CI, extra labour, abandonments avoided, and the break-
+             even cost of a lost customer. */}
           <table className="data mt-3">
             <thead><tr><th>Scenario</th><th className="text-right">Net saving / week</th><th className="text-right">95% CI</th><th className="text-right">Extra labour</th><th className="text-right">Lost customers avoided</th><th className="text-right">Break-even cost of a lost customer</th></tr></thead>
             <tbody>
@@ -62,6 +72,7 @@ export default function EvaluationPage() {
             </tbody>
           </table>
           <p className="mt-2 text-xs text-muted">Preparing pays off whenever a customer who hangs up is worth more than the break-even value (assumption in configs: €8).</p>
+          {/* Prepared vs unprepared plans, KPI by KPI. */}
           <DiffTable rows={data.bo4.vs_unprepared} by="option" kpis={["understaffed_hours", "service_level", "abandon_rate", "total_cost_eur"]} />
         </Card>
         <Card title="DSO1 — routing in peak scenarios" subtitle="Change vs FIFO (paired, 95% CI); same unprepared CP-SAT plan">
@@ -78,6 +89,8 @@ export default function EvaluationPage() {
           <table className="data">
             <thead><tr><th>Variant</th><th className="text-right">n</th><th className="text-right">Verified policy action</th><th className="text-right">Judge says correct</th><th className="text-right">FCR</th><th className="text-right">CSAT</th><th className="text-right">Compliant</th><th className="text-right">Tools OK</th></tr></thead>
             <tbody>
+              {/* Verified policy action: the action compared with the known correct one (from the data
+                 generator). Judge says correct: the Quality agent's opinion. */}
               {data.dso2.summary.map((r: any) => (
                 <tr key={r.variant}>
                   <td className="text-ink">{r.variant}</td><td className="text-right">{r.conversations}</td>
@@ -95,6 +108,8 @@ export default function EvaluationPage() {
           <table className="data">
             <thead><tr><th>Retriever</th><th className="text-right">Recall@1</th><th className="text-right">Recall@4</th><th className="text-right">MRR</th></tr></thead>
             <tbody>
+              {/* Recall@k = the right section is in the top k results; MRR = mean of 1 / rank of the right
+                 section. */}
               {data.dso2.retrieval.map((r: any) => (
                 <tr key={r.retriever}><td className="text-ink">{r.retriever}</td><td className="text-right">{num(r.context_recall_at_1 * 100, 1)}%</td><td className="text-right">{num(r.context_recall_at_4 * 100, 1)}%</td><td className="text-right">{num(r.mrr, 3)}</td></tr>
               ))}
@@ -135,6 +150,8 @@ export default function EvaluationPage() {
           <table className="data">
             <thead><tr><th>Check</th><th className="text-right">Value</th><th>Detail</th><th /></tr></thead>
             <tbody>
+              {/* Does the twin look like reality? Statistical checks (e.g. KS tests), then the Erlang C
+                 comparison (simulated vs theory). */}
               {data.fidelity.checks.map((r: any) => (
                 <tr key={r.check}><td className="text-ink">{r.check}</td><td className="text-right">{num(r.value, 3)}</td><td className="text-xs">{r.detail}</td><td><Status ok={r.passed} /></td></tr>
               ))}
@@ -149,6 +166,10 @@ export default function EvaluationPage() {
   );
 }
 
+/**
+ * Table of paired differences: option vs baseline per scenario and KPI, with the % change and whether it is
+ * significant at 95% (the confidence interval of the difference excludes 0).
+ */
 function DiffTable({ rows, by, kpis, labels = {} }: { rows: any[]; by: string; kpis: string[]; labels?: Record<string, string> }) {
   const filtered = rows.filter((r) => kpis.includes(r.kpi));
   if (!filtered.length) return <div className="text-sm text-muted">Not computed yet.</div>;

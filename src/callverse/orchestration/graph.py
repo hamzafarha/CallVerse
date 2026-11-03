@@ -12,6 +12,15 @@
 - KPI node turns it into BO2 indicators (FCR, CSAT, compliance, correctness).
 """
 
+# How to read this file:
+# - ConversationSession / make_session(): create the agents of one chat.
+# - reference_answer(): the "answer key" (what the policy says is correct).
+# - expected_wait() / route_contact(): the Workforce agent's routing decision.
+# - review_conversation() / kpi_row(): the grading and the KPIs.
+# - build_graph(): the LangGraph state machine (nodes + edges).
+# - run_conversation() / run_batch(): run one chat, or many for the evaluation. LangGraph is a library to
+#   build agent workflows as a graph: each node is a function that reads the shared state and returns the
+#   parts it changes; the edges say which node runs next.
 import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -72,11 +81,14 @@ def make_session(
     ``rag_policy`` (RAG + tools + rules engine, default), ``rag`` (pure agentic RAG) or
     ``agentic`` (the LLM chooses gated tools; rules engine, safety nets, draft check).
     """
+    # One shared runtime: the retriever, the intent classifier and the LLM client are loaded once per process.
     runtime = runtime or get_runtime()
     settings = runtime.settings
+    # Template mode = offline: no LLM, keyword search (instant).
     llm = None if mode == "template" else runtime.llm
     retriever = runtime.retriever() if mode != "template" else runtime.keyword_retriever()
     advisor_mode = {"template": "template", "llm": "llm"}.get(mode, "auto")
+    # The agents of this chat (the Workforce agent is the routing function below).
     return ConversationSession(
         profile=profile,
         client=ClientAgent(llm, advisor_mode, seed, int(settings["client"]["max_turns"])),
@@ -100,11 +112,14 @@ def make_session(
 
 
 def _event(state: ConversationState, node: str, summary: str, **data: Any) -> list[dict[str, Any]]:
+    """Add one entry to the timeline of what each agent did."""
     return [*state.get("events", []), {"node": node, "summary": summary, **data}]
 
 
 def reference_answer(session: ConversationSession) -> dict[str, Any]:
     """Policy-correct outcome for the TRUE intent (the hidden answer key)."""
+    # The TRUE intent of the contact (not the predicted one): the rules engine gives the correct outcome,
+    # which the judge uses as the answer key.
     facts = session.tools.order_facts(session.profile.order_id, session.profile.intent)
     if facts is None:
         return {}
@@ -129,10 +144,13 @@ def expected_wait(profile: CustomerProfile, intent_group: str) -> dict[str, Any]
     day = profile.contact_timestamp.normalize()
     hour = profile.contact_timestamp.hour
     today = daily[daily["date"] == day]
+    # That day's contacts, spread over the hours with the hour-of-day shares: arrivals per hour.
     rate = float(today["contacts"].sum()) * settings.sim.scale_factor * shares[hour]
+    # AHT (average handle time) of that day's mix of problems.
     work = sum(float(r.contacts) * settings.mean_handle[r.intent_group] for r in today.itertuples())
     aht = work / max(float(today["contacts"].sum()), 1.0)
     sim = settings.sim
+    # Erlang C: how many agents are needed to answer 80% of chats within 20 s.
     agents = required_agents(
         rate,
         aht,
@@ -141,8 +159,10 @@ def expected_wait(profile: CustomerProfile, intent_group: str) -> dict[str, Any]
         sim.max_occupancy,
         sim.min_agents,
     )
+    # Simulated agents with skills; pick the fastest one on this problem group (skill-based routing).
     pool = make_agent_pool(agents, workload_shares(daily, settings), settings, seed_offset=int(day.dayofyear))
     best = min(pool, key=lambda a: a.speed.get(intent_group, 1.0))
+    # Outside opening hours there is no live wait (the message waits for the morning).
     open_now = sim.is_open(hour)
     return {
         "is_live": open_now,
@@ -160,6 +180,7 @@ def expected_wait(profile: CustomerProfile, intent_group: str) -> dict[str, Any]
 
 def route_contact(session: ConversationSession, first_text: str) -> dict[str, Any]:
     """Workforce agent: predict the problem type and pick the best-skilled desk."""
+    # The intent classifier predicts the problem type from the first message.
     prediction = session.advisor.classifier.predict(first_text)
     session.memory.intent = prediction.intent
     session.memory.intent_group = prediction.intent_group
@@ -174,6 +195,7 @@ def route_contact(session: ConversationSession, first_text: str) -> dict[str, An
 
 def advisor_message(reply: Any) -> dict[str, Any]:
     """Transcript message of one advisor reply."""
+    # Everything the UI and the evaluation need to know about this reply.
     meta = {
         "mode": reply.mode,
         "stage": reply.stage,
@@ -188,6 +210,7 @@ def advisor_message(reply: Any) -> dict[str, Any]:
 
 
 def advisor_state(session: ConversationSession) -> dict[str, Any]:
+    """The advisor's memory as a small dictionary (for the UI)."""
     memory = session.memory
     return {
         "intent": memory.intent,
@@ -202,6 +225,7 @@ def review_conversation(
     session: ConversationSession, messages: list[dict[str, Any]]
 ) -> tuple[dict[str, Any], Any]:
     """Quality agent: (policy-correct reference, scorecard) of a finished conversation."""
+    # The reference (answer key) plus what the advisor did, then the judge's scorecard.
     reference = reference_answer(session)
     advisor_messages = [m for m in messages if m["speaker"] == "advisor"]
     meta = {
@@ -231,11 +255,15 @@ def kpi_row(
     reference: dict[str, Any],
 ) -> dict[str, Any]:
     """BO2 indicators of one conversation."""
+    # Every tool the advisor used in this chat.
     tools = [t for m in messages if m["speaker"] == "advisor" for t in m.get("meta", {}).get("tools", [])]
     customer_meta = [m.get("meta", {}) for m in messages if m["speaker"] == "customer"]
     customer_text = " ".join(m["text"] for m in messages if m["speaker"] == "customer").lower()
+    # A handover = a ticket to another team, or the customer asked for a supervisor.
     handover = session.memory.handed_to or ("supervisor" if "supervisor" in customer_text else None)
     action_correct = None
+    # action_correct: did the advisor's final action equal the reference outcome? It is checked by code, so it
+    # is more reliable than the judge's opinion.
     if session.memory.outcome and reference.get("outcome"):
         action_correct = session.memory.outcome == reference["outcome"]
     return {
@@ -248,9 +276,11 @@ def kpi_row(
         ),
         "judge": card["judge"],
         "turns": len(messages),
+        # FCR (first contact resolution): solved in this chat, with no handover.
         "fcr": bool(card["resolved"]) and handover is None,
         "resolved_or_handed_over": bool(card["resolved"]),
         "csat": csat,
+        # Compliant when the judge's compliance score is 4 or 5.
         "compliant": card["scores"]["compliance"] >= 4,
         "correct": action_correct if action_correct is not None else card["correct"],
         "action_correct": action_correct,
@@ -288,6 +318,8 @@ def kpi_row(
 def build_graph(session: ConversationSession):
     """Compiled LangGraph for one conversation."""
 
+    # Each node is a small function: it reads the state and returns ONLY the keys it changes; LangGraph merges
+    # them into the state.
     def client_open(state: ConversationState) -> dict[str, Any]:
         turn = session.client.opening(session.profile)
         message = {"speaker": "customer", "text": turn.text, "meta": {"mode": turn.mode}}
@@ -301,6 +333,7 @@ def build_graph(session: ConversationSession):
         }
 
     def workforce_route(state: ConversationState) -> dict[str, Any]:
+        # Workforce agent: predict the problem and choose the desk.
         routing = route_contact(session, state["messages"][0]["text"])
         # The customer waited in the twin's queue: the Erlang C wait of the hour
         session.clock.queue_wait_seconds = queue_wait_from_twin(routing)
@@ -316,6 +349,7 @@ def build_graph(session: ConversationSession):
         }
 
     def advisor(state: ConversationState) -> dict[str, Any]:
+        # Advisor agent: the next advisor message.
         messages = state["messages"]
         reply = session.advisor.reply(messages, session.memory, session.tools)
         message = advisor_message(reply)
@@ -333,6 +367,7 @@ def build_graph(session: ConversationSession):
         }
 
     def client_reply(state: ConversationState) -> dict[str, Any]:
+        # Client agent: the customer answers (it may use its tools, or leave).
         messages = state["messages"]
         turn = session.client.respond(session.profile, messages, state["customer_turns"], clock=session.clock)
         message = {"speaker": "customer", "text": turn.text, "meta": turn.meta()}
@@ -352,12 +387,14 @@ def build_graph(session: ConversationSession):
             ),
         }
 
+    # The loop condition: back to the advisor, or on to the quality review.
     def after_client(state: ConversationState) -> str:
         if state.get("ended") or state["customer_turns"] > session.max_turns:
             return "quality"
         return "advisor"
 
     def quality(state: ConversationState) -> dict[str, Any]:
+        # Quality agent: the scorecard.
         reference, card = review_conversation(session, state["messages"])
         return {
             "reference": reference,
@@ -372,6 +409,7 @@ def build_graph(session: ConversationSession):
         }
 
     def kpi(state: ConversationState) -> dict[str, Any]:
+        # KPI engine: one row of indicators.
         kpis = kpi_row(
             session,
             state["messages"],
@@ -382,6 +420,8 @@ def build_graph(session: ConversationSession):
         )
         return {"kpis": kpis, "events": _event(state, "kpi", "KPIs recorded", kpis=kpis)}
 
+    # Wire the graph: START -> client_open -> workforce_route -> advisor -> client_reply -> (advisor again, or
+    # quality) -> kpi -> END.
     graph = StateGraph(ConversationState)
     for name, node in [
         ("client_open", client_open),
@@ -403,6 +443,7 @@ def build_graph(session: ConversationSession):
 
 
 def initial_state(profile: CustomerProfile) -> ConversationState:
+    """The state before the first node runs."""
     return {"profile": profile.to_dict(), "messages": [], "events": [], "customer_turns": 0}
 
 
@@ -415,6 +456,7 @@ def run_conversation(
 ) -> ConversationState:
     """Run one conversation to the end; returns the final state."""
     session = make_session(profile, mode, seed, runtime, variant)
+    # recursion_limit: a safety stop in case a chat looped forever.
     return build_graph(session).invoke(initial_state(profile), {"recursion_limit": 50})
 
 
@@ -428,6 +470,7 @@ def stream_conversation(
     """Yield (node, update) after every node: used by the dashboard WebSocket."""
     session = make_session(profile, mode, seed, runtime, variant)
     graph = build_graph(session)
+    # stream_mode="updates": yield what each node changed, as soon as it finishes.
     for chunk in graph.stream(initial_state(profile), {"recursion_limit": 50}, stream_mode="updates"):
         for node, update in chunk.items():
             yield node, update
@@ -467,6 +510,7 @@ def run_batch(
     """Run ``n`` conversations on sampled contacts; one KPI row per conversation."""
     from callverse.agents.client.profiles import sample_profiles
 
+    # Sample contacts with a fixed seed, run them one by one, and save each transcript.
     profiles = sample_profiles(loaders.contacts(), n, seed, period)
     rows = []
     for number, profile in enumerate(profiles, start=1):
@@ -489,6 +533,7 @@ def conversation_kpis(frame: pd.DataFrame) -> dict[str, float]:
         return {}
 
     def mean(column: str) -> float:
+        # Mean of a column, ignoring empty values.
         values = pd.to_numeric(frame[column], errors="coerce").dropna()
         return float(values.mean()) if len(values) else float("nan")
 
@@ -534,4 +579,5 @@ def conversation_kpis(frame: pd.DataFrame) -> dict[str, float]:
 
 
 def agents_settings() -> dict[str, Any]:
+    """The whole configs/agents.yaml."""
     return load_yaml("agents")

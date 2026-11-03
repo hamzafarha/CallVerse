@@ -1,5 +1,11 @@
-"""Local Hugging Face LLMs (transformers) with pinned models, disk cache, tracing, streaming."""
+"""The LLM layer: OpenRouter (hosted models) first, local Hugging Face models as backup.
 
+Pinned models, a disk cache of answers, a trace of every call, and live streaming.
+When no model can answer, the agents use their offline templates.
+"""
+
+# This file re-exports the main names, so other code can simply write `from callverse.llm import LLMClient,
+# get_llm`.
 from callverse.llm.cache import LLMCache, cache_key
 from callverse.llm.client import (
     LLMClient,

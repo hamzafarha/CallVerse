@@ -1,5 +1,8 @@
 """Prompts of the advisor agent (company rules come from the advisor playbook)."""
 
+# The system prompt of the advisor: its role, the 6 playbook rules, today's date (the twin replays history),
+# the predicted problem type and the retrieved policy extracts ({context}). The backslash at a line end joins
+# two lines of the text into one.
 ADVISOR_SYSTEM = """You are a customer-service advisor of an online marketplace (Brazil, orders \
 from many sellers). You chat with a customer about one order.
 
@@ -27,6 +30,7 @@ POLICY CONTEXT (retrieved from the knowledge base):
 {context}
 """
 
+# Shown instead of policy extracts when no section matches the question well.
 NO_CONTEXT = "(no policy section matched this question well: escalate if unsure)"
 
 
@@ -34,10 +38,12 @@ def format_context(hits: list) -> str:
     """Retrieved chunks as numbered policy extracts."""
     if not hits:
         return NO_CONTEXT
+    # Each extract starts with its chunk id, e.g. [refund_policy__s02], so answers can cite a source.
     return "\n\n".join(
         f"[{h.chunk.chunk_id}] {h.chunk.doc_title} - {h.chunk.section}\n{h.chunk.text}" for h in hits
     )
 
+# Sent when a draft came out in Portuguese (the shop's data is Brazilian, so small models drift).
 ENGLISH_ONLY = (
     "Your last draft was not in English. Rewrite the same answer in English only, "
     "with the same facts and the same next step."
@@ -60,11 +66,13 @@ not solve the problem.
 - Every draft is fact-checked before it is sent: use only dates, amounts and timings from the \
 tool results, the policy decision and the policy context."""
 
+# Added to the chat when code had to open the order for the LLM (a safety net).
 SAFETY_NET_NOTE = (
     "You answered before opening the order, so the system opened it for you (safety net). "
     "Use the facts below."
 )
 
+# Sent with the list of problems when the fact check rejects a draft (reflection).
 REWRITE_DRAFT = (
     "A fact check of your draft found these problems:\n{problems}\n"
     "Rewrite your reply to the customer. Use only facts from the tool results, the policy "

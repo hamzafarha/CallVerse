@@ -2,6 +2,8 @@
 
 Pure Python: no model, no GPU.
 """
+# Tests llm/hf_local.py and llm/client.py helpers (parsing, streaming gate, message format) with a fake
+# tokenizer and model.
 
 from callverse.llm.client import LLMResponse, load_llm_settings, repair_json
 from callverse.llm.hf_local import (
@@ -17,6 +19,7 @@ TOOLS = {"lookup_order", "search_knowledge_base"}
 
 
 def test_parse_xml_tool_call():
+    """A tool call written in XML tags (SmolLM3 style) is parsed."""
     call = '{"name": "lookup_order", "arguments": {"order_id": "abc"}}'
     text = f"Let me check.\n<tool_call>\n{call}\n</tool_call>"
     visible, calls = parse_tool_calls(text, TOOLS)
@@ -25,12 +28,14 @@ def test_parse_xml_tool_call():
 
 
 def test_parse_granite_list_and_string_arguments():
+    """Granite-style tool calls (a list, arguments as a string) are parsed."""
     text = '<|tool_call|>[{"name": "search_knowledge_base", "arguments": "{\\"query\\": \\"refund\\"}"}]'
     _, calls = parse_tool_calls(text, TOOLS)
     assert calls == [{"name": "search_knowledge_base", "arguments": {"query": "refund"}}]
 
 
 def test_parse_bare_json_call_and_unknown_tools():
+    """A bare JSON tool call is parsed; an unknown tool name is ignored."""
     _, calls = parse_tool_calls('{"name": "lookup_order", "arguments": {"order_id": "1"}}', TOOLS)
     assert calls[0]["name"] == "lookup_order"
     visible, calls = parse_tool_calls('{"name": "delete_everything", "arguments": {}}', TOOLS)
@@ -38,18 +43,21 @@ def test_parse_bare_json_call_and_unknown_tools():
 
 
 def test_plain_answer_and_thinking():
+    """A plain answer has no tool call, and hidden "thinking" text is removed."""
     visible, calls = parse_tool_calls("<think>hmm</think>Your order is on its way.", TOOLS)
     assert visible == "Your order is on its way." and calls == []
     assert strip_thinking("<think>x</think> ok ") == "ok"
 
 
 def test_json_complete_respects_strings():
+    """The JSON completeness check is not fooled by braces inside strings."""
     assert not json_complete('{"rationale": "a } inside')
     assert json_complete('{"a": {"b": 1}, "c": "}"}')
     assert json_complete('Sure: {"a": 1} trailing')
 
 
 def test_stream_gate_hides_tool_calls():
+    """While streaming, tool-call text is hidden from the user."""
     seen: list[str] = []
     gate = StreamGate(seen.append)
     for piece in ["Your order ", "is late. ", "<tool", '_call>{"name"', ": 1}"]:
@@ -59,6 +67,7 @@ def test_stream_gate_hides_tool_calls():
 
 
 def test_stream_gate_passes_text_and_blocks_bare_json():
+    """The stream gate lets normal text through and blocks bare JSON."""
     seen: list[str] = []
     gate = StreamGate(seen.append)
     for piece in ["Hello", " there, how", " can I help?"]:
@@ -73,6 +82,7 @@ def test_stream_gate_passes_text_and_blocks_bare_json():
 
 
 def test_normalize_merges_system_and_converts_tools():
+    """Messages are normalised: system messages merged, tools converted for the chat template."""
     messages = [
         {"role": "system", "content": "A"},
         {"role": "system", "content": "B"},
@@ -94,12 +104,14 @@ def test_normalize_merges_system_and_converts_tools():
 
 
 def test_json_repair_of_truncated_output():
+    """A JSON answer cut off by the token limit is repaired."""
     assert repair_json('{"a": 4, "r": "text not closed') == {"a": 4, "r": "text not closed"}
     assert repair_json('{"a": 4, "b": {"c": 1') == {"a": 4, "b": {"c": 1}}
     assert LLMResponse('Here: {"x": 1} done', [], "m").json() == {"x": 1}
 
 
 def test_profiles_point_to_hugging_face_repositories():
+    """Every model of the profiles is a Hugging Face repository name."""
     settings = load_llm_settings()
     assert set(settings.models) == {"client", "advisor", "judge"}
     assert all("/" in repo for repo in settings.models.values())  # owner/name on the Hub
@@ -143,6 +155,7 @@ class _FakeModel:
 
 
 def _local_model():
+    """A LocalModel with a fake tokenizer and model (no weights loaded)."""
     from callverse.llm.hf_local import LocalModel, ModelOptions
 
     model = LocalModel.__new__(LocalModel)  # skip loading weights
@@ -152,6 +165,7 @@ def _local_model():
 
 
 def test_required_tool_choice_starts_the_reply_with_the_tool_call_tag():
+    """tool_choice "required": the reply is started with the tool-call tag, so the model must call a tool."""
     model = _local_model()
     messages = [{"role": "system", "content": "rules"}, {"role": "user", "content": "where is it?"}]
     tools = [{"type": "function", "function": {"name": "lookup_order", "parameters": {}}}]
@@ -163,6 +177,7 @@ def test_required_tool_choice_starts_the_reply_with_the_tool_call_tag():
 
 
 def test_auto_tool_choice_leaves_the_reply_free():
+    """tool_choice "auto": the model is free to answer or to call a tool."""
     model = _local_model()
     tools = [{"type": "function", "function": {"name": "lookup_order", "parameters": {}}}]
     model.generate([{"role": "system", "content": "rules"}], tools, False, 0.0, 42, 16)

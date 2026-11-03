@@ -9,6 +9,7 @@ from callverse.twin.calibration import fidelity_report
 def run_fidelity(week_start: str = "2018-05-07", weeks: int = 4) -> dict[str, Any]:
     """Run the fidelity checks and save their tables."""
     ensure_dirs()
+    # Run the 4 fidelity checks and save each table for the report and the dashboard.
     report = fidelity_report(week_start, weeks)
     report["checks"].to_csv(EVALUATION_DIR / "twin_fidelity_checks.csv", index=False)
     report["erlang"].to_csv(EVALUATION_DIR / "twin_fidelity_erlang.csv", index=False)

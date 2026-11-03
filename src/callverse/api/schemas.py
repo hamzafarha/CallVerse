@@ -1,5 +1,7 @@
 """Request models of the REST API (validated by Pydantic)."""
 
+# Pydantic checks every request body: a wrong type or an out-of-range value returns an HTTP 422 error
+# automatically, before our code runs.
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -11,6 +13,7 @@ class TwinRunRequest(BaseModel):
     scenario: str = "baseline"
     plan: Literal["cpsat", "rules_erlang", "fixed", "fixed_tuned", "erlang_hourly"] = "cpsat"
     router: Literal["fifo", "skill_score", "ppo"] = "fifo"
+    # Field(5, ge=1, le=30): default 5, at least 1, at most 30.
     seeds: int = Field(5, ge=1, le=30)
     prepared: bool = True
     # Optional custom what-if on top of the scenario

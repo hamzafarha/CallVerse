@@ -1,4 +1,5 @@
 """Digital-twin engine (version 2): equivalence with version 1, skills, routing, costs."""
+# Tests the simulation engine of simulation/ (and the external router hook) on a few synthetic days.
 
 import numpy as np
 import pandas as pd
@@ -24,6 +25,7 @@ GROUPS = ["wismo", "cancel_refund", "post_delivery", "order_admin"]
 
 
 def week_contacts(daily_counts, hour_shares, seed=0, patience=False):
+    """Simulated contacts for 3 days from the daily counts (with or without patience)."""
     settings = load_twin_settings()
     days = pd.date_range("2018-01-01", periods=3)
     return generate_contacts(
@@ -38,6 +40,7 @@ def week_contacts(daily_counts, hour_shares, seed=0, patience=False):
 
 
 def test_engine_reproduces_version_one(daily_counts, hour_shares):
+    """With every skill multiplier at 1.0, version 2 gives the same results as version 1."""
     contacts = week_contacts(daily_counts, hour_shares)
     staffing = np.tile(np.r_[np.zeros(8), np.full(14, 3), np.zeros(2)], 3).astype(int)
     old = run_simulation(contacts, staffing)
@@ -49,6 +52,7 @@ def test_engine_reproduces_version_one(daily_counts, hour_shares):
 
 
 def test_specialists_are_faster():
+    """Specialist agents handle their main problem type faster."""
     agents = build_agent_pool(8, {g: 0.25 for g in GROUPS}, 0.75, 1.3, np.random.default_rng(1))
     assert len(agents) == 8
     assert {a.primary_group for a in agents} == set(GROUPS)
@@ -80,6 +84,7 @@ def test_external_router_stepping_matches_fifo(daily_counts, hour_shares):
 
 
 def test_overtime_rule_calls_agents_when_queue_is_long():
+    """The overtime rule calls extra agents when the queue is long."""
     contacts = [Contact(i, 8 * 3600 + i, "wismo", 600.0, True, None) for i in range(30)]
     duty = duty_from_counts(np.r_[np.zeros(8), np.full(4, 1)].astype(int))
     pool = build_agent_pool(
@@ -104,6 +109,7 @@ def test_overtime_rule_calls_agents_when_queue_is_long():
 
 
 def test_skill_score_router_prefers_short_matching_jobs():
+    """The skill-score router prefers short jobs that match the agent's skill."""
     agents = build_agent_pool(1, {"wismo": 1.0, "post_delivery": 0.0001}, 0.75, 1.3, np.random.default_rng(0))
     agent = agents[0]
     router = SkillScoreRouter(
@@ -114,6 +120,7 @@ def test_skill_score_router_prefers_short_matching_jobs():
 
 
 def test_kpis_are_in_range(daily_counts, hour_shares):
+    """KPIs stay in their valid ranges (rates between 0 and 1, no negative times)."""
     settings = load_twin_settings()
     contacts = week_contacts(daily_counts, hour_shares, patience=True)
     staffing = np.tile(np.r_[np.zeros(8), np.full(14, 2), np.zeros(2)], 3).astype(int)

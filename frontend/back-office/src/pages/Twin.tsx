@@ -1,3 +1,8 @@
+/**
+ * Digital twin page (DSO4, part 2). Two tabs: the Live floor (one simulated day replayed contact by contact)
+ * and the Scenario lab (what-if runs over several seeds, with 95% confidence intervals, and a comparison of
+ * four decisions on the same customers).
+ */
 import { Activity, FlaskConical, Play, Scale } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -7,6 +12,7 @@ import { Card, ChartTooltip, ErrorBox, Legend, Loading, PageHeader, Pill, Segmen
 import { postJson, useApi } from "@callverse/shared";
 import { DAYS, GROUPS, GROUP_LABEL, PLAN_LABEL, ROUTER_LABEL, kpiValue, num } from "@callverse/shared";
 
+// KPIs shown as tiles after a run, and the ones where lower is better (for the hint line).
 const TILE_KPIS = [
   "service_level", "abandon_rate", "asa_seconds", "understaffed_hours",
   "labour_cost_eur", "overtime_hours", "cost_per_contact_eur", "total_cost_eur",
@@ -14,6 +20,9 @@ const TILE_KPIS = [
 const LOWER_IS_BETTER = new Set(["abandon_rate", "asa_seconds", "understaffed_hours", "labour_cost_eur",
   "overtime_hours", "cost_per_contact_eur", "total_cost_eur"]);
 
+/**
+ * The page: a header with the tab switch, then the chosen tab.
+ */
 export default function TwinPage() {
   const [tab, setTab] = useState<"floor" | "lab">("floor");
   return (
@@ -39,9 +48,14 @@ export default function TwinPage() {
   );
 }
 
+/**
+ * Live floor tab: choose a scenario, a day, a shift planner, a router and the forecast the plan was built
+ * from; the server simulates that day and LiveFloor replays it.
+ */
 function FloorPanel() {
   const config = useApi<any>("/api/twin/config");
   const [form, setForm] = useState({ scenario: "promo_spike", plan: "cpsat", router: "fifo", day: 2, prepared: false });
+  // Any change in the form changes the URL, so useApi asks the server for the new day.
   const floor = useApi<any>(
     `/api/twin/floor?scenario=${form.scenario}&plan=${form.plan}&router=${form.router}&day=${form.day}&prepared=${form.prepared}`,
   );
@@ -95,9 +109,15 @@ function FloorPanel() {
   );
 }
 
+/**
+ * Scenario lab tab: run the twin with one configuration (POST /api/twin/run) or compare four decisions (POST
+ * /api/twin/compare).
+ */
 function ScenarioLab() {
   const config = useApi<any>("/api/twin/config");
   const [form, setForm] = useState<any>({ scenario: "promo_spike", plan: "cpsat", router: "fifo", seeds: 5, prepared: true });
+  // custom = what-if volume multipliers per problem group; absence = share of absent agents. null means "use
+  // the scenario's own values".
   const [custom, setCustom] = useState<Record<string, number> | null>(null);
   const [absence, setAbsence] = useState<number | null>(null);
   const [result, setResult] = useState<any>(null);
@@ -108,12 +128,16 @@ function ScenarioLab() {
   const scenario = config.data?.scenarios?.[form.scenario];
   const multipliers = custom ?? scenario?.multipliers ?? {};
 
+  // Run one configuration over several seeds: the result has the mean and 95% CI of each KPI, the hourly
+  // queue and the staffing plan.
   const run = async () => {
     setBusy("run"); setError(null);
     try {
       setResult(await postJson("/api/twin/run", { ...form, multipliers: custom ?? undefined, absence_rate: absence ?? undefined }));
     } catch (e: any) { setError(e.message); } finally { setBusy(null); }
   };
+  // Same scenario and seeds for four options (common random numbers): unprepared vs prepared CP-SAT, fixed
+  // shifts, and PPO (or the skill-score router if no PPO model is trained).
   const runCompare = async () => {
     setBusy("compare"); setError(null);
     try {
@@ -129,6 +153,7 @@ function ScenarioLab() {
     } catch (e: any) { setError(e.message); } finally { setBusy(null); }
   };
 
+  // KPIs by name, and the hourly queue with a readable label (e.g. "Mon 14h").
   const kpis: Record<string, any> = useMemo(
     () => Object.fromEntries((result?.kpis ?? []).map((k: any) => [k.kpi, k])), [result]);
   const queue = (result?.queue ?? []).map((r: any) => ({
@@ -173,6 +198,8 @@ function ScenarioLab() {
           </div>
         </div>
         <p className="mt-3 text-sm text-ink2">{scenario?.description} <span className="text-muted">Week of {scenario?.week_start}.</span></p>
+        {/* What-if sliders: volume multiplier per problem group (x0.5 to x3), and the share of absent
+           agents. */}
         <div className="mt-4 grid gap-4 md:grid-cols-5">
           {GROUPS.map((g) => (
             <div key={g}>
@@ -187,6 +214,7 @@ function ScenarioLab() {
               onChange={(e) => setAbsence(Number(e.target.value))} />
           </div>
         </div>
+        {/* Run, compare, or go back to the scenario's own values. */}
         <div className="mt-5 flex flex-wrap gap-2">
           <button className="btn btn-primary" onClick={run} disabled={!!busy}><Play size={16} /> {busy === "run" ? "Simulating…" : "Run the twin"}</button>
           <button className="btn btn-ghost" onClick={runCompare} disabled={!!busy}><Scale size={16} /> {busy === "compare" ? "Comparing…" : "Compare unprepared vs prepared vs fixed"}</button>
@@ -204,6 +232,7 @@ function ScenarioLab() {
             <Pill>simulated in {num(result.elapsed_seconds, 1)} s</Pill>
             <span>Mean over seeds, [95% confidence interval].</span>
           </div>
+          {/* KPI tiles: mean over the seeds, with the 95% confidence interval under it. */}
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             {TILE_KPIS.filter((k) => kpis[k]).map((k) => (
               <Stat key={k} label={kpis[k].label} value={kpiValue(k, kpis[k].mean)}
@@ -239,6 +268,8 @@ function ScenarioLab() {
               </div>
             </Card>
           </div>
+          {/* The staffing plan used, as a day x hour heatmap (red outline = below the Erlang C
+             requirement). */}
           <Card title={`Staffing plan: ${PLAN_LABEL[result.request.plan] ?? result.request.plan}`}
             subtitle="Agents scheduled per hour (regular + overtime). A red outline marks hours below the Erlang C requirement.">
             <StaffingHeatmap rows={result.plan} value={(r) => r.regular + r.overtime} open={c.opening_hours} highlight={(r) => r.regular + r.overtime < r.required} />
@@ -255,6 +286,9 @@ function ScenarioLab() {
   );
 }
 
+/**
+ * Comparison table: one column per option, one row per KPI, mean [95% CI].
+ */
 function CompareTable({ summary }: { summary: any[] }) {
   const options = Array.from(new Set(summary.map((r) => r.option)));
   const kpis = ["service_level", "abandon_rate", "asa_seconds", "understaffed_hours", "labour_cost_eur", "total_cost_eur", "overtime_hours"];

@@ -11,6 +11,9 @@ from callverse.config import load_yaml
 class ScenarioSpec:
     """A real week of history, changed by explicit multipliers."""
 
+    # name, label, description; week_start: the real week that is replayed; multipliers: extra volume per
+    # problem group (e.g. 1.6 = +60%); absence_rate: the share of agents absent each day;
+    # handle_time_multiplier: chats take longer (e.g. after a new product launch).
     name: str
     label: str
     description: str
@@ -22,10 +25,12 @@ class ScenarioSpec:
 
     @property
     def dates(self) -> pd.DatetimeIndex:
+        """The days of the scenario."""
         return pd.date_range(self.week_start, periods=self.days)
 
     def with_overrides(self, **changes) -> "ScenarioSpec":
         """Copy with some fields changed (custom what-if from the dashboard)."""
+        # Keep the original values, replaced only by the changes that are not None.
         values = {**self.__dict__, **{k: v for k, v in changes.items() if v is not None}}
         return ScenarioSpec(**values)
 
@@ -37,6 +42,7 @@ def load_scenarios() -> dict[str, ScenarioSpec]:
         name: ScenarioSpec(
             name=name,
             label=spec["label"],
+            # Collapse the multi-line YAML description into one line.
             description=" ".join(str(spec["description"]).split()),
             week_start=pd.Timestamp(spec["week_start"]),
             multipliers={k: float(v) for k, v in spec["multipliers"].items()},

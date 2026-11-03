@@ -1,5 +1,7 @@
 """Service model protocol defining service duration and interaction dynamics."""
 
+# Handle time = how long an agent spends on one chat. It is random and lognormal: never negative, with a long
+# tail of difficult chats.
 import math
 from typing import Any, Protocol
 
@@ -31,6 +33,8 @@ class LognormalServiceModel:
     ) -> np.ndarray:
         """Draw ``size`` handle times (seconds) for an intent group."""
         spec = self.specs[intent_group]
+        # Convert (mean, CV) into the mu and sigma of the lognormal, so the drawn times have exactly that mean
+        # and spread.
         sigma_squared = math.log(1 + spec.cv**2)
         mu = math.log(spec.mean_seconds) - sigma_squared / 2
         return rng.lognormal(mu, math.sqrt(sigma_squared), size)

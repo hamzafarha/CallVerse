@@ -1,4 +1,6 @@
 """OpenRouter connector, tested against a fake OpenRouter server (no network, no real key)."""
+# Tests llm/openrouter.py and the fallback in llm/client.py. httpx.MockTransport plays the OpenRouter server:
+# no network, no real key.
 
 import json
 from dataclasses import replace
@@ -38,6 +40,7 @@ TOOL_CALL_STREAM = [
 
 @pytest.fixture(autouse=True)
 def fake_key(monkeypatch):
+    """Every test runs with a fake API key (autouse fixture), never a real one."""
     monkeypatch.setenv("OPENROUTER_API_KEY", FAKE_KEY)
 
 
@@ -48,6 +51,7 @@ def sse(chunks: list[dict]) -> bytes:
 
 
 def make_client(handler, sleeps: list | None = None) -> OpenRouterClient:
+    """An OpenRouter client that talks to the fake server; pauses are recorded instead of slept."""
     return OpenRouterClient(
         OpenRouterSettings(models=MODELS, min_interval_seconds=0),
         transport=httpx.MockTransport(handler),
@@ -56,6 +60,7 @@ def make_client(handler, sleeps: list | None = None) -> OpenRouterClient:
 
 
 def chat(client: OpenRouterClient, **kwargs):
+    """One chat call with simple default arguments."""
     defaults = dict(
         role="advisor",
         messages=[{"role": "user", "content": "Where is my order?"}],
@@ -69,11 +74,13 @@ def chat(client: OpenRouterClient, **kwargs):
 
 
 def error(status: int, message: str) -> httpx.Response:
+    """A fake OpenRouter error response."""
     return httpx.Response(status, json={"error": {"code": status, "message": message}})
 
 
 # ------------------------------------------------------------------- messages
 def test_messages_get_one_system_message_and_linked_tool_calls() -> None:
+    """Messages are sent with one system message, and tool results are linked to their calls."""
     messages = [
         {"role": "system", "content": "rules"},
         {"role": "user", "content": "where is it?"},
@@ -91,6 +98,7 @@ def test_messages_get_one_system_message_and_linked_tool_calls() -> None:
 
 # ----------------------------------------------------------------- streaming
 def test_streamed_text_is_forwarded_and_native_tool_calls_are_assembled() -> None:
+    """Streamed text is forwarded piece by piece; tool calls split across chunks are put back together."""
     seen: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -111,6 +119,7 @@ def test_streamed_text_is_forwarded_and_native_tool_calls_are_assembled() -> Non
 
 
 def test_json_mode_asks_for_a_json_object() -> None:
+    """JSON mode asks the API for a JSON object."""
     seen: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -123,6 +132,7 @@ def test_json_mode_asks_for_a_json_object() -> None:
 
 # --------------------------------------------------------- limits and errors
 def test_a_busy_free_model_is_retried_after_a_pause() -> None:
+    """HTTP 429 (busy free model): the call is retried after a pause."""
     answers = iter([error(429, "Rate limit exceeded: free-models-per-min."), None])
     sleeps: list = []
 
@@ -135,6 +145,7 @@ def test_a_busy_free_model_is_retried_after_a_pause() -> None:
 
 
 def test_the_daily_quota_stops_openrouter_until_tomorrow() -> None:
+    """When the daily quota is used up, OpenRouter is not called again until the next day."""
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -151,6 +162,7 @@ def test_the_daily_quota_stops_openrouter_until_tomorrow() -> None:
 
 
 def test_a_rejected_key_disables_openrouter() -> None:
+    """A rejected key (HTTP 401) switches OpenRouter off."""
     client = make_client(lambda request: error(401, "No auth credentials found"))
     with pytest.raises(OpenRouterUnavailable, match="rejected"):
         chat(client)
@@ -158,12 +170,16 @@ def test_a_rejected_key_disables_openrouter() -> None:
 
 
 def test_no_key_means_openrouter_is_skipped(monkeypatch) -> None:
+    """Without a key, OpenRouter is skipped."""
     monkeypatch.delenv("OPENROUTER_API_KEY")
     client = make_client(lambda request: pytest.fail("no request without a key"))
     assert not client.usable() and "OPENROUTER_API_KEY" in client.unusable_reason()
 
 
 def test_fallback_models_reasoning_off_and_the_model_that_answered() -> None:
+    """The request lists the fallback models with reasoning off, and the reply records which model
+    answered.
+    """
     seen: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -184,6 +200,7 @@ def test_fallback_models_reasoning_off_and_the_model_that_answered() -> None:
 
 
 def test_a_role_rests_after_staying_rate_limited() -> None:
+    """A role that stays rate limited rests for the cooldown (the local backup answers meanwhile)."""
     requests = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -200,6 +217,7 @@ def test_a_role_rests_after_staying_rate_limited() -> None:
 
 
 def test_quota_reports_the_free_requests_left() -> None:
+    """The quota reports how many free requests are left today."""
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/key")
         daily = {"used": 12, "limit": 50}
@@ -210,11 +228,13 @@ def test_quota_reports_the_free_requests_left() -> None:
 
 # ------------------------------------------------------------- the LLM client
 def llm_client(tmp_path, handler) -> LLMClient:
+    """LLMClient with OpenRouter as the provider, the fake server, and a cache in a temporary folder."""
     settings = replace(load_llm_settings(), mode="auto", provider="openrouter", cache=True)
     return LLMClient(settings, trace_dir=tmp_path, remote=make_client(handler))
 
 
 def test_llm_client_answers_from_openrouter_and_caches_without_the_key(tmp_path) -> None:
+    """LLMClient answers from OpenRouter and caches the answer; the key is never stored in the cache."""
     requests = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -234,6 +254,7 @@ def test_llm_client_answers_from_openrouter_and_caches_without_the_key(tmp_path)
 
 
 def test_llm_client_falls_back_to_the_local_model(tmp_path, monkeypatch) -> None:
+    """When OpenRouter cannot answer, LLMClient falls back to the local model."""
     def quota_gone(request: httpx.Request) -> httpx.Response:
         return error(429, "Rate limit exceeded: free-models-per-day")
 
@@ -251,6 +272,7 @@ def test_llm_client_falls_back_to_the_local_model(tmp_path, monkeypatch) -> None
 
 
 def test_status_shows_the_hosted_models_and_the_quota(tmp_path, monkeypatch) -> None:
+    """The status shows the hosted models and the quota (for the back office)."""
     from callverse.llm import client as client_module
 
     monkeypatch.setattr(client_module, "gpu_info", lambda: None)

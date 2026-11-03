@@ -20,6 +20,9 @@ PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 
 
 def main() -> None:
+    """Read the processed Parquet files, generate tickets and chat messages, save them, then build the
+    SQLite store.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--data-config", type=Path, default=PROJECT_ROOT / "configs" / "data.yaml"
@@ -31,6 +34,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Settings: ticket rules, the database path, and the handle times of the simulation (so the tickets and
+    # the twin agree).
     ticket_config = load_ticket_config(args.data_config)
     with open(args.data_config, encoding="utf-8") as config_file:
         db_path = PROJECT_ROOT / yaml.safe_load(config_file)["database"]["path"]
@@ -41,11 +46,13 @@ def main() -> None:
     }
 
     def read(name: str) -> pd.DataFrame:
+        """Read one processed Parquet table by name."""
         return pd.read_parquet(PROCESSED_DIR / f"{name}.parquet")
 
     contacts = read("synthetic_contacts")
     orders = read("olist_orders_analytical")
 
+    # One ticket per contact, then its chat messages; both are saved as Parquet.
     tickets = generate_tickets(contacts, orders, ticket_config, service_times)
     messages = generate_chat_messages(
         tickets, contacts, orders, ticket_config.random_seed
@@ -77,5 +84,6 @@ def main() -> None:
         print(f"  {table:<14}{rows:>9,}")
 
 
+# Run: python scripts/build_database.py
 if __name__ == "__main__":
     main()

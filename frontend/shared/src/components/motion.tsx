@@ -1,6 +1,13 @@
+/**
+ * Animation helpers built on framer-motion: page transitions, lists that appear one item after the other,
+ * count-up numbers, typing dots, a typewriter, a progress ring and a bar. They respect the system's "reduce
+ * motion" setting (useReducedMotion), and main.tsx switches them all off (MotionGlobalConfig.skipAnimations)
+ * when the URL contains ?snapshot (for screenshots).
+ */
 import { MotionGlobalConfig, animate, motion, useMotionValue, useReducedMotion, type Variants } from "framer-motion";
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 
+// Easing curve (cubic-bezier): fast start, soft landing. Shared by the animations below.
 const EASE = [0.2, 0.7, 0.2, 1] as const;
 
 /** Route transition: fade + slide (no blur: cheap on laptop GPUs). */
@@ -18,6 +25,8 @@ export function PageTransition({ children, id }: { children: ReactNode; id: stri
   );
 }
 
+// Variants are named animation states ("hidden" -> "show"). The parent starts its children 0.07 s apart; each
+// item fades in, slides up and grows slightly.
 const stagger: Variants = {
   hidden: {},
   show: { transition: { staggerChildren: 0.07, delayChildren: 0.05 } },
@@ -36,6 +45,9 @@ export function Stagger({ children, className, style }: { children: ReactNode; c
   );
 }
 
+/**
+ * One child of <Stagger>: it uses the "item" variants above.
+ */
 export function StaggerItem({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <motion.div className={className} variants={item}>
@@ -46,6 +58,7 @@ export function StaggerItem({ children, className }: { children: ReactNode; clas
 
 /** Fade up when scrolled into view (once). */
 export function Reveal({ children, delay = 0, className }: { children: ReactNode; delay?: number; className?: string }) {
+  // Animations switched off: render a plain div.
   if (MotionGlobalConfig.skipAnimations) return <div className={className}>{children}</div>;
   return (
     <motion.div
@@ -71,7 +84,9 @@ export function AnimatedNumber({
   duration?: number;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
+  // reduce = the user asked the operating system for less motion.
   const reduce = useReducedMotion();
+  // useMotionValue holds the moving number outside React state; setText shows it, formatted.
   const motionValue = useMotionValue(0);
   const [text, setText] = useState(() => (value == null ? "–" : format(reduce ? value : 0)));
   useEffect(() => {
@@ -83,12 +98,14 @@ export function AnimatedNumber({
       setText(format(value));
       return;
     }
+    // Animate from the current number to the new one; every frame updates the text.
     const controls = animate(motionValue, value, {
       duration,
       ease: [0.16, 1, 0.3, 1],
       onUpdate: (v) => setText(format(v)),
       onComplete: () => setText(format(value)),
     });
+    // Cleanup: stop the animation when the value changes again or the component disappears.
     return () => controls.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
@@ -102,6 +119,8 @@ export function AnimatedNumber({
 /** Card wrapper whose background follows the cursor with a soft brand glow. */
 export function Spotlight({ children, className = "" }: { children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Save the mouse position inside the card as CSS variables (--spot-x, --spot-y); the .spotlight class in
+  // index.css draws a soft radial glow at that point.
   const move = (event: MouseEvent<HTMLDivElement>) => {
     const box = ref.current?.getBoundingClientRect();
     if (!box || !ref.current) return;
@@ -139,6 +158,7 @@ export function Typewriter({ text, speed = 12, onDone }: { text: string; speed?:
   useEffect(() => {
     if (reduce) return;
     setShown(0);
+    // About 120 steps whatever the length, so a long text does not take forever.
     const step = Math.max(1, Math.round(text.length / 120));
     const timer = window.setInterval(() => {
       setShown((n) => {
@@ -176,6 +196,8 @@ export function Ring({
   track?: string;
   children?: ReactNode;
 }) {
+  // SVG trick: the circle outline is one long dash (strokeDasharray = circumference). The dash offset hides
+  // the part not reached yet: value 0.25 draws a quarter of the ring.
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
   const clamped = Math.max(0, Math.min(1, value || 0));
@@ -217,4 +239,5 @@ export function Bar({ value, color = "var(--brand)", height = 6 }: { value: numb
   );
 }
 
+// Re-exported so the apps import motion helpers from one place.
 export { AnimatePresence, motion } from "framer-motion";

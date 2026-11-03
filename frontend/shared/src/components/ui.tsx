@@ -1,11 +1,22 @@
+/**
+ * Basic building blocks used by every page of both apps: page header, card, stat tile, status badge, loading
+ * and error boxes, empty state, chart legend, pill, segmented control (tabs), avatar and chart tooltip.
+ * Styling uses Tailwind classes (e.g. "text-ink", "card") defined in the shared design system
+ * (styles/index.css and tailwind.preset.js).
+ */
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { AlertTriangle, CheckCircle2, Inbox, Loader2, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import { AnimatedNumber } from "./motion";
 
+// Re-exported so pages can build class lists with clsx(...) without importing it themselves.
 export { clsx };
 
+/**
+ * Page title block: an optional colored tag above the title, the title (with an icon), a subtitle, and
+ * buttons on the right (`children`).
+ */
 export function PageHeader({
   title,
   subtitle,
@@ -24,6 +35,7 @@ export function PageHeader({
   return (
     <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
       <div className="max-w-3xl">
+        {/* The small colored tag above the title, which slides in from the left. */}
         {tag && (
           <motion.span
             initial={{ opacity: 0, x: -8 }}
@@ -46,6 +58,10 @@ export function PageHeader({
   );
 }
 
+/**
+ * A white panel with an optional title row (icon, title, subtitle, action button on the right). It fades in
+ * and moves up slightly when it appears.
+ */
 export function Card({
   title,
   subtitle,
@@ -72,6 +88,7 @@ export function Card({
       transition={{ duration: 0.5, ease: [0.2, 0.7, 0.2, 1] }}
       className={clsx("card p-5 md:p-6", hover && "card-hover", className)}
     >
+      {/* Title row, only when there is a title or an action. */}
       {(title || action) && (
         <div className="mb-5 flex items-start justify-between gap-3">
           <div className="flex items-start gap-3">
@@ -111,6 +128,7 @@ export function Stat({
   icon?: ReactNode;
   accent?: string;
 }) {
+  // The hint line is green for good news, red for bad news, grey otherwise.
   const toneColor =
     tone === "good" ? "var(--good-text)" : tone === "bad" ? "var(--critical)" : "var(--text-muted)";
   return (
@@ -120,6 +138,7 @@ export function Stat({
       transition={{ duration: 0.5 }}
       className="card card-hover group overflow-hidden p-5"
     >
+      {/* Decorative blurred circle in the corner (accent color), brighter on hover. */}
       <div
         className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full opacity-[0.12] blur-2xl transition-opacity group-hover:opacity-25"
         style={{ background: accent }}
@@ -128,6 +147,7 @@ export function Stat({
         <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">{label}</div>
         {icon && <div style={{ color: accent }}>{icon}</div>}
       </div>
+      {/* `numeric` counts up with an animation; `value` is shown as it is. */}
       <div className="mt-2 font-display text-[1.75rem] font-semibold leading-tight text-ink">
         {numeric !== undefined ? <AnimatedNumber value={numeric} format={format} /> : value}
       </div>
@@ -142,6 +162,7 @@ export function Stat({
 
 /** Status badge: icon + label, never color alone. */
 export function Status({ ok, label }: { ok: boolean | null | undefined; label?: string }) {
+  // null or undefined means the check was not run: show a warning icon.
   if (ok === null || ok === undefined)
     return (
       <span className="inline-flex items-center gap-1 text-xs text-muted">
@@ -159,6 +180,9 @@ export function Status({ ok, label }: { ok: boolean | null | undefined; label?: 
   );
 }
 
+/**
+ * Spinning icon + "Loading…" text.
+ */
 export function Loading({ text = "Loading" }: { text?: string }) {
   return (
     <div className="flex items-center gap-2 p-6 text-sm text-muted">
@@ -172,6 +196,9 @@ export function Skeleton({ className = "h-4 w-full" }: { className?: string }) {
   return <div className={clsx("skeleton", className)} />;
 }
 
+/**
+ * Grey placeholder shapes in the layout of a page (title, 4 stat tiles, a chart) while it loads.
+ */
 export function PageSkeleton() {
   return (
     <div className="space-y-6">
@@ -187,6 +214,9 @@ export function PageSkeleton() {
   );
 }
 
+/**
+ * Shown when an API call fails, with a hint to start the backend.
+ */
 export function ErrorBox({ error }: { error: string }) {
   return (
     <div className="card border-l-4 p-4 text-sm" style={{ borderLeftColor: "var(--critical)" }}>
@@ -199,6 +229,9 @@ export function ErrorBox({ error }: { error: string }) {
   );
 }
 
+/**
+ * Shown when a list or table has nothing to display.
+ */
 export function EmptyState({ title, text, icon }: { title: string; text?: ReactNode; icon?: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line px-6 py-12 text-center">
@@ -211,6 +244,9 @@ export function EmptyState({ title, text, icon }: { title: string; text?: ReactN
   );
 }
 
+/**
+ * Chart legend: a colored line per series (dashed for forecasts or targets).
+ */
 export function Legend({ items }: { items: { label: string; color: string; dashed?: boolean }[] }) {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink2">
@@ -230,6 +266,9 @@ export function Legend({ items }: { items: { label: string; color: string; dashe
   );
 }
 
+/**
+ * Small rounded label, optionally tinted with a color.
+ */
 export function Pill({ children, color }: { children: ReactNode; color?: string }) {
   return (
     <span
@@ -268,6 +307,8 @@ export function Segmented<T extends string>({
             value === option.value ? "text-ink" : "text-muted hover:text-ink2",
           )}
         >
+          {/* The highlight is one shared element (layoutId): framer-motion slides it from the old option to
+             the new one. */}
           {value === option.value && (
             <motion.span
               layoutId={`seg-${id}`}
@@ -290,6 +331,7 @@ export function Avatar({ name, size = 40 }: { name: string; size?: number }) {
     .join("")
     .slice(0, 2)
     .toUpperCase();
+  // Same name, same color: a small hash of the letters picks a hue (0-359) on the color wheel.
   const hue = [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
   return (
     <div
@@ -308,6 +350,8 @@ export function Avatar({ name, size = 40 }: { name: string; size?: number }) {
 
 /** Chart tooltip in the page's own styling (values in ink, a swatch for identity). */
 export function ChartTooltip({ active, payload, label, format }: any) {
+  // Recharts calls this with active (the mouse is over a point), payload (one entry per series) and label
+  // (the x value).
   if (!active || !payload?.length) return null;
   return (
     <div className="glass rounded-xl px-3 py-2 text-xs shadow-lift">

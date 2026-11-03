@@ -24,6 +24,7 @@ def contact_kpis(
     - backlog wait: average wait (hours) of contacts that arrived while closed
     - occupancy: handled seconds / staffed agent-seconds, over the whole run
     """
+    # Score only the contacts that arrived before evaluation_end.
     scored = records
     if evaluation_end is not None:
         scored = records[records["arrival"] < evaluation_end]
@@ -67,6 +68,7 @@ def summarize_replications(
         if column not in group_columns + ["replication"]
     ]
     rows = []
+    # One mean and one confidence interval per KPI and group, over the replications (Student t).
     for keys, group in runs.groupby(group_columns):
         keys = keys if isinstance(keys, tuple) else (keys,)
         count = len(group)

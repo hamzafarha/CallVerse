@@ -9,6 +9,7 @@ to the individual planners and routers:
   backup, FIFO baseline).
 """
 
+# This "facade" gives the rest of the system one simple entry point: plan_week() and router().
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -35,6 +36,8 @@ class WorkforceManager:
 
     def plan_week(self, requirement: np.ndarray, planner: str = "cpsat") -> SchedulePlan:
         """Shift plan for a (days x 24) matrix of agents needed per hour."""
+        # Choose the planner by name: cpsat (main), rules_erlang (backup), fixed / fixed_tuned (baselines) or
+        # erlang_hourly (a reference that ignores shift rules).
         sim = self.settings.sim
         if planner == "cpsat":
             return cpsat_schedule(
@@ -57,5 +60,6 @@ class WorkforceManager:
 
     def router(self, kind: str | None = None):
         """Routing policy; by default the best available (PPO if trained, else skill score)."""
+        # PPO when a trained model exists on disk, otherwise the skill-score backup.
         kind = kind or ("ppo" if ppo_available() else "skill_score")
         return make_router(kind, self.settings.mean_handle)

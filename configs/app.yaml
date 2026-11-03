@@ -1,10 +1,13 @@
 # CallVerse Application Configuration
 
+# Name, version and description of the API (also shown on the Swagger page at /docs).
 app:
   name: CallVerse
   version: 1.1.0
   description: Multi-agent digital twin of an e-commerce customer service center
 
+# Address and port of the API server (FastAPI run by uvicorn). 0.0.0.0 = reachable on every network interface
+# of the machine.
 server:
   host: 0.0.0.0
   port: 8000
@@ -17,6 +20,7 @@ server:
     - http://localhost:8080
     - http://localhost:8081
 
+# MLflow: where experiment runs (parameters, metrics, artifacts) are recorded, and the experiment names.
 mlflow:
   # Local SQLite store by default (runs in mlflow.db, artifacts in mlruns/);
   # docker-compose points MLFLOW_TRACKING_URI at the MLflow server instead.
@@ -29,5 +33,6 @@ mlflow:
     twin: callverse-twin-scenarios
     agents: callverse-agents
 
+# Log level of the Python logging module (DEBUG, INFO, WARNING, ERROR).
 logging:
   level: INFO

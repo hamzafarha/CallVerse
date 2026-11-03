@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+# One lock for the whole process: two threads never write to the trace file at the same moment.
 _lock = threading.Lock()
 
 
@@ -27,6 +28,7 @@ class Tracer:
 
     @staticmethod
     def _init_langfuse() -> Any:
+        # Langfuse (an online dashboard for LLM calls) is optional: used only when its keys are set.
         if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
             return None
         try:
@@ -37,9 +39,11 @@ class Tracer:
 
     def record(self, event: dict[str, Any]) -> None:
         """Append one trace event."""
+        # Add a timestamp, then append one JSON line to the file.
         event = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), **event}
         with _lock, open(self.path, "a", encoding="utf-8") as trace_file:
             trace_file.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+        # Also send the event to Langfuse when it is configured.
         if self._langfuse is not None:
             try:
                 self._langfuse.generation(
@@ -68,6 +72,7 @@ class Tracer:
 @contextmanager
 def timer() -> Iterator[dict[str, float]]:
     """Measures elapsed milliseconds into ``result['ms']``."""
+    # Usage: `with timer() as elapsed: ...`, then elapsed["ms"] holds the duration.
     result = {"ms": 0.0}
     start = time.perf_counter()
     try:

@@ -5,6 +5,8 @@ ranges). ``validate_processed_data`` checks all of them after the pipeline, so a
 broken notebook is caught before it silently corrupts the forecast or the twin.
 """
 
+# Pandera is a library to write data "contracts" (schemas): column types, allowed values, uniqueness, custom
+# checks. If a table breaks its contract, `callverse validate` fails.
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +32,8 @@ ORDER_STATUSES = [
     "approved",
 ]
 
+# Contacts: unique ids starting with SC, valid hours and intents, a non-empty message, and every row marked as
+# synthetic.
 CONTACTS_SCHEMA = pa.DataFrameSchema(
     {
         "contact_id": pa.Column(str, unique=True, checks=pa.Check.str_startswith("SC")),
@@ -55,6 +59,7 @@ CONTACTS_SCHEMA = pa.DataFrameSchema(
     name="synthetic_contacts",
 )
 
+# Daily volumes: one row per day and group, no negative counts, all 4 groups every day.
 DAILY_BY_GROUP_SCHEMA = pa.DataFrameSchema(
     {
         "date": pa.Column("datetime64[ns]"),
@@ -96,6 +101,7 @@ CALENDAR_SCHEMA = pa.DataFrameSchema(
     name="daily_calendar",
 )
 
+# Tickets: one per contact, positive handle times, a CSAT between 1 and 5 (or empty).
 TICKETS_SCHEMA = pa.DataFrameSchema(
     {
         "ticket_id": pa.Column(str, unique=True),
@@ -110,6 +116,7 @@ TICKETS_SCHEMA = pa.DataFrameSchema(
     name="synthetic_tickets",
 )
 
+# Hour profile: 24 hours whose shares add up to 1.
 HOUR_PROFILE_SCHEMA = pa.DataFrameSchema(
     {
         "hour": pa.Column(int, pa.Check.in_range(0, 23), unique=True),
@@ -119,6 +126,7 @@ HOUR_PROFILE_SCHEMA = pa.DataFrameSchema(
     name="contact_hour_profile",
 )
 
+# Which file each contract checks.
 CONTRACTS: dict[str, tuple[str, pa.DataFrameSchema]] = {
     "synthetic_contacts": ("synthetic_contacts.parquet", CONTACTS_SCHEMA),
     "synthetic_contacts_daily_by_group": (
@@ -143,6 +151,7 @@ class ContractResult:
 
 
 def _read(path: Path) -> pd.DataFrame:
+    """Read a CSV or a Parquet file."""
     if path.suffix == ".csv":
         return pd.read_csv(path)
     return pd.read_parquet(path)
@@ -158,6 +167,7 @@ def validate_processed_data(processed_dir: Path = PROCESSED_DIR) -> list[Contrac
             continue
         frame = _read(path)
         try:
+            # lazy=True: collect ALL the errors instead of stopping at the first one.
             schema.validate(frame, lazy=True)
             results.append(ContractResult(table, len(frame), True))
         except pa.errors.SchemaErrors as error:

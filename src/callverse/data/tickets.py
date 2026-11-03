@@ -1,5 +1,10 @@
 """Synthetic support tickets: one per contact, with a rule-based outcome."""
 
+# How to read this file: the ticket history is SYNTHETIC (Olist has no support tickets). For each contact,
+# decide_outcome() applies the company rules to the order's real status at that moment; then
+# generate_tickets() adds handle time, resolution time, supervisor requests and a CSAT survey. The same rules
+# are reused live by the advisor's rules engine (recommend_resolution), so the history and the agents always
+# agree.
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,10 +13,12 @@ import numpy as np
 import pandas as pd
 import yaml
 
+# Problem types, grouped by the way they are answered.
 WISMO_INTENTS = {"track_order", "track_delivery", "delivery_time", "delivery_issue"}
 REFUND_INTENTS = {"request_refund", "refund_status"}
 CLOSED_STATUSES = {"canceled", "unavailable"}
 
+# The order columns that the rules need.
 ORDER_COLUMNS = [
     "order_id",
     "order_status",
@@ -65,6 +72,7 @@ def load_ticket_config(path: str | Path) -> TicketConfig:
             k: [float(s) for s in v] for k, v in raw["csat"]["score_shares"].items()
         },
     )
+    # Check: each CSAT distribution has 5 shares that add up to 1.
     for outcome_class, shares in config.csat_score_shares.items():
         if len(shares) != 5 or not math.isclose(sum(shares), 1.0, abs_tol=1e-6):
             raise ValueError(
@@ -82,8 +90,10 @@ def order_status_at(orders: pd.DataFrame, at: pd.Series) -> pd.Series:
     """
 
     def reached(column: str) -> pd.Series:
+        """True where the timestamp exists and is before the moment `at`."""
         return orders[column].notna() & (orders[column] <= at)
 
+    # np.select checks the conditions in order: closed, delivered, shipped, approved; else created.
     final = orders["order_status"]
     conditions = [
         final.isin(CLOSED_STATUSES),
@@ -115,11 +125,14 @@ def add_contact_facts(
         investigation_transit_days = config.investigation_transit_days
     frame = frame.copy()
     frame["order_status_at_contact"] = order_status_at(frame, frame["opened_at"])
+    # Days past the promised date (negative = still on time).
     frame["days_past_estimate"] = (
         frame["opened_at"].dt.normalize()
         - frame["order_estimated_delivery_date"].dt.normalize()
     ).dt.days
     days_in_transit = (frame["opened_at"] - frame["order_delivered_carrier_date"]).dt.days
+    # A shipped parcel needs a carrier investigation when it is very late, or late and in transit for too
+    # long.
     frame["needs_investigation"] = frame["order_status_at_contact"].eq("shipped") & (
         (frame["days_past_estimate"] > investigation_after_days_late)
         | (
@@ -132,6 +145,7 @@ def add_contact_facts(
 
 def wismo_outcome(row: pd.Series) -> tuple[str, str, str | None]:
     """Where-is-my-order intents: answer depends on status and lateness."""
+    # Each branch returns (outcome, policy section used, team handed to or None).
     status = row["order_status_at_contact"]
     intent = row["intent"]
     if status in CLOSED_STATUSES:
@@ -238,6 +252,7 @@ def order_admin_outcome(row: pd.Series) -> tuple[str, str, str | None]:
 
 def decide_outcome(row: pd.Series) -> tuple[str, str, str | None]:
     """Outcome, knowledge-base chunk used, and the party the case is handed to."""
+    # The rules engine: dispatch to the rule set of the problem's group.
     if row["intent"] in WISMO_INTENTS:
         return wismo_outcome(row)
     if row["intent"] in REFUND_INTENTS or row["intent"] == "cancel_order":
@@ -252,6 +267,7 @@ def add_business_days(timestamps: pd.Series, days: pd.Series) -> pd.Series:
 
     Zero days leaves the timestamp unchanged, even on a weekend.
     """
+    # np.busday_offset moves dates by business days (it skips weekends).
     dates = timestamps.dt.normalize()
     shifted = np.busday_offset(
         dates.to_numpy().astype("datetime64[D]"),
@@ -266,6 +282,8 @@ def lognormal_seconds(
     mean: np.ndarray, cv: np.ndarray, rng: np.random.Generator
 ) -> np.ndarray:
     """Lognormal draws with the given means and coefficients of variation."""
+    # Lognormal: positive, right-skewed durations (most chats are short, a few are long). mu and sigma are
+    # computed so that the mean and the coefficient of variation match the config.
     sigma_squared = np.log(1 + cv**2)
     mu = np.log(mean) - sigma_squared / 2
     return rng.lognormal(mu, np.sqrt(sigma_squared))
@@ -282,6 +300,7 @@ def generate_tickets(
     ``service_times`` maps each intent group to (mean handle seconds, CV), taken from
     the simulation config so tickets and simulation agree.
     """
+    # Fixed seed: the same tickets every time (reproducible).
     rng = np.random.default_rng(config.random_seed)
     tickets = contacts[
         [
@@ -299,12 +318,15 @@ def generate_tickets(
     if tickets["order_status"].isna().any():
         raise ValueError("Some contacts refer to orders missing from the order table.")
 
+    # Ticket id = the contact id with TK instead of SC (TK000014 for SC000014).
     tickets.insert(0, "ticket_id", tickets["contact_id"].str.replace("SC", "TK", n=1))
     tickets["channel"] = config.channel
     tickets = add_contact_facts(tickets, config)
 
+    # Apply the rules engine to every ticket.
     decisions = tickets.apply(decide_outcome, axis=1, result_type="expand")
     tickets[["outcome", "kb_chunk_id", "handed_to"]] = decisions
+    # Outcome class: escalated (payments team), follow_up (someone must act later) or resolved_in_chat.
     follow_up = tickets["outcome"].isin(config.follow_up_business_days)
     escalated = tickets["outcome"].eq("escalated_payments")
     tickets["outcome_class"] = np.select(
@@ -347,6 +369,7 @@ def generate_tickets(
     tickets.loc[delivered_during, "resolved_at"] = tickets.loc[
         delivered_during, "order_delivered_customer_date"
     ]
+    # FCR (first contact resolution) = resolved in the chat itself.
     tickets["first_contact_resolution"] = tickets["outcome_class"].eq(
         "resolved_in_chat"
     )
@@ -359,6 +382,7 @@ def generate_tickets(
         scores[rows] = rng.choice(np.arange(1, 6), size=int(rows.sum()), p=shares)
     tickets["csat_score"] = scores
 
+    # Flags: the data is synthetic, plus the generator's version and seed (traceability).
     tickets["is_synthetic"] = True
     tickets["generator_version"] = config.version
     tickets["generator_seed"] = config.random_seed

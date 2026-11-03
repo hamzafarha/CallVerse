@@ -1,3 +1,7 @@
+/**
+ * Home page of the customer site: hero (search box + animated chat preview), the four problem families, demo
+ * customers to sign in as, how the AI advisor works, and popular help articles.
+ */
 import { GROUP_COLOR, Reveal, Skeleton, Spotlight, Stagger, StaggerItem, motion, useApi } from "@callverse/shared";
 import {
   ArrowRight,
@@ -19,6 +23,7 @@ import { HelpSearch } from "../components/HelpSearch";
 import { HeroChatDemo } from "../components/HeroChatDemo";
 import { useCustomer } from "../customer";
 
+// The four problem families (intent groups), each linked to its help article.
 const TOPICS = [
   { group: "wismo", icon: Package, title: "Where is my order?", text: "Tracking, delivery dates, late or lost parcels.", article: "order_status_and_tracking" },
   { group: "cancel_refund", icon: RotateCcw, title: "Cancel or refund", text: "Cancel before shipping, refund timings, refund status.", article: "refund_policy" },
@@ -26,14 +31,16 @@ const TOPICS = [
   { group: "order_admin", icon: FileText, title: "Invoices & changes", text: "Invoices, address changes, payment questions.", article: "invoices" },
 ];
 
+// The 4 steps of an AI answer, shown in "How our AI advisor answers you".
 const STEPS = [
   { icon: Sparkles, title: "Understand", text: "An intent classifier reads your message and the Workforce agent routes you to the right desk." },
   { icon: ScanSearch, title: "Retrieve", text: "bge-m3 embeddings find the exact policy sections that apply (FAISS, cosine similarity)." },
   { icon: Workflow, title: "Verify & decide", text: "Your order is checked in our database; a rules engine applies the policy. The AI never invents a promise." },
-  { icon: ShieldCheck, title: "Answer & review", text: "SmolLM3 writes the reply in plain words; an independent Granite judge grades every chat." },
+  { icon: ShieldCheck, title: "Answer & review", text: "An open AI model (NVIDIA Nemotron, with a local backup) writes the reply in plain words; a judge from another model family grades every chat." },
 ];
 
 export default function HomePage() {
+  // Data from the backend: demo customers and knowledge-base articles (loaded when the page opens).
   const customers = useApi<any[]>("/api/portal/customers");
   const articles = useApi<any[]>("/api/kb/articles");
   const { setCustomer } = useCustomer();
@@ -125,6 +132,8 @@ export default function HomePage() {
           </div>
         </Reveal>
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {/* One card per demo customer: a click signs in as that customer and opens their order page. Grey
+             placeholders while loading. */}
           {customers.data
             ? customers.data.map((c, i) => (
                 <CustomerCard
@@ -147,7 +156,7 @@ export default function HomePage() {
         <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full opacity-30 blur-3xl" style={{ background: "var(--brand)" }} />
         <Reveal>
           <h2 className="text-3xl font-semibold text-ink">How our AI advisor answers you</h2>
-          <p className="mt-2 max-w-2xl text-ink2">Four steps, all running on our own servers. No data leaves the company.</p>
+          <p className="mt-2 max-w-2xl text-ink2">Four steps. The search, the order check and the rules run on our servers; only the writing and the review use a hosted AI model, with a local backup.</p>
         </Reveal>
         <div className="relative mt-10 grid gap-8 md:grid-cols-4">
           <motion.div
@@ -183,6 +192,7 @@ export default function HomePage() {
           </div>
         </Reveal>
         <div className="mt-8 grid gap-4 md:grid-cols-3">
+          {/* The first 6 public articles (internal ones are hidden here). */}
           {(articles.data ?? [])
             .filter((a) => !a.internal)
             .slice(0, 6)

@@ -7,7 +7,7 @@ SQLite store, opens follow-up tickets, and writes the reply.
 Backup (DSO2): question sorting + approved templates. The intent classifier
 predicts the problem type, the order tools give the facts, the company rules
 choose the outcome and an approved template is filled in. No generation, so no
-invented answers. It also runs when Ollama is not available.
+invented answers. It also runs when no LLM can answer (no key, no quota, no GPU).
 
 Variants of the LLM advisor: ``rag`` (the LLM decides alone with tools, ablation),
 ``rag_policy`` (pipeline steps open the order and run the rules engine, the LLM
@@ -16,6 +16,15 @@ rules engine still decides, safety nets catch what the LLM forgot and every draf
 fact-checked before it is sent).
 """
 
+# How to read this file:
+# - AdvisorMemory: what the advisor remembers during one chat (intent, order number, decision...).
+# - AdvisorReply: one advisor message, with its sources, tools and timing.
+# - AdvisorAgent.reply(): the entry point. It predicts the intent, finds the order number, then answers with
+#   one of 4 strategies: templates (offline backup), rag, rag_policy (Hybrid) or agentic.
+# - _template_reply(): rules + approved texts, no LLM at all.
+# - _llm_reply(): the "rag" and "rag_policy" variants.
+# - _agentic_reply(): the ReAct loop with gating, required tool calls, safety nets and the fact check
+#   (reflection).
 import re
 import time
 from collections.abc import Callable
@@ -55,16 +64,20 @@ from callverse.data.conversations import (
 from callverse.data.tickets import REFUND_INTENTS, decide_outcome
 from callverse.llm import LLMClient, LLMUnavailableError
 
+# The 3 LLM variants (see the docstring above).
 VARIANTS = ("rag", "rag_policy", "agentic")
 BANK_POLICY_CHUNK = "refund_policy__s05"  # boleto refunds: bank transfer after the bank details
+# An Olist order number: exactly 32 hexadecimal characters.
 ORDER_ID = re.compile(r"\b[0-9a-f]{32}\b")
 ASKS_ORDER = re.compile(r"order (number|id|no)", re.I)
 # A bank code written by the customer ("my bank code is 341"), for the boleto refund check
 BANK_CODE = re.compile(r"\b(?:bank|code)\b\D{0,25}?\b(\d{1,5})\b", re.I)
+# Extra system notes, added to the prompt in some situations.
 NO_ORDER_YET = (
     "You do not have the order number yet. Greet the customer and ask for the order number "
     "before anything else. Never invent an order number."
 )
+# The rules engine's decision, given to the LLM to put into words (it must not change the facts).
 POLICY_DECISION = (
     "POLICY DECISION from the company rules engine (already applied to this order; follow it "
     'exactly):\n- action: {action}\n- hand over to: {handover}\n- approved answer: "{answer}"\n'
@@ -72,6 +85,7 @@ POLICY_DECISION = (
     "keeping every fact, date, timing and next step and adding nothing. If you already gave it, "
     "reply to the customer's latest message consistently with it (close politely if they thank you)."
 )
+# Words that mean "I want a human" (a supervisor request).
 SUPERVISOR_WORDS = re.compile(r"supervisor|manager|someone (more )?senior|not acceptable", re.I)
 # Playbook: a legal complaint, the consumer-protection agency (PROCON) or the press
 LEGAL_WORDS = re.compile(
@@ -89,6 +103,10 @@ def escalation_due(last: str, answered_before: bool) -> bool:
 class AdvisorMemory:
     """What the advisor remembers between turns of one conversation."""
 
+    # intent: the predicted problem type (e.g. track_order); order_id: once the customer gives it; answered:
+    # the solution was given; summary: a one-sentence recap used in the closing; outcome:
+    # the rules engine's action; handed_to: the team that got a ticket; escalated: a supervisor was called;
+    # decision: the full rules-engine decision.
     intent: str | None = None
     intent_group: str | None = None
     intent_confidence: float = 0.0
@@ -105,6 +123,8 @@ class AdvisorMemory:
 class AdvisorReply:
     """One advisor message with everything needed for traces and evaluation."""
 
+    # stage: verify, answer, escalate, bank_check, evidence or close; sources: the policy sections used (for
+    # the judge and the faithfulness metric).
     text: str
     mode: str
     stage: str
@@ -141,6 +161,8 @@ class AdvisorAgent:
         seed: int = 0,
         variant: str = "rag_policy",
     ) -> None:
+        # retriever: the knowledge-base search (bge-m3 or TF-IDF); classifier: predicts the intent; top_k: how
+        # many policy sections to read; max_tool_rounds: the limit of the ReAct loop.
         self.retriever = retriever
         self.classifier = classifier
         self.llm = llm
@@ -154,6 +176,7 @@ class AdvisorAgent:
         self.variant = variant
 
     def use_llm(self) -> bool:
+        """True when the LLM should be used (template mode, or no LLM -> rules only)."""
         if self.mode == "template" or self.llm is None:
             return False
         return self.mode == "llm" or self.llm.available()
@@ -172,6 +195,7 @@ class AdvisorAgent:
         ``on_token`` streams the LLM's visible text; ``on_event`` reports pipeline
         steps (``retrieval``, ``tool``, ``generation``) for the live UI.
         """
+        # on_event: report each tool call to the live UI (Tools panel, trace) as soon as it runs.
         previous = tools.listener
         if on_event is not None:
             tools.listener = lambda call: on_event(
@@ -199,13 +223,16 @@ class AdvisorAgent:
         on_token: Callable[[str], None] | None,
         on_event: Callable[[str, dict[str, Any]], None] | None,
     ) -> AdvisorReply:
+        # Step 1: predict the problem type from the customer's first message (once per chat).
         if memory.intent is None:
             first = next(m["text"] for m in messages if m["speaker"] == "customer")
             prediction = self.classifier.predict(str(first))
             memory.intent, memory.intent_group = prediction.intent, prediction.intent_group
             memory.intent_confidence = prediction.confidence
+        # Step 2: find the 32-character order number in the customer's messages.
         memory.order_id = memory.order_id or find_order_id(messages)
         calls_before = len(tools.calls)
+        # Step 3: answer with the LLM variant, or with templates (offline, or after an LLM failure).
         if self.use_llm():
             try:
                 if self.variant == "agentic":
@@ -217,6 +244,7 @@ class AdvisorAgent:
                 reply.mode = "template_fallback"
         else:
             reply = self._template_reply(messages, memory, tools)
+        # Step 4: attach the tool calls made during this turn (for the UI, the judge and the KPIs).
         reply.tool_calls = [
             {
                 "name": c.name,
@@ -233,19 +261,24 @@ class AdvisorAgent:
 
     # --------------------------------------------------------------- retrieval
     def retrieve(self, messages: list[dict[str, Any]], intent: str | None) -> list:
+        """Search the policy knowledge base with the customer's first and last messages."""
         customer = [str(m["text"]) for m in messages if m["speaker"] == "customer"]
         query = " ".join(customer[:1] + customer[-1:]) if customer else ""
         return self.retriever.search(query, top_k=self.top_k) if self.retriever else []
 
     # ------------------------------------------------------------- template mode
     def _pick(self, options: list[str]) -> str:
+        """One template sentence at random (seeded, so reproducible)."""
         return options[int(self.rng.integers(len(options)))]
 
     def _template_reply(
         self, messages: list[dict[str, Any]], memory: AdvisorMemory, tools: AdvisorTools
     ) -> AdvisorReply:
+        # The OFFLINE advisor: no LLM. It follows the playbook with rules and approved texts, so it can never
+        # invent a fact.
         started = time.perf_counter()
         last = str(messages[-1]["text"]) if messages else ""
+        # Rule 1: a supervisor request after the answer -> escalate.
         if memory.answered and SUPERVISOR_WORDS.search(last) and not memory.escalated:
             tools.escalate_to_human("customer asked for a supervisor", memory.order_id or "")
             memory.escalated = True
@@ -257,6 +290,7 @@ class AdvisorAgent:
                 [ESCALATION_CHUNK],
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
+        # Rule 2: no order number yet -> greet the customer and ask for it.
         if memory.order_id is None:
             return AdvisorReply(
                 f"{self._pick(GREETINGS)} {self._pick(VERIFY_REQUESTS)}",
@@ -265,6 +299,8 @@ class AdvisorAgent:
                 [VERIFY_CHUNK],
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
+        # Rule 3, the first answer: open the order, check refund eligibility if needed, let the rules engine
+        # decide (decide_outcome) and fill in the approved answer.
         if not memory.answered:
             lookup = tools.lookup_order(memory.order_id)
             facts = tools.order_facts(memory.order_id, memory.intent)
@@ -290,6 +326,7 @@ class AdvisorAgent:
             return AdvisorReply(
                 answer, "template", "answer", [chunk], latency_ms=(time.perf_counter() - started) * 1000
             )
+        # Rule 4: the customer wrote a bank code (boleto refund) -> check it.
         bank_reply = self._bank_code_reply(last, tools)
         if bank_reply is not None:
             return AdvisorReply(
@@ -299,6 +336,7 @@ class AdvisorAgent:
                 [BANK_POLICY_CHUNK],
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
+        # Rule 5: the customer sent the photos or the screenshot -> thank them.
         files = (messages[-1].get("meta") or {}).get("attachments") if messages else None
         if files:  # the customer sent the photos or the screenshot that were asked for
             labels = [str(f["label"]).lower() for f in files]
@@ -310,6 +348,7 @@ class AdvisorAgent:
                 ["advisor_playbook__s05"],
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
+        # Rule 6: otherwise, close the chat with a summary.
         return AdvisorReply(
             self._pick(CLOSINGS).format(summary=memory.summary),
             "template",
@@ -321,6 +360,7 @@ class AdvisorAgent:
     # ------------------------------------------------------------------ LLM mode
     def _policy_decision(self, memory: AdvisorMemory, tools: AdvisorTools) -> dict[str, Any] | None:
         """Hybrid variant: order lookup + rules engine as deterministic pipeline steps."""
+        # Pipeline steps chosen by code (not by the LLM): open the order, check refunds, run the rules engine.
         if not memory.order_id:
             return None
         if memory.decision is not None:
@@ -336,17 +376,20 @@ class AdvisorAgent:
         not choose the action); opens the policy hand-over ticket."""
         if memory.decision is not None:
             return memory.decision
+        # recommend_resolution = the company rules engine (the same rules as the ticket history).
         result = tools.recommend_resolution(memory.order_id, memory.intent or "track_order")
         if "error" in result:
             return None
         memory.outcome = result["recommended_action"]
         memory.handed_to = result["hand_over_to"] or memory.handed_to
+        # Some actions belong to another team (carrier, seller, payments): open a ticket for them.
         if result["hand_over_to"]:
             tools.open_ticket(
                 memory.order_id, result["recommended_action"].replace("_", " "), result["hand_over_to"]
             )
         memory.answered = True
         memory.summary = result["summary"] + (SUPERVISOR_SUMMARY if memory.escalated else "")
+        # Remember the decision: it is given to the LLM in every later turn.
         memory.decision = {
             "action": result["recommended_action"],
             "handover": result["hand_over_to"] or "nobody",
@@ -357,6 +400,7 @@ class AdvisorAgent:
 
     def _policy_context(self, hits: list) -> str:
         """Retrieved policy extracts, or the "no answer" note when the best match is weak."""
+        # If the best search score is too low, say "no policy covers this" instead of weak extracts.
         if (
             self.no_answer_score is not None
             and hits
@@ -375,6 +419,7 @@ class AdvisorAgent:
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> AdvisorReply:
         assert self.llm is not None
+        # 1) Retrieve the policy sections (RAG) and show them in the live trace.
         hits = self.retrieve(messages, memory.intent)
         if on_event is not None:
             on_event(
@@ -382,6 +427,7 @@ class AdvisorAgent:
                 {"hits": [{"section": h.chunk.section, "score": round(h.score, 3)} for h in hits]},
             )
         context = self._policy_context(hits)
+        # 2) The system prompt: today's date (the twin replays history), the intent and the policy extracts.
         system = ADVISOR_SYSTEM.format(
             today=tools.as_of.strftime("%Y-%m-%d"), intent=memory.intent, context=context
         )
@@ -407,6 +453,8 @@ class AdvisorAgent:
             role = "user" if message["speaker"] == "customer" else "assistant"
             chat.append({"role": role, "content": attachments_text(message)})  # text + attached files
 
+        # 3) The tool loop: call the LLM; if it asks for tools, run them, add their results to the chat and
+        # call it again (at most max_tool_rounds times).
         total_tokens, latency, model = 0, 0.0, None
         for round_number in range(self.max_tool_rounds + 1):
             if on_event is not None:
@@ -424,6 +472,7 @@ class AdvisorAgent:
             total_tokens += response.prompt_tokens + response.completion_tokens
             latency += response.latency_ms
             model = response.model
+            # No tool call: this is the final answer.
             if not response.tool_calls:
                 text = response.content.strip()
                 break
@@ -437,6 +486,7 @@ class AdvisorAgent:
                     ],
                 }
             )
+            # Run each requested tool and remember what it changes (sources, ticket team, decision).
             for call in response.tool_calls:
                 result = tools.execute(call["name"], dict(call["arguments"]))
                 if call["name"] == "search_knowledge_base":
@@ -450,6 +500,7 @@ class AdvisorAgent:
                     if decision.get("policy_section"):
                         sources.append(decision["policy_section"])
                 chat.append({"role": "tool", "content": result, "tool_name": call["name"]})
+        # The loop ran out of rounds without a final answer.
         else:
             text = ""
         if text and looks_portuguese(text):
@@ -461,11 +512,13 @@ class AdvisorAgent:
             total_tokens += retry.prompt_tokens + retry.completion_tokens
             latency += retry.latency_ms
             text = retry.content.strip() if not looks_portuguese(retry.content) else ""
+        # No usable text: the caller falls back to the template advisor.
         if not text:
             raise LLMUnavailableError("The advisor model returned no usable answer.")
         if self.variant == "rag_policy" and memory.order_id is None and not ASKS_ORDER.search(text):
             # Compliance guardrail (playbook rule 1): verify the order before helping further.
             text = f"{text}\n\n{self._pick(VERIFY_REQUESTS)}"
+        # The answer counts as given once the order was really looked up.
         if memory.order_id and any(c.name == "lookup_order" and c.ok for c in tools.calls):
             memory.answered = True
         stage = "answer" if memory.answered else ("verify" if memory.order_id is None else "answer")
@@ -493,6 +546,7 @@ class AdvisorAgent:
 
     @staticmethod
     def _looked_up(memory: AdvisorMemory, tools: AdvisorTools) -> bool:
+        """True when lookup_order already ran successfully on THIS order number."""
         return any(
             c.name == "lookup_order"
             and c.ok
@@ -502,10 +556,12 @@ class AdvisorAgent:
 
     @staticmethod
     def _paid_by_boleto(tools: AdvisorTools) -> bool:
+        """True when the order lookup showed a boleto payment (refund by bank transfer)."""
         return any(c.ok and c.result.get("payment_type") == "boleto" for c in tools.calls)
 
     @staticmethod
     def _mark_escalated(memory: AdvisorMemory, sources: list[str]) -> None:
+        """Remember that a supervisor now handles the case."""
         memory.escalated = True
         memory.handed_to = memory.handed_to or "supervisor"
         memory.summary += SUPERVISOR_SUMMARY
@@ -544,9 +600,11 @@ class AdvisorAgent:
     def _bank_code_reply(self, last: str, tools: AdvisorTools) -> str | None:
         """Boleto refund: the customer wrote a bank code, so check it (external API) and
         answer with the approved text. Used by the template backup and as a safety net."""
+        # Find a 1-5 digit number after "bank" or "code" in the customer's message.
         match = BANK_CODE.search(last)
         if match is None or not self._paid_by_boleto(tools):
             return None
+        # validate_bank_code checks the BrasilAPI bank list (cached on disk).
         result = tools.validate_bank_code(match.group(1))
         if "error" in result:
             return None
@@ -586,6 +644,7 @@ class AdvisorAgent:
         """
         assert self.llm is not None
         llm = self.llm
+        # --- Preparation: retrieval, system prompt, chat history, and what must happen this turn.
         hits = self.retrieve(messages, memory.intent)
         if on_event is not None:
             on_event(
@@ -606,10 +665,12 @@ class AdvisorAgent:
         sources = [h.chunk.chunk_id for h in hits]
         last = next((str(m["text"]) for m in reversed(messages) if m["speaker"] == "customer"), "")
         decided_before, escalated_before = memory.decision is not None, memory.escalated
+        # Playbook check: must this turn escalate (a legal threat, or a supervisor request after an answer)?
         escalate = not memory.escalated and escalation_due(last, decided_before)
         calls_before = len(tools.calls)
         usage: dict[str, Any] = {"tokens": 0, "latency": 0.0, "model": None}
 
+        # generate(): one LLM call, reported to the live UI, with tokens and time added up.
         def generate(
             round_number: int, schemas: list[dict[str, Any]] | None, choice: str | None = None, **event: Any
         ) -> Any:
@@ -624,8 +685,12 @@ class AdvisorAgent:
             usage["model"] = response.model
             return response
 
+        # --- The ReAct loop: Reason (the LLM thinks) -> Act (calls tools) -> Observe (reads the results) ->
+        # ... -> Answer.
         text, round_number = "", 0
         for round_number in range(self.max_tool_rounds + 1):
+            # GATING: the tools offered depend on the stage: verify (no order number), investigate (order not
+            # opened or not decided yet) or follow_up.
             stage = self._stage(memory)
             offered = agentic_tool_schemas(stage, memory.intent_group, self._paid_by_boleto(tools))
             names = [t["function"]["name"] for t in offered]
@@ -650,6 +715,7 @@ class AdvisorAgent:
                     result = tools.execute(call["name"], dict(call["arguments"]))
                     self._remember(call["name"], dict(call["arguments"]), result, memory, sources)
                     chat.append({"role": "tool", "content": result, "tool_name": call["name"]})
+                # FORCED STEP: once the order is open, the rules engine decides (code, not the LLM).
                 if stage == "investigate" and self._looked_up(memory, tools):
                     self._inject_decision(memory, tools, chat, sources)
                 continue
@@ -668,6 +734,7 @@ class AdvisorAgent:
         else:
             text = ""
 
+        # --- Safety nets: code does what the playbook requires when the LLM forgot.
         mode = "llm"
         if escalate and not memory.escalated:
             # Safety net: the playbook says to escalate and the LLM did not.

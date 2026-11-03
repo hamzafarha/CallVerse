@@ -7,6 +7,9 @@ K oldest waiting customers (slots) and picks one. Each slot describes the custom
 training (gym_wrapper) and for evaluation (PPORouter), so they cannot drift apart.
 """
 
+# Vocabulary: PPO (Proximal Policy Optimization) is a reinforcement-learning algorithm: the router learns by
+# trial and error inside the simulator. "Maskable" PPO can be told which actions are impossible (empty queue
+# slots). An "observation" is the list of numbers the router sees before each decision.
 import json
 import math
 from pathlib import Path
@@ -26,6 +29,8 @@ from callverse.simulation import (
     best_skilled_agent,
 )
 
+# Numbers per slot: present flag, wait, 4 problem-group flags, expected handle time, speed, the patience flags
+# and the live flag; plus 7 global numbers about the whole centre.
 GROUPS = ["wismo", "cancel_refund", "post_delivery", "order_admin"]
 SLOT_FEATURES = 1 + 1 + len(GROUPS) + 2 + len(PATIENCE_CLASSES) + 1
 GLOBAL_FEATURES = 7
@@ -46,12 +51,16 @@ def build_observation(
     mean_handle: dict[str, float],
 ) -> tuple[np.ndarray, np.ndarray]:
     """Observation vector and action mask for one routing decision."""
+    # The observation is a vector of numbers scaled to small values (so the neural network learns well); the
+    # mask says which slots hold a real customer.
     now = engine.env.now
     obs = np.zeros(observation_size(slots), dtype=np.float32)
     mask = np.zeros(slots, dtype=bool)
     for slot, contact in enumerate(candidates[:slots]):
         base = slot * SLOT_FEATURES
         speed = agent.speed.get(contact.intent_group, 1.0)
+        # Slot features: present, wait so far (in 5-minute units), problem group (one-hot), expected handle
+        # time with THIS advisor, its speed, the patience class (one-hot), live chat or not.
         values = [1.0, min((now - contact.arrival) / 300.0, 10.0)]
         values += [float(contact.intent_group == g) for g in GROUPS]
         values += [mean_handle.get(contact.intent_group, 240.0) * speed / 600.0, speed]
@@ -59,6 +68,8 @@ def build_observation(
         values += [float(contact.is_live)]
         obs[base : base + SLOT_FEATURES] = values
         mask[slot] = True
+    # Global features: queue sizes, free advisors, staff on duty, the hour of the day as sin/cos (so 23:00 and
+    # 00:00 are close), and how many customers did not fit in the slots.
     everyone = engine.agents + engine.overtime_pool
     on_duty = sum(a.on_duty for a in everyone)
     hour = (now % SECONDS_PER_DAY) / SECONDS_PER_HOUR
@@ -102,14 +113,17 @@ class PPORouter:
         self.engine: Any = None
 
     def bind(self, engine: Any) -> None:
+        """Give the router access to the simulation engine (it needs the queue state)."""
         self.engine = engine
 
     def pick_contact(self, agent: Agent, waiting: list[Contact], now: float) -> int:
         obs, mask = build_observation(self.engine, agent, waiting, self.slots, self.mean_handle)
+        # deterministic=True: always the best action (no exploration once trained).
         action, _ = self.model.predict(obs, action_masks=mask, deterministic=True)
         return int(action)
 
     def pick_agent(self, contact: Contact, free: list[Agent], now: float) -> int:
+        # Choosing the ADVISOR (when several are free) stays rule-based: the best-skilled one.
         return best_skilled_agent(contact, free)
 
 
@@ -121,6 +135,7 @@ def routing_settings() -> dict[str, Any]:
 def load_skill_weights(policy_dir: Path = POLICY_DIR) -> dict[str, float]:
     """Optimized skill-score weights, or the configured defaults."""
     path = policy_dir / SKILL_WEIGHTS_FILE
+    # Weights found by optimization.py, or the defaults of the config.
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))["weights"]
     return dict(load_yaml("agents")["workforce"]["routing"]["skill_score"]["default_weights"])
@@ -131,6 +146,7 @@ def ppo_available(policy_dir: Path = POLICY_DIR) -> bool:
     return (policy_dir / PPO_MODEL_FILE).exists()
 
 
+# Loaded PPO models, so a model file is read from disk only once.
 _ppo_cache: dict[str, Any] = {}
 
 

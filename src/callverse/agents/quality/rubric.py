@@ -5,6 +5,7 @@ from typing import Any
 
 from callverse.config import load_yaml
 
+# The 5 criteria of the scorecard; their definitions are in configs/agents.yaml (quality.rubric).
 CRITERIA = ["compliance", "relevance", "satisfaction", "sentiment", "resolution"]
 
 
@@ -17,6 +18,8 @@ def rubric() -> dict[str, str]:
 class Scorecard:
     """Scores of one conversation by one judge."""
 
+    # scores: criterion -> 1..5; correct: same outcome as the reference; resolved: solved, or correctly handed
+    # over; rationale: one sentence; judge: "llm" or "rules".
     scores: dict[str, int]
     correct: bool | None
     resolved: bool
@@ -28,9 +31,11 @@ class Scorecard:
 
     @property
     def overall(self) -> float:
+        """The average of the 5 scores."""
         return sum(self.scores.values()) / len(self.scores)
 
     def to_dict(self) -> dict[str, Any]:
+        """A JSON-friendly version (for the API and the saved transcripts)."""
         return {
             "scores": self.scores,
             "overall": round(self.overall, 2),

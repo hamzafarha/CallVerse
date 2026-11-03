@@ -1,5 +1,6 @@
 """Simulation scenario definitions for normal, surge, and degraded states."""
 
+# A dataclass(frozen=True) is a read-only record of settings.
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +19,12 @@ class ServiceTimeSpec:
 class SimulationConfig:
     """All simulation assumptions, loaded from ``configs/simulation.yaml``."""
 
+    # random_seed, replications, confidence_level: how runs are repeated and summarised. scale_factor:
+    # MULTIPLIES the contact volumes (x25): the Olist sample alone (~15 contacts a day) would need a single
+    # agent, so queues and staffing would be meaningless. Then the opening hours, the service target (80% of
+    # chats answered within 20 s), max_occupancy (agents are never planned busier than this share),
+    # min_agents, how the night backlog is spread in the morning, the mean patience, and the handle-time
+    # distribution per problem group.
     random_seed: int
     replications: int
     confidence_level: float
@@ -43,6 +50,7 @@ def load_simulation_config(path: str | Path) -> SimulationConfig:
     with open(path, encoding="utf-8") as config_file:
         raw = yaml.safe_load(config_file)
 
+    # Read the YAML sections and convert every value to the right type.
     hours = raw["resources"]["opening_hours"]
     staffing = raw["resources"]["staffing"]
     service = raw["service"]["by_intent_group"]
@@ -67,6 +75,7 @@ def load_simulation_config(path: str | Path) -> SimulationConfig:
             for group, spec in service.items()
         },
     )
+    # Basic sanity checks of the settings.
     if not 0 <= config.open_hour < config.close_hour <= 24:
         raise ValueError("Opening hours must satisfy 0 <= open < close <= 24.")
     if config.backlog_abandons:

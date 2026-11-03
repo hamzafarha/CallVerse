@@ -1,5 +1,7 @@
 """Readers for the processed tables used by the forecast, the twin and the API."""
 
+# Each reader loads one prepared table from data/processed/ ONCE (lru_cache), then reuses it:
+# the forecast, the twin and the API read the same tables many times.
 from functools import lru_cache
 
 import numpy as np
@@ -7,6 +9,7 @@ import pandas as pd
 
 from callverse.config import PROCESSED_DIR
 
+# The 4 problem groups: wismo ("where is my order"), cancel_refund, post_delivery, order_admin.
 INTENT_GROUPS = ["wismo", "cancel_refund", "post_delivery", "order_admin"]
 
 
@@ -21,6 +24,7 @@ def hour_shares() -> np.ndarray:
     """Share of a day's contacts arriving in each hour (24 values summing to 1)."""
     profile = pd.read_csv(PROCESSED_DIR / "contact_hour_profile.csv").sort_values("hour")
     shares = profile["share"].to_numpy(dtype=float)
+    # Normalise, so the 24 shares add up to exactly 1.
     return shares / shares.sum()
 
 
@@ -71,6 +75,7 @@ def promo_events() -> pd.DataFrame:
 
 def clear_caches() -> None:
     """Forget cached tables (after the data pipeline rewrote them)."""
+    # After `callverse data` rewrote the files, forget the cached copies.
     for reader in (
         daily_contacts_by_group,
         hour_shares,

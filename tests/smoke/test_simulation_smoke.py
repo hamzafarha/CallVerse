@@ -1,4 +1,5 @@
 """Smoke tests for CallVerse package, CLI, and simulation."""
+# Smoke tests: quick checks that the package imports, the CLI starts and a tiny simulation runs.
 
 import importlib
 import pkgutil

@@ -1,7 +1,9 @@
+# How the package is built: hatchling turns src/callverse into an installable Python package.
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Package name, version, and the Python versions it supports.
 [project]
 name = "callverse"
 version = "1.1.0"
@@ -30,6 +32,7 @@ dependencies = [
     "matplotlib>=3.8",
 ]
 
+# Extra groups, installed on demand, e.g. pip install -e ".[all]".
 [project.optional-dependencies]
 # Forecasting models (DSO4)
 forecast = [
@@ -70,12 +73,15 @@ dev = [
 ]
 all = ["callverse[forecast,agents,mlops,dev]"]
 
+# The `callverse` command = the Typer app in src/callverse/main.py (callverse data, forecast, serve...).
 [project.scripts]
 callverse = "callverse.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/callverse"]
 
+# ruff: the linter and import sorter. E = style errors, F = real errors (unused imports, undefined names), I =
+# import order.
 [tool.ruff]
 line-length = 110
 target-version = "py311"
@@ -85,6 +91,7 @@ extend-exclude = ["notebooks", "frontend"]
 select = ["E", "F", "I"]
 ignore = []
 
+# mypy: optional static type checking settings.
 [tool.mypy]
 python_version = "3.11"
 mypy_path = "src"
@@ -93,6 +100,8 @@ warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 
+# pytest: where the tests are, and markers to select them (pytest -m "not llm" skips the tests that need a
+# real LLM).
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
@@ -102,6 +111,7 @@ markers = [
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 
+# import-linter (run by `lint-imports`): checks the architecture layers described below.
 [tool.importlinter]
 root_package = "callverse"
 

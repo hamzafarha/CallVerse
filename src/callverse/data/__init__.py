@@ -1,5 +1,6 @@
 """Data layer for contact center schemas, generation, and validation."""
 
+# Re-export the data-layer functions used by the agents and the scripts.
 from callverse.data.conversations import build_chat, generate_chat_messages
 from callverse.data.database import (
     ORDER_COLUMNS,

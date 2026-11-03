@@ -1,11 +1,12 @@
-"""Client agent tools: the customer's own "My orders" page (view_my_order_page) and
-its chat timer (check_my_waiting_time).
+"""Client agent tools: the customer's own "My orders" page (view_my_order_page), its
+chat timer (check_my_waiting_time) and the files it can attach (send_evidence).
 
 A scripted LLM plays the customer, so each test controls what the "LLM" chooses and
 checks what the code does around it: gating (when a tool is offered), running the
 tools on the customer's own data only, the mismatch flag, the waiting-time arithmetic,
 the KPIs and the customer's memory of tools it used earlier.
 """
+# Tests agents/client/ (simulator.py, order_page.py, chat_clock.py, evidence.py).
 
 import json
 from dataclasses import dataclass, field
@@ -82,11 +83,13 @@ class ScriptedCustomerLLM:
 
 
 def answer(message: str, mismatch: bool | None = None, end: bool = False) -> str:
+    """A JSON answer as the customer's LLM would write it (message, end, csat, mismatch)."""
     return json.dumps({"message": message, "end": end, "csat": 4 if end else None, "mismatch": mismatch})
 
 
 @pytest.fixture(scope="module")
 def profile():
+    """A real customer profile (a track-order contact), loaded once for the whole file."""
     from callverse.agents.client.profiles import profile_by_contact_id
     from callverse.data import loaders
 
@@ -94,6 +97,7 @@ def profile():
 
 
 def chat_until(profile, advisor_says: str) -> list[dict[str, Any]]:
+    """A short chat history that ends with what the advisor just said."""
     return [
         {"speaker": "customer", "text": profile.opening_message},
         {"speaker": "advisor", "text": "Could you give me your order number, please?"},
@@ -104,6 +108,7 @@ def chat_until(profile, advisor_says: str) -> list[dict[str, Any]]:
 
 # ------------------------------------------------------------------ the page itself
 def test_order_page_shows_only_what_a_customer_sees(profile) -> None:
+    """The order page shows only the fields a customer can see (no internal data)."""
     page = my_order_page(profile.order_id, profile.contact_timestamp)
     assert page is not None and set(page) == CUSTOMER_FIELDS  # no internal flags or decisions
     assert page["order_id"] == profile.order_id and page["status"] in STATUS_LABEL.values()
@@ -113,12 +118,14 @@ def test_order_page_shows_only_what_a_customer_sees(profile) -> None:
 
 
 def test_unknown_order_has_no_page(profile) -> None:
+    """An unknown order number has no page."""
     assert my_order_page("0" * 32, profile.contact_timestamp) is None
     assert summarize_page(None) == "order not found"
 
 
 # ------------------------------------------------------------------ gating and tool use
 def test_page_is_not_offered_when_the_advisor_states_nothing_checkable(profile) -> None:
+    """The page tool is not offered when the advisor said nothing the customer could check."""
     llm = ScriptedCustomerLLM([answer("Okay, thank you.")])
     messages = chat_until(profile, "Thank you for waiting, I am here to help.")
     turn = ClientAgent(llm, "llm").respond(profile, messages, 2)
@@ -127,6 +134,7 @@ def test_page_is_not_offered_when_the_advisor_states_nothing_checkable(profile) 
 
 
 def test_customer_opens_its_page_and_flags_a_mismatch(profile) -> None:
+    """The customer opens its page and flags a mismatch when the advisor's status is wrong."""
     events: list[tuple[str, dict]] = []
     llm = ScriptedCustomerLLM(
         [
@@ -151,6 +159,7 @@ def test_customer_opens_its_page_and_flags_a_mismatch(profile) -> None:
 
 
 def test_customer_may_answer_without_opening_the_page(profile) -> None:
+    """Offered is not forced: the customer may answer without opening the page."""
     llm = ScriptedCustomerLLM([answer("Great, thanks a lot!", end=True)])
     messages = chat_until(profile, "Your order is with the carrier, estimated delivery 13 March 2017.")
     turn = ClientAgent(llm, "llm").respond(profile, messages, 2)
@@ -159,6 +168,7 @@ def test_customer_may_answer_without_opening_the_page(profile) -> None:
 
 
 def test_a_non_json_first_answer_is_asked_again_in_json(profile) -> None:
+    """If the model's answer is not JSON, it is asked again in JSON mode."""
     llm = ScriptedCustomerLLM(["Okay thanks", answer("Okay, thanks.")])
     messages = chat_until(profile, "Your order is with the carrier.")
     turn = ClientAgent(llm, "llm").respond(profile, messages, 2)
@@ -166,6 +176,7 @@ def test_a_non_json_first_answer_is_asked_again_in_json(profile) -> None:
 
 
 def test_customer_remembers_its_page_and_stops_checking(profile) -> None:
+    """After a few checks the customer remembers its page and stops opening it."""
     page = my_order_page(profile.order_id, profile.contact_timestamp)
     seen = {"name": ORDER_PAGE_TOOL, "arguments": {}, "ok": True, "result": page, "caller": "llm"}
     messages = chat_until(profile, "Your order is with the carrier.")
@@ -193,6 +204,7 @@ class FakeTime:
 
 
 def test_chat_clock_adds_up_all_the_waiting() -> None:
+    """The chat clock adds up the queue wait and every wait for an answer."""
     now = FakeTime()
     clock = ChatClock(patience_seconds=180, queue_wait_seconds=120, now=now)
     now.t += 10
@@ -208,17 +220,20 @@ def test_chat_clock_adds_up_all_the_waiting() -> None:
 
 
 def test_patience_is_the_twins_persona_patience() -> None:
+    """The customer's patience comes from the twin's persona settings."""
     normal = persona_patience("normal")
     assert persona_patience("impatient") == normal / 2 and persona_patience("patient") == normal * 2
 
 
 def test_twin_queue_wait_is_the_erlang_c_wait() -> None:
+    """The queue wait comes from the Workforce agent's Erlang C estimate."""
     assert queue_wait_from_twin({"is_live": True, "expected_wait_seconds": 16.4}) == 16.4
     # Centre closed: like in the twin (no abandonment while closed), it uses no patience
     assert queue_wait_from_twin({"is_live": False, "expected_wait_seconds": None}) == 0.0
 
 
 def test_timer_is_not_offered_while_the_wait_is_short(profile) -> None:
+    """The timer tool is not offered while the wait is short."""
     now = FakeTime()
     patience = persona_patience(profile.persona)
     clock = ChatClock(patience, queue_wait_seconds=0.2 * patience, now=now)
@@ -230,6 +245,7 @@ def test_timer_is_not_offered_while_the_wait_is_short(profile) -> None:
 
 
 def test_customer_checks_its_timer_and_leaves_out_of_patience(profile) -> None:
+    """The customer checks its timer and leaves the chat when it is out of patience."""
     now = FakeTime()
     patience = persona_patience(profile.persona)
     clock = ChatClock(patience, queue_wait_seconds=0.8 * patience, now=now)
@@ -254,6 +270,7 @@ def test_customer_checks_its_timer_and_leaves_out_of_patience(profile) -> None:
 
 
 def test_timer_is_optional_before_patience_runs_out_and_required_only_once(profile) -> None:
+    """The timer is optional at first; it becomes required once, when patience runs out."""
     now = FakeTime()
     patience = persona_patience(profile.persona)
     messages = chat_until(profile, "Thank you for waiting, I am here to help.")
@@ -272,6 +289,7 @@ def test_timer_is_optional_before_patience_runs_out_and_required_only_once(profi
 
 
 def test_both_tools_can_be_offered_in_the_same_turn(profile) -> None:
+    """The order page and the timer can be offered in the same turn."""
     patience = persona_patience(profile.persona)
     clock = ChatClock(patience, queue_wait_seconds=patience, now=FakeTime())
     llm = ScriptedCustomerLLM(
@@ -288,6 +306,7 @@ def test_both_tools_can_be_offered_in_the_same_turn(profile) -> None:
 
 
 def test_kpis_count_timer_checks_and_customers_who_left_waiting(profile) -> None:
+    """The KPIs count the timer checks and the customers who left because they waited too long."""
     from callverse.orchestration.graph import kpi_row
 
     timer = {"name": CLOCK_TOOL, "ok": True, "result": {"over_my_patience": True}, "caller": "llm"}
@@ -306,6 +325,7 @@ def test_kpis_count_timer_checks_and_customers_who_left_waiting(profile) -> None
 
 # ------------------------------------------------------------------ evidence
 def customer(contact_id: str):
+    """The profile of a given contact id."""
     from callverse.agents.client.profiles import profile_by_contact_id
     from callverse.data import loaders
 
@@ -313,11 +333,13 @@ def customer(contact_id: str):
 
 
 def enum_offered(llm: ScriptedCustomerLLM, call: int = 0) -> list[str]:
+    """The evidence kinds offered to the LLM in a given call (the enum of the tool schema)."""
     schema = next(t for t in llm.schemas[call] if t["function"]["name"] == EVIDENCE_TOOL)
     return schema["function"]["parameters"]["properties"]["kinds"]["items"]["enum"]
 
 
 def test_evidence_matches_the_customers_real_order() -> None:
+    """The simulated photos describe the customer's real order."""
     damaged = customer(DAMAGED)
     photo = make_evidence("product_photo", damaged)
     assert photo["label"] == EVIDENCE_KINDS["product_photo"] and photo["simulated"]
@@ -331,6 +353,7 @@ def test_evidence_matches_the_customers_real_order() -> None:
 
 
 def test_evidence_that_cannot_exist_is_refused() -> None:
+    """Evidence that cannot exist (e.g. a photo of a parcel never delivered) is refused."""
     not_delivered = customer(TRACK_ORDER)
     assert "not received" in make_evidence("product_photo", not_delivered)["error"]
     assert "not been shipped" in make_evidence("shipping_label_photo", customer(PAYMENT))["error"]
@@ -338,6 +361,7 @@ def test_evidence_that_cannot_exist_is_refused() -> None:
 
 
 def test_evidence_is_offered_only_when_the_advisor_asks_for_proof() -> None:
+    """send_evidence is offered only when the advisor asks for proof."""
     damaged = customer(DAMAGED)
     llm = ScriptedCustomerLLM([answer("Okay, thank you.")])
     ClientAgent(llm, "llm").respond(damaged, chat_until(damaged, "I am sorry about this."), 2)
@@ -345,6 +369,7 @@ def test_evidence_is_offered_only_when_the_advisor_asks_for_proof() -> None:
 
 
 def test_customer_sends_the_photos_it_was_asked_for() -> None:
+    """The customer sends all the photos it was asked for, in one call."""
     damaged = customer(DAMAGED)
     events: list[tuple[str, dict]] = []
     # One call selects several files, like a phone's photo picker (the same file twice: sent once)
@@ -381,6 +406,7 @@ def test_customer_sends_the_photos_it_was_asked_for() -> None:
 
 
 def test_a_file_that_cannot_exist_is_refused_in_the_tool_result() -> None:
+    """A file that cannot exist is refused in the tool result (the customer cannot invent it)."""
     not_delivered = customer(TRACK_ORDER)
     llm = ScriptedCustomerLLM(
         [[(EVIDENCE_TOOL, {"kinds": ["product_photo"]})], answer("I have not received it.")]
@@ -396,6 +422,9 @@ def test_a_file_that_cannot_exist_is_refused_in_the_tool_result() -> None:
 
 
 def test_advisor_and_judge_read_the_attachments_and_the_template_thanks() -> None:
+    """The advisor and the judge read the attachments, and the template backup thanks the customer for
+    them.
+    """
     from callverse.orchestration.graph import advisor_message, kpi_row, make_session
     from callverse.orchestration.runtime import AgentRuntime
 

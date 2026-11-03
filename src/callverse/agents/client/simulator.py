@@ -14,6 +14,14 @@ like its persona (complain, leave); and attach photos or a statement screenshot
 Without an LLM, a rule-based customer gives the same protocol (backup).
 """
 
+# How to read this file:
+# - The regular expressions (ASKS_FOR_ORDER, ...) spot what the advisor asks, for the rule-based answers and
+#   the guardrails.
+# - CLIENT_SYSTEM and the *_NOTE texts: the prompt that makes the LLM play the customer.
+# - The 3 tool schemas (order page, timer, evidence) and their gating rules.
+# - ClientTurn: one customer message, with its tools and flags.
+# - ClientAgent.respond(): guardrails first, then the LLM turn (Reason -> Act -> Answer), and the rule-based
+#   customer as the backup.
 import json
 import re
 import time
@@ -37,6 +45,7 @@ from callverse.data.conversations import (
 )
 from callverse.llm import LLMClient, LLMUnavailableError
 
+# Regular expressions: text patterns that detect what the advisor's last message asks for.
 ASKS_FOR_ORDER = re.compile(r"order (number|id|no)|which order|order #|confirm your order", re.I)
 # Boleto refund: the advisor asks for bank details (sent by e-mail), or rejects a bank code
 ASKS_FOR_BANK = re.compile(r"bank details|bank, branch|bank code|bank account details", re.I)
@@ -59,6 +68,8 @@ ADVISOR_VOICE = re.compile(
     re.I,
 )
 
+# The system prompt: the "role card" of the LLM. {situation}, {persona}, ... are filled for each customer. The
+# double braces {{ }} are literal braces of the JSON example.
 CLIENT_SYSTEM = """You are role-playing a CUSTOMER chatting with an online store's support advisor.
 Stay in character. Never act as the advisor. Always write in English.
 Talk TO the advisor in the first person ("I", "you"), never about "the advisor" or "the customer".
@@ -159,6 +170,7 @@ def evidence_schema(kinds: list[str]) -> dict[str, Any]:
                 "packaging_photo (the box), shipping_label_photo (the label on the parcel), "
                 "payment_statement (the line on your bank or card statement)."
             ),
+            # "kinds" is a LIST; its allowed values (enum) are only the files not sent yet.
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -174,6 +186,7 @@ def evidence_schema(kinds: list[str]) -> dict[str, Any]:
     }
 
 
+# The tools whose earlier results are replayed to the LLM as its memory.
 CUSTOMER_TOOLS = {ORDER_PAGE_TOOL, CLOCK_TOOL, EVIDENCE_TOOL}
 
 
@@ -181,6 +194,8 @@ CUSTOMER_TOOLS = {ORDER_PAGE_TOOL, CLOCK_TOOL, EVIDENCE_TOOL}
 class ClientTurn:
     """One customer message (or the end of the chat)."""
 
+    # text = the message; end = the customer leaves; csat = its 1-5 satisfaction when it leaves; mode = llm,
+    # rule or history; model, latency and tokens go to the traces.
     text: str
     end: bool
     csat: int | None
@@ -237,6 +252,7 @@ def sent_evidence(messages: list[dict[str, Any]]) -> set[str]:
 
 
 def advisor_answers(messages: list[dict[str, Any]]) -> int:
+    """How many advisor messages the chat has so far."""
     return sum(m["speaker"] == "advisor" for m in messages)
 
 
@@ -246,12 +262,15 @@ class ClientAgent:
     def __init__(
         self, llm: LLMClient | None = None, mode: str = "auto", seed: int = 0, max_turns: int = 4
     ) -> None:
+        # llm: the shared LLM client (None = rules only); mode: auto, llm or template; seed: for the random
+        # choices; max_turns: the customer leaves after this many messages.
         self.llm = llm
         self.mode = mode
         self.rng = np.random.default_rng(seed)
         self.max_turns = max_turns
 
     def use_llm(self) -> bool:
+        """True when this customer should use the LLM (template mode never does)."""
         if self.mode == "template" or self.llm is None:
             return False
         return self.mode == "llm" or self.llm.available()
@@ -270,6 +289,7 @@ class ClientAgent:
     ) -> ClientTurn:
         """Answer the advisor's last message. ``on_event("tool", ...)`` reports each
         tool call as it runs (live UI); ``clock`` times the chat (waiting-time tool)."""
+        # The timer counts the advisor's answer time, then restarts when the customer writes.
         if clock is not None:
             clock.answer_arrived()
         turn = self._respond(profile, messages, customer_turns, on_event, clock)
@@ -285,17 +305,22 @@ class ClientAgent:
         on_event: Callable[[str, dict[str, Any]], None] | None,
         clock: ChatClock | None,
     ) -> ClientTurn:
+        # Rule 1: after max_turns messages, the customer says goodbye and rates the chat.
         if customer_turns >= self.max_turns:
             return ClientTurn(self._pick(GOODBYES), True, self._survey(profile, messages), "rule")
+        # Rule 2 (guardrail): the order number is always given by code, never written by the LLM.
         given = profile.order_id in " ".join(str(m["text"]) for m in messages if m["speaker"] == "customer")
         if not given and ASKS_FOR_ORDER.search(str(messages[-1]["text"])):
             # Guardrail: verification data is always given deterministically (small models
             # sometimes swap roles and ask the advisor for *its* order number).
             reply = self._pick(VERIFY_REPLIES).format(order_id=profile.order_id)
             return ClientTurn(reply, False, None, "rule")
+        # Rule 3 (guardrail): bank codes too (with a planned typo for 20% of the customers).
         bank_turn = self._bank_turn(profile, messages)
         if bank_turn is not None:
             return bank_turn
+        # Otherwise the LLM writes the answer, with its tools. If it fails or breaks character, the rule-based
+        # customer answers instead.
         if self.use_llm():
             try:
                 turn = self._llm_turn(profile, messages, on_event, clock)
@@ -315,9 +340,12 @@ class ClientAgent:
             return None
         last = str(messages[-1]["text"])
         said = " ".join(str(m["text"]) for m in messages if m["speaker"] == "customer")
+        # The advisor asks for bank details and the customer has not given its code yet: give the code (maybe
+        # with the typo).
         if ASKS_FOR_BANK.search(last) and not re.search(rf"\b{profile.bank_code_typed}\b", said):
             text = self._pick(BANK_CODE_QUESTIONS).format(code=profile.bank_code_typed)
             return ClientTurn(text, False, None, "rule")
+        # The code had a typo and the advisor says it is invalid: give the correct code.
         if (
             profile.bank_code_typed != profile.bank_code
             and BANK_CODE_PROBLEM.search(last)
@@ -329,9 +357,11 @@ class ClientAgent:
 
     # ---------------------------------------------------------------- rule mode
     def _pick(self, options: list[str]) -> str:
+        """Pick one sentence at random from a list of templates."""
         return options[int(self.rng.integers(len(options)))]
 
     def _rule_turn(self, profile: CustomerProfile, messages: list[dict[str, Any]]) -> ClientTurn:
+        """The offline customer: simple rules on the advisor's last message."""
         last = str(messages[-1]["text"])
         if ASKS_FOR_ORDER.search(last) and profile.order_id not in " ".join(
             str(m["text"]) for m in messages if m["speaker"] == "customer"
@@ -341,6 +371,7 @@ class ClientAgent:
             )
         if ASKS_ANYTHING_ELSE.search(last):
             return ClientTurn(self._pick(GOODBYES), True, self._survey(profile, messages), "rule")
+        # Bad news (sorry, late, ...): an impatient customer asks for a supervisor 35% of the time.
         bad_news = bool(NEGATIVE.search(last))
         already_asked = any(
             "supervisor" in str(m["text"]).lower() for m in messages if m["speaker"] == "customer"
@@ -352,6 +383,8 @@ class ClientAgent:
 
     def _survey(self, profile: CustomerProfile, messages: list[dict[str, Any]]) -> int:
         """Post-chat CSAT (1-5): depends on the answer and the persona."""
+        # Start from 4.4, remove points for bad news and for an escalation, adjust for the persona, add a
+        # little random noise, and keep the result between 1 and 5.
         advisor_text = " ".join(str(m["text"]) for m in messages if m["speaker"] == "advisor")
         escalated = "supervisor" in advisor_text.lower()
         bad_news = bool(NEGATIVE.search(advisor_text))
@@ -409,6 +442,8 @@ class ClientAgent:
     ) -> ClientTurn:
         """Reason -> (optional) act with its tools -> answer in JSON."""
         assert self.llm is not None
+        # STEP 1 (gating): choose the tools to offer this turn. A tool is offered only when it makes sense, so
+        # the LLM is not distracted and the free quota is spared.
         kinds = self.offers_evidence(messages)
         offered = (
             ([ORDER_PAGE_SCHEMA] if self.offers_page(profile, messages) else [])
@@ -416,6 +451,7 @@ class ClientAgent:
             + ([evidence_schema(kinds)] if kinds else [])
         )
         names = [t["function"]["name"] for t in offered]
+        # STEP 2: the prompt. Its tool notes explain only the tools offered now.
         seen = [c for c in page_checks(messages) if c.get("ok")]
         notes = [PAGE_NOTE_OFFERED if ORDER_PAGE_TOOL in names else (PAGE_NOTE_SEEN if seen else "")]
         notes.append(CLOCK_NOTE_OFFERED if CLOCK_TOOL in names else "")
@@ -441,6 +477,8 @@ class ClientAgent:
             role = "assistant" if message["speaker"] == "customer" else "user"
             chat.append({"role": role, "content": str(message["text"])})
 
+        # STEP 3 (Reason + Act): one LLM call with the offered tools. The LLM may answer at once, or ask for
+        # one or more tools; we run them and add their results to the chat.
         responses, calls = [], []
         if offered:  # Reason: the LLM decides which tools, if any, to use
             # A tool call is required once, when the wait first goes past the customer's patience
@@ -464,9 +502,12 @@ class ClientAgent:
                 if on_event is not None:
                     on_event("tool", {k: v for k, v in call.items() if k != "result"})
                 chat.extend(self._tool_exchange(call["name"], call["result"]))
+        # STEP 4 (Answer): a second call in JSON mode, after reading the tool results (or when the first
+        # answer was not valid JSON).
         if not responses or calls or not self._parses(responses[-1]):
             # Answer (after reading the tool results, or when the first answer was not JSON)
             responses.append(self.llm.chat("client", chat, json_mode=True, agent="client", temperature=0.7))
+        # STEP 5: read the JSON answer: message, end, csat, mismatch.
         data = responses[-1].json()
         text = str(data.get("message", "")).strip()
         if not text:
@@ -478,6 +519,7 @@ class ClientAgent:
             if end and csat not in (None, "")
             else (self._survey(profile, messages + [{"speaker": "customer", "text": text}]) if end else None)
         )
+        # mismatch only counts when the customer really saw its order page (now or earlier).
         page_now = any(c["name"] == ORDER_PAGE_TOOL and c["ok"] for c in calls)
         mismatch = data.get("mismatch")
         mismatch = bool(mismatch) if (page_now or seen) and isinstance(mismatch, bool) else None
@@ -495,6 +537,7 @@ class ClientAgent:
 
     @staticmethod
     def _parses(response: Any) -> bool:
+        """True when the response is valid JSON with a non-empty message."""
         try:
             return bool(str(response.json().get("message", "")).strip())
         except ValueError:
@@ -521,6 +564,7 @@ class ClientAgent:
         can only open its own (any argument the LLM invents is ignored). ``send_evidence``
         takes the kind of file; the content always comes from the customer's real order."""
         started = time.perf_counter()
+        # Each tool reads only the customer's own data: its order page, its timer, its order's evidence.
         if name == ORDER_PAGE_TOOL:
             page = my_order_page(profile.order_id, profile.contact_timestamp)
             ok, result, summary = page is not None, page or {"error": "order not found"}, summarize_page(page)
@@ -532,6 +576,7 @@ class ClientAgent:
             assert clock is not None  # only offered with a clock
             result = clock.reading()
             ok, summary = True, summarize_clock(result)
+        # The same record format as the advisor's tool calls, so the UI and the KPIs treat both alike.
         return {
             "name": name,
             "arguments": dict(arguments),

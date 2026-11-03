@@ -14,6 +14,8 @@
 Results go to ``artifacts/evaluations/*.csv`` and to MLflow.
 """
 
+# The common pattern: run the twin for every option with the SAME seeds (common random numbers), summarise
+# each KPI as mean +/- 95% CI, and compute paired differences against the baseline.
 import time
 from collections.abc import Callable
 from typing import Any
@@ -33,6 +35,7 @@ from callverse.evaluation.business_kpis import mean_ci, paired_difference, summa
 from callverse.tracking import log_dataframe, mlflow_run
 from callverse.twin import DigitalTwin, runs_to_frame
 
+# The KPIs collected from every simulated run.
 SIM_KPIS = [
     "mean_wait_seconds",
     "service_level",
@@ -60,6 +63,7 @@ def scheduling_experiment(
     log: Callable[[str], None] | None = None,
 ) -> dict[str, pd.DataFrame]:
     """DSO3: every planner on the same customers (FIFO routing, prepared plans)."""
+    # Every scenario x planner, with FIFO routing and prepared plans.
     runs = []
     for scenario in scenarios:
         for plan in plans:
@@ -67,6 +71,7 @@ def scheduling_experiment(
             if log:
                 log(f"  scheduling: {scenario} / {plan}")
     frame = pd.concat(runs, ignore_index=True)
+    # Differences against the fixed schedule (the baseline of the DSO document).
     summary = summarize_runs(frame, ["scenario", "plan"], SIM_KPIS)
     diffs = pd.concat(
         [
@@ -101,10 +106,12 @@ def routing_experiment(
 
     The unprepared plan creates the queues where routing decisions matter.
     """
+    # PPO only when it was trained (`callverse train-rl`).
     routers = ["fifo", "skill_score"] + (["ppo"] if ppo_available() else [])
     runs = []
     for scenario in scenarios:
         for router in routers:
+            # The unprepared CP-SAT plan creates queues, where routing choices matter.
             runs.append(runs_to_frame(twin.run(scenario, "cpsat", router, seeds, prepared=False)))
             if log:
                 log(f"  routing: {scenario} / {router}")
@@ -144,6 +151,7 @@ def preparedness_experiment(
     runs, decision_rows = [], []
     for scenario in scenarios:
         for prepared in (False, True):
+            # Time how long the twin takes to decide (part of the BO4 KPI).
             started = time.perf_counter()
             frame = runs_to_frame(twin.run(scenario, plan, "fifo", seeds, prepared=prepared))
             runs.append(frame)
@@ -180,6 +188,8 @@ def preparedness_experiment(
         ignore_index=True,
     )
     rows = []
+    # Money saved by testing first = unprepared total cost - prepared total cost (labour + lost customers),
+    # per seed. Also: the extra labour, the abandonments avoided, and the break-even cost of one abandonment.
     for scenario in scenarios:
         part = frame[frame["scenario"] == scenario]
         prepared = part[part["prepared"]].set_index("seed")
@@ -226,6 +236,7 @@ def agents_experiment(
     """BO2/DSO2: conversation batches per advisor variant (template, rag, rag_policy)."""
     from callverse.orchestration.graph import conversation_kpis, run_batch
 
+    # For each variant: n conversations, then the BO2 KPIs of the batch.
     frames, summary_rows = [], []
     for variant in variants:
         mode = "template" if variant == "template" else "llm"
@@ -251,6 +262,7 @@ def judge_calibration(
     from callverse.agents.quality.reviewer import QualityReviewer
     from callverse.orchestration.runtime import get_runtime
 
+    # Human labels when at least 20 exist; otherwise proxy labels (the generator's answer key).
     tickets = loaders.tickets()
     messages = loaders.chat_messages()
     human = load_human_labels()
@@ -270,6 +282,7 @@ def judge_calibration(
         for k, g in messages[messages["ticket_id"].isin(chosen["ticket_id"])].groupby("ticket_id")
     }
     rows = []
+    # Grade each synthetic chat with the judge.
     for ticket in chosen.itertuples():
         chat = by_ticket.get(ticket.ticket_id)
         if chat is None:
@@ -312,6 +325,7 @@ def rag_experiment(
     from callverse.orchestration.runtime import get_runtime
 
     runtime = get_runtime()
+    # Retrieval quality: the keyword baseline vs bge-m3 + FAISS on the same test questions.
     test_set = retrieval_test_set()
     keyword = runtime.keyword_retriever()
     rows = [{"retriever": "keyword baseline (TF-IDF)", **retrieval_metrics(keyword, test_set)}]
@@ -331,6 +345,7 @@ def rag_experiment(
     conversations = load_saved_conversations()
     labelled = [c for c in conversations if c["_variant"] != "unlabelled"]
     conversations = labelled or conversations
+    # Faithfulness and answer similarity on the saved conversation transcripts.
     if embedder is not None and conversations:
         chunk_text = {c.chunk_id: c.text for c in keyword.chunks}
         faithfulness = faithfulness_and_relevance(conversations, embedder, chunk_text)
@@ -370,6 +385,8 @@ def run_all_experiments(
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
     """Every experiment of the evaluation chapter, logged to MLflow."""
+    # The whole evaluation chapter in one call: DSO3, DSO1, BO4, DSO2 (conversations, judge, RAG), DSO4
+    # fidelity, then MLflow.
     twin = DigitalTwin()
     log("DSO3 scheduling experiment ...")
     scheduling = scheduling_experiment(twin, seeds, log=log)
@@ -394,6 +411,7 @@ def run_all_experiments(
     log("DSO4 twin fidelity ...")
     run_fidelity()
 
+    # Log the headline numbers to MLflow.
     with mlflow_run("twin", "evaluation_suite", {"seeds": str(seeds)}) as run:
         run.log_param("seeds", seeds)
         for row in preparedness["savings"].itertuples():

@@ -1,5 +1,6 @@
 """Advisor copilot agent, knowledge retrieval, and tool executions."""
 
+# Re-export the knowledge-base pieces (indexing + retrieval) under one short import path.
 from callverse.agents.advisor.indexing import (
     Chunk,
     DocumentMeta,

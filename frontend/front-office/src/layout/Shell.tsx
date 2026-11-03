@@ -1,3 +1,8 @@
+/**
+ * The frame around every front-office page: a sticky header (logo, navigation, staff links, demo customer,
+ * theme switch, mobile menu), the Ctrl+K palette, toast messages and the footer. On the advisor desk the page
+ * uses the full width and the footer is hidden.
+ */
 import {
   APP_URLS,
   Aurora,
@@ -28,6 +33,7 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { useCustomer } from "../customer";
 
+// Main navigation of the customer site.
 const NAV = [
   { to: "/", label: "Home", icon: Home },
   { to: "/help", label: "Help centre", icon: BookOpen },
@@ -36,13 +42,16 @@ const NAV = [
 ];
 
 export default function Shell({ children }: { children: ReactNode }) {
+  // Light theme by default; this app remembers its choice under its own key.
   const { dark, toggle, theme } = useTheme("light", "callverse-theme-front");
   const { customer, setCustomer } = useCustomer();
   const [open, setOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  // The advisor desk needs the full screen width.
   const desk = location.pathname.startsWith("/desk");
 
+  // Entries of the Ctrl+K palette: pages, staff tools and the theme switch.
   const palette: PaletteItem[] = [
     ...NAV.map((n) => ({ id: n.to, label: n.label, group: "Customer", icon: n.icon, run: () => navigate(n.to) })),
     { id: "desk", label: "Advisor desk", group: "Staff", icon: Headset, run: () => navigate("/desk") },
@@ -50,6 +59,7 @@ export default function Shell({ children }: { children: ReactNode }) {
     { id: "theme", label: dark ? "Switch to light theme" : "Switch to dark theme", group: "Preferences", run: toggle },
   ];
 
+  // One navigation link; the active one gets a background that slides between links (layoutId).
   const link = (to: string, label: string, Icon: any) => (
     <NavLink
       key={to}
@@ -75,6 +85,7 @@ export default function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen flex-col">
+      {/* Animated background, toast messages (sonner) and the command palette. */}
       <Aurora intensity={dark ? 0.9 : 0.7} />
       <Toaster position="bottom-right" theme={theme} richColors closeButton />
       <CommandPalette items={palette} />
@@ -85,6 +96,7 @@ export default function Shell({ children }: { children: ReactNode }) {
           </Link>
           <nav className="ml-4 hidden items-center gap-1 lg:flex">{NAV.map((n) => link(n.to, n.label, n.icon))}</nav>
           <div className="ml-auto flex items-center gap-2">
+            {/* Staff area: the advisor desk, and the back office (control room) in a new tab. */}
             <div className="hidden items-center gap-1 rounded-xl border border-dashed border-line px-1 py-1 md:flex">
               <span className="px-2 text-[10px] font-semibold uppercase tracking-wider text-muted">Staff</span>
               {link("/desk", "Advisor desk", Headset)}
@@ -94,6 +106,7 @@ export default function Shell({ children }: { children: ReactNode }) {
                 </span>
               </a>
             </div>
+            {/* The demo customer the visitor signed in as, with a sign-out button. */}
             {customer && (
               <div className="hidden items-center gap-2 rounded-xl border border-line bg-surface py-1 pl-1 pr-2 sm:flex">
                 <Avatar name={customer.name} size={28} />
@@ -109,6 +122,7 @@ export default function Shell({ children }: { children: ReactNode }) {
             </button>
           </div>
         </div>
+        {/* Mobile menu (small screens only). */}
         <AnimatePresence>
           {open && (
             <motion.nav
@@ -126,14 +140,16 @@ export default function Shell({ children }: { children: ReactNode }) {
         </AnimatePresence>
       </header>
       <main className={clsx("flex-1", desk ? "" : "mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:py-10")}>{children}</main>
+      {/* Footer with a short description of the demo (hidden on the desk). */}
       {!desk && (
         <footer className="border-t border-line">
           <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-8 text-xs text-muted sm:px-6 md:flex-row md:items-center md:justify-between">
             <Logo product="Care" />
             <p className="max-w-2xl leading-relaxed">
               Demo help centre of the CallVerse digital twin. Orders are real, anonymised Olist orders; contacts are
-              synthetic. The AI advisor runs locally: SmolLM3-3B (Hugging Face) writes, a rules engine decides, bge-m3
-              retrieves the policies and an IBM Granite judge reviews every chat.
+              synthetic. The AI advisor: an open model hosted on OpenRouter writes (a local SmolLM3 model is the
+              backup), a rules engine decides, bge-m3 retrieves the policies and a judge from another model family
+              reviews every chat.
             </p>
           </div>
         </footer>

@@ -1,4 +1,5 @@
 """Workforce agent: CP-SAT planning, baselines, labour rules, RL environment."""
+# Tests agents/workforce/ (CP-SAT scheduling, baselines, the Gymnasium routing environment).
 
 import numpy as np
 import pandas as pd
@@ -16,6 +17,7 @@ from callverse.simulation import load_twin_settings
 
 @pytest.fixture
 def requirement() -> np.ndarray:
+    """Agents needed per day and hour: 3 normally, more at lunch and in the evening, fewer at the weekend."""
     need = np.zeros((7, 24), dtype=int)
     for day in range(7):
         need[day, 8:22] = 3
@@ -26,6 +28,7 @@ def requirement() -> np.ndarray:
 
 
 def test_cpsat_covers_requirement_and_respects_rules(requirement):
+    """The CP-SAT roster covers the requirement and respects the labour rules."""
     rules = load_scheduling_rules()
     plan = cpsat_schedule(requirement, rules, 8, 22, 12.0, 1.5)
     assert (plan.regular + plan.overtime >= requirement).all()
@@ -35,6 +38,7 @@ def test_cpsat_covers_requirement_and_respects_rules(requirement):
 
 
 def test_cpsat_is_cheaper_than_peak_sized_fixed_schedule(requirement):
+    """CP-SAT is cheaper than a fixed schedule sized for the peak hour."""
     rules = load_scheduling_rules()
     cpsat = cpsat_schedule(requirement, rules, 8, 22, 12.0, 1.5).planned_cost(12.0, 1.5)
     fixed = fixed_schedule(requirement, rules, 8, 22).planned_cost(12.0, 1.5)
@@ -42,12 +46,14 @@ def test_cpsat_is_cheaper_than_peak_sized_fixed_schedule(requirement):
 
 
 def test_rule_schedule_covers_with_two_templates(requirement):
+    """The rule-based backup covers the requirement with two shift templates."""
     plan = rule_schedule(requirement, load_scheduling_rules())
     assert plan.realtime_overtime
     assert (plan.regular[:, 8:22] >= requirement[:, 8:22]).all()
 
 
 def test_duty_matrices_shapes(requirement):
+    """Duty matrices have the expected shape."""
     rules = load_scheduling_rules()
     plan = cpsat_schedule(requirement, rules, 8, 22, 12.0, 1.5)
     regular, overtime = plan.duty_matrices(drain_days=1)
@@ -56,6 +62,7 @@ def test_duty_matrices_shapes(requirement):
 
 
 def test_routing_env_follows_gymnasium_api(daily_counts, hour_shares):
+    """The routing environment follows the Gymnasium API (reset, step, action mask)."""
     from gymnasium.utils.env_checker import check_env
 
     from callverse.agents.workforce.gym_wrapper import RoutingEnv

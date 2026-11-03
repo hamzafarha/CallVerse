@@ -1,4 +1,5 @@
 """Unit tests for the SQLite store (Phase 1F)."""
+# Tests data/database.py on a small temporary database.
 
 import sqlite3
 from pathlib import Path
@@ -70,6 +71,7 @@ def make_tables() -> dict[str, pd.DataFrame]:
 
 
 def test_build_and_query(tmp_path: Path) -> None:
+    """Build a small database and query it."""
     path = tmp_path / "store.db"
     counts = build_database(make_tables(), path)
     assert counts["orders"] == 1 and counts["chat_messages"] == 1
@@ -87,6 +89,7 @@ def test_build_and_query(tmp_path: Path) -> None:
 
 
 def test_foreign_key_violation_is_rejected(tmp_path: Path) -> None:
+    """A row that points to a missing parent row (foreign key) is rejected."""
     tables = make_tables()
     tables["tickets"].loc[0, "order_id"] = "missing_order"
     with pytest.raises(ValueError, match="foreign-key"):
@@ -95,6 +98,7 @@ def test_foreign_key_violation_is_rejected(tmp_path: Path) -> None:
 
 
 def test_duplicate_primary_key_is_rejected(tmp_path: Path) -> None:
+    """Two rows with the same primary key are rejected."""
     tables = make_tables()
     tables["sellers"] = pd.DataFrame({"seller_id": ["s1", "s1"]})
     with pytest.raises(ValueError, match="Duplicate primary keys"):
@@ -102,6 +106,7 @@ def test_duplicate_primary_key_is_rejected(tmp_path: Path) -> None:
 
 
 def test_writable_connection_enforces_foreign_keys(tmp_path: Path) -> None:
+    """A writable connection has the foreign-key checks switched on."""
     path = tmp_path / "store.db"
     build_database(make_tables(), path)
     connection = connect(path, read_only=False)

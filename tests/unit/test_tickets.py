@@ -1,4 +1,5 @@
 """Unit tests for synthetic tickets and chat logs (Phase 1F)."""
+# Tests data/tickets.py and conversations.py on a few hand-made orders.
 
 import re
 from pathlib import Path
@@ -62,6 +63,7 @@ def make_orders() -> pd.DataFrame:
 
 
 def make_contacts() -> pd.DataFrame:
+    """A few hand-made contacts, one per kind of situation."""
     rows = [
         ("SC000001", "o_late", "track_order", "wismo", T("2017-02-01 09:00")),
         (
@@ -103,6 +105,7 @@ def make_contacts() -> pd.DataFrame:
 
 
 def test_order_status_at_follows_the_timeline() -> None:
+    """The order status at a date follows the order timeline (purchased, shipped, delivered)."""
     orders = make_orders()
     at = pd.Series([T("2017-01-03"), T("2017-01-03"), T("2017-01-05"), T("2017-01-02")])
     assert order_status_at(orders, at).tolist() == [
@@ -121,6 +124,7 @@ def test_order_status_at_follows_the_timeline() -> None:
 
 
 def test_outcome_rules() -> None:
+    """The outcome rules give the expected outcome for each situation."""
     tickets_ = generate_tickets(make_contacts(), make_orders(), CONFIG, SERVICE_TIMES)
     outcomes = dict(zip(tickets_["contact_id"], tickets_["outcome"]))
     # 7 days past the estimate and 28 days in transit (> 25): investigation
@@ -132,6 +136,7 @@ def test_outcome_rules() -> None:
 
 
 def test_payment_rules() -> None:
+    """Payment problems get the right outcome."""
     row = pd.Series(
         {
             "intent": "payment_issue",
@@ -150,12 +155,14 @@ def test_payment_rules() -> None:
 
 
 def test_add_business_days_skips_weekends() -> None:
+    """Adding business days skips weekends."""
     friday = pd.Series([T("2017-01-06 16:00"), T("2017-01-07 10:00")])  # Fri, Sat
     shifted = add_business_days(friday, pd.Series([1, 0]))
     assert shifted.tolist() == [T("2017-01-09 16:00"), T("2017-01-07 10:00")]
 
 
 def test_tickets_are_reproducible_and_consistent() -> None:
+    """Same seed, same tickets; and the ticket fields are consistent."""
     contacts, orders = make_contacts(), make_orders()
     first = generate_tickets(contacts, orders, CONFIG, SERVICE_TIMES)
     pd.testing.assert_frame_equal(
@@ -173,6 +180,7 @@ def test_tickets_are_reproducible_and_consistent() -> None:
 
 
 def test_chat_messages_fit_the_ticket() -> None:
+    """The generated chat messages match their ticket (intent, outcome, order facts)."""
     contacts, orders = make_contacts(), make_orders()
     tickets_ = generate_tickets(contacts, orders, CONFIG, SERVICE_TIMES)
     messages = generate_chat_messages(tickets_, contacts, orders, seed := 1)
@@ -194,12 +202,14 @@ def test_chat_messages_fit_the_ticket() -> None:
 
 
 def outcomes_in_rules() -> set[str]:
+    """Every outcome name used in the rules of tickets.py (read from its source code)."""
     source = Path(tickets.__file__).read_text(encoding="utf-8")
     return set(re.findall(r'"([a-z_]+)",\s*"[a-z_]+__s\d\d"', source))
 
 
 @pytest.mark.parametrize("outcome", sorted(outcomes_in_rules()))
 def test_every_outcome_has_a_chat_template(outcome: str) -> None:
+    """Every outcome has a chat template."""
     ticket = pd.Series(
         {
             "outcome": outcome,
@@ -216,11 +226,13 @@ def test_every_outcome_has_a_chat_template(outcome: str) -> None:
 
 
 def test_follow_up_config_names_real_outcomes() -> None:
+    """The follow-up delays in configs/data.yaml only name real outcomes."""
     known = outcomes_in_rules() | {"supervisor_callback"}
     assert set(CONFIG.follow_up_business_days) <= known
 
 
 def test_referenced_kb_chunks_exist() -> None:
+    """Every knowledge-base section referenced by a template exists."""
     sources = [
         Path(m.__file__).read_text(encoding="utf-8") for m in (tickets, conversations)
     ]

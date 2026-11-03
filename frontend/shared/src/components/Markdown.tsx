@@ -4,6 +4,9 @@ import { Fragment, type ReactNode } from "react";
  * tables, bold, inline code). The articles are our own files, so no HTML is
  * passed through. */
 
+/**
+ * Heading text to a URL-friendly id ("Refund policy" -> "refund-policy"), used to link to a section.
+ */
 export function slug(text: string): string {
   return text
     .toLowerCase()
@@ -11,6 +14,9 @@ export function slug(text: string): string {
     .replace(/(^-|-$)/g, "");
 }
 
+/**
+ * Inline formatting: **bold** and `code`. The split keeps the markers so each part can be checked.
+ */
 function inline(text: string): ReactNode[] {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
   return parts.map((part, i) => {
@@ -20,6 +26,10 @@ function inline(text: string): ReactNode[] {
   });
 }
 
+/**
+ * Reads the text line by line and builds React elements: headings, tables, lists, then paragraphs.
+ * `highlight` marks one heading (the section a search result points to).
+ */
 export function Markdown({ text, highlight }: { text: string; highlight?: string }) {
   const lines = text.split(/\r?\n/);
   const blocks: ReactNode[] = [];
@@ -30,6 +40,7 @@ export function Markdown({ text, highlight }: { text: string; highlight?: string
       i += 1;
       continue;
     }
+    // Heading: 1 to 3 "#" signs.
     const heading = /^(#{1,3})\s+(.*)$/.exec(line);
     if (heading) {
       const level = heading[1].length;
@@ -44,6 +55,7 @@ export function Markdown({ text, highlight }: { text: string; highlight?: string
       i += 1;
       continue;
     }
+    // Table: lines starting with "|". The "|---|" separator line is skipped; the first row is the header.
     if (line.startsWith("|")) {
       const rows: string[][] = [];
       while (i < lines.length && lines[i].startsWith("|")) {
@@ -68,6 +80,7 @@ export function Markdown({ text, highlight }: { text: string; highlight?: string
       );
       continue;
     }
+    // List: bullet lines ("-" or "*") or numbered lines ("1.").
     const bullet = /^\s*[-*]\s+/;
     const numbered = /^\s*\d+\.\s+/;
     if (bullet.test(line) || numbered.test(line)) {
@@ -87,6 +100,7 @@ export function Markdown({ text, highlight }: { text: string; highlight?: string
       );
       continue;
     }
+    // Paragraph: the following lines, until a blank line or the start of another block.
     const paragraph: string[] = [];
     while (i < lines.length && lines[i].trim() && !/^(#{1,3}\s|\||\s*[-*]\s|\s*\d+\.\s)/.test(lines[i])) {
       paragraph.push(lines[i]);

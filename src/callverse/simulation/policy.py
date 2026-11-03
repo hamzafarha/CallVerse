@@ -11,6 +11,7 @@ the oldest customer first, and the free agent who is fastest on that customer's
 problem type. The learned PPO router lives in ``callverse.agents.workforce``.
 """
 
+# A Protocol is an interface: every router must answer pick_contact and pick_agent.
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -53,6 +54,7 @@ class Router(Protocol):
 
 def best_skilled_agent(contact: Contact, free: list[Agent]) -> int:
     """Fastest free agent for the contact's group; ties go to the longest idle."""
+    # Sort by speed (lower = faster), then by idle time.
     return min(
         range(len(free)),
         key=lambda i: (free[i].speed.get(contact.intent_group, 1.0), free[i].idle_since),
@@ -66,6 +68,7 @@ class FifoRouter:
     external = False
 
     def pick_contact(self, agent: Agent, waiting: list[Contact], now: float) -> int:
+        # Index 0 = the customer waiting for the longest time.
         return 0
 
     def pick_agent(self, contact: Contact, free: list[Agent], now: float) -> int:
@@ -89,6 +92,8 @@ class SkillScoreRouter:
     external: bool = False
 
     def score(self, agent: Agent, contact: Contact, now: float) -> float:
+        # A higher score = served first: long waits, a good skill match, short jobs and impatient customers
+        # move up.
         speed = agent.speed.get(contact.intent_group, 1.0)
         expected = self.mean_handle.get(contact.intent_group, 240.0) * speed
         w = self.weights
@@ -100,6 +105,7 @@ class SkillScoreRouter:
         )
 
     def pick_contact(self, agent: Agent, waiting: list[Contact], now: float) -> int:
+        # Compute every waiting customer's score and take the best.
         scores = [self.score(agent, contact, now) for contact in waiting]
         return max(range(len(waiting)), key=scores.__getitem__)
 

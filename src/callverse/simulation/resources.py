@@ -3,6 +3,10 @@
 Version 1 sizes one agent pool per hour with the Erlang C formula.
 """
 
+# Erlang C is the classic formula of call-centre staffing. Inputs: arrivals per hour, the mean handle time and
+# the number of agents. Outputs: the probability to wait, the share answered within a threshold (the service
+# level) and the mean wait. "Offered load" = arrivals x handle time, in Erlangs: how many agents would be busy
+# all the time.
 import math
 
 import numpy as np
@@ -15,10 +19,12 @@ def erlang_c_wait_probability(agents: int, offered_load: float) -> float:
     ``offered_load`` is the traffic in Erlangs: arrival rate x mean handle time.
     Uses the numerically stable Erlang B recursion.
     """
+    # No traffic: nobody waits.
     if offered_load <= 0:
         return 0.0
     if agents <= offered_load:
         return 1.0  # unstable queue: every contact waits
+    # Erlang B by recursion (this avoids huge factorials), then converted into Erlang C.
     erlang_b = 1.0
     for servers in range(1, agents + 1):
         erlang_b = offered_load * erlang_b / (servers + offered_load * erlang_b)
@@ -38,6 +44,7 @@ def erlang_c_service_level(
     if agents <= offered_load:
         return 0.0
     wait_probability = erlang_c_wait_probability(agents, offered_load)
+    # Service level = 1 - P(wait) x e^(-(agents - load) x threshold / handle time).
     decay = (agents - offered_load) * threshold_seconds / mean_service_seconds
     return 1 - wait_probability * math.exp(-decay)
 
@@ -52,6 +59,7 @@ def erlang_c_mean_wait(
     if agents <= offered_load:
         return math.inf
     wait_probability = erlang_c_wait_probability(agents, offered_load)
+    # Mean wait = P(wait) x handle time / (agents - load).
     return wait_probability * mean_service_seconds / (agents - offered_load)
 
 
@@ -65,6 +73,7 @@ def required_agents(
 ) -> int:
     """Smallest number of agents meeting the service level and occupancy limits."""
     offered_load = arrivals_per_hour * mean_service_seconds / 3600
+    # Start from the minimum (load / max occupancy) and add agents until the target is met.
     agents = max(min_agents, math.ceil(offered_load / max_occupancy))
     while (
         erlang_c_service_level(
@@ -120,6 +129,8 @@ def hourly_plan_inputs(
     Contacts that arrive while the center is closed are planned as workload of the
     first ``backlog_spread_hours`` open hours of the next morning.
     """
+    # Two passes: the expected arrivals and work per hour, then the night's contacts are moved into the first
+    # morning hours (they are answered when the centre opens).
     hours_total = len(days) * 24
     arrivals = np.zeros(hours_total)
     work_seconds = np.zeros(hours_total)
@@ -147,6 +158,7 @@ def hourly_plan_inputs(
         for hour in morning:
             planned[hour] += arrivals[night].sum() / backlog_spread_hours
             planned_work[hour] += work_seconds[night].sum() / backlog_spread_hours
+    # Mean handle time per hour = work / arrivals (240 s when nobody arrives).
     mean_handle = np.divide(
         planned_work, planned, out=np.full(hours_total, 240.0), where=planned > 0
     )

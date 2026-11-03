@@ -11,6 +11,8 @@ No LLM is called: arrivals and handle times are sampled (fast).
   time is the same as minimising average waiting time (Little's law).
 """
 
+# Gymnasium is the standard Python API for reinforcement-learning environments: reset() starts an episode,
+# step(action) applies one decision and returns (observation, reward, finished, ...).
 from typing import Any
 
 import gymnasium as gym
@@ -68,6 +70,7 @@ class RoutingEnv(gym.Env):
         # Extra surge of each problem type on top of the day's load (scenario-like peaks)
         self.group_surge = group_surge
         self.shares = workload_shares(daily_counts, settings)
+        # Observation: a vector of numbers. Action: one slot index among `slots`.
         self.observation_space = gym.spaces.Box(
             low=-1.0, high=20.0, shape=(observation_size(slots),), dtype=np.float32
         )
@@ -78,6 +81,8 @@ class RoutingEnv(gym.Env):
         self.episode_info: dict[str, Any] = {}
 
     def _new_episode(self) -> bool:
+        # Draw a training day, stress it (load, absences, surges) and run the simulation until its first
+        # routing decision.
         rng = self._rng
         day = pd.Timestamp(self.days[int(rng.integers(len(self.days)))])
         days = pd.DatetimeIndex([day])
@@ -97,6 +102,7 @@ class RoutingEnv(gym.Env):
             n_agents, self.shares, self.settings, seed_offset=int(rng.integers(1_000_000))
         )
         duty = apply_absence(duty_from_counts(plan, n_agents), absence, rng)
+        # ExternalRouter: the simulation pauses at every decision and waits for the agent's action.
         self.engine = CallCenterEngine(
             contacts,
             agents,
@@ -134,14 +140,19 @@ class RoutingEnv(gym.Env):
     def step(self, action: int):
         engine = self.engine
         assert engine is not None
+        # Measure the waiting (customer-seconds) and the abandonments before and after the decision.
         area, abandons = engine.wait_area, engine.abandons
         n_candidates = len(engine.pending[1]) if engine.pending else 0
+        # Apply the chosen slot (an invalid one falls back to the first customer), then run the simulation
+        # until the next decision.
         engine.resolve(int(action) if action < min(n_candidates, self.slots) else 0)
         has_decision = engine.advance()
+        # Reward = minus (waiting added + 600 s per abandonment), scaled: less waiting = more reward.
         cost = (engine.wait_area - area) + self.abandon_penalty * (engine.abandons - abandons)
         reward = -cost / self.reward_scale
         if has_decision:
             return self._observe(), float(reward), False, False, {}
+        # End of the day: report the day's KPIs.
         self._mask = np.zeros(self.slots, dtype=bool)
         records = engine.records()
         live = records[records["is_live"]]

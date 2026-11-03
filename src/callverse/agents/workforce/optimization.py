@@ -5,6 +5,9 @@ with each (common random numbers), keep the vector with the lowest average wait
 of live customers plus an abandonment penalty. Simple, fast, explainable.
 """
 
+# The skill-score router gives each waiting customer a score that combines its waiting time, the advisor's
+# speed on its problem, how short the job is and whether the customer is impatient. The weights say how much
+# each part counts; this random search finds good weights.
 import json
 from collections.abc import Callable
 from typing import Any
@@ -29,6 +32,9 @@ from callverse.simulation import (
 
 
 def _objective(records: pd.DataFrame, end_time: float, abandon_penalty: float) -> float:
+    """Average wait of live customers (abandoners count until the moment they left), plus a penalty per
+    abandonment. Lower is better.
+    """
     live = records[records["is_live"]]
     waited = np.where(
         live["start"].notna(),
@@ -46,19 +52,24 @@ def optimize_skill_weights(log: Callable[[str], None] = print) -> dict[str, Any]
     settings = load_twin_settings()
     daily = loaders.daily_contacts_by_group()
     shares = loaders.hour_shares()
+    # Training days only: the test days stay unseen for the final comparison.
     train_days = pd.date_range(raw["train_period"]["start"], raw["train_period"]["end"])
     rng = np.random.default_rng(11)
     days = [train_days[i] for i in rng.choice(len(train_days), int(search["search_days"]), replace=False)]
+    # Stress the days (more contacts, some absences) so that queues form and routing matters.
     load = float(np.mean([raw["load_multiplier"]["low"], raw["load_multiplier"]["high"]]))
     absence = float(np.mean([raw["absence_rate"]["low"], raw["absence_rate"]["high"]]))
     penalty = float(raw["abandon_penalty_seconds"])
 
+    # Common random numbers: every weight set faces exactly the same days, customers and absences (same
+    # seeds), so the comparison is fair.
     episodes = []
     for number, day in enumerate(days):
         day_index = pd.DatetimeIndex([day])
         plan = hourly_requirements(daily, day_index, settings, shares)
         episodes.append((day_index, plan, 500 + number))
 
+    # Simulate every training day with these weights and average the objective.
     def score(weights: dict[str, float]) -> float:
         values = []
         for day_index, plan, seed in episodes:
@@ -79,6 +90,7 @@ def optimize_skill_weights(log: Callable[[str], None] = print) -> dict[str, Any]
             values.append(_objective(engine.run(), engine.end_time, penalty))
         return float(np.mean(values))
 
+    # Candidates: the default weights, a "wait only" set (behaves like FIFO), then random sets.
     candidates = [dict(search["default_weights"]), {"wait": 1.0, "speed": 0, "short_job": 0, "impatient": 0}]
     for _ in range(int(search["search_iterations"])):
         candidates.append({k: float(rng.uniform(0, 3)) for k in ["wait", "speed", "short_job", "impatient"]})
@@ -87,6 +99,7 @@ def optimize_skill_weights(log: Callable[[str], None] = print) -> dict[str, Any]
         results.append((score(weights), weights))
         if number % 10 == 0:
             log(f"  skill-score search {number}/{len(candidates)}")
+    # Lowest objective first: the best weights.
     results.sort(key=lambda item: item[0])
     best_value, best = results[0]
     fifo_like = next(v for v, w in results if w == candidates[1])

@@ -9,6 +9,9 @@ defaults:
   drain_days: 1             # extra simulated day so the last evening backlog is served
 
 scenarios:
+  # Each scenario: a label and a description (shown in the Scenario lab), the week it replays, volume
+  # multipliers per intent group, the share of absent agents, and a handle-time multiplier (1.1 =
+  # conversations 10% longer).
   baseline:
     label: Normal week
     description: A normal week in May 2018, no event.

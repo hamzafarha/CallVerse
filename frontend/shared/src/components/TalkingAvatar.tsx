@@ -1,3 +1,7 @@
+/**
+ * Animated faces for voice mode, drawn in SVG (no images): the AI advisor (a rounded square with a headset)
+ * and the customer (a round face whose color and mood follow the persona).
+ */
 import { motion, useReducedMotion } from "framer-motion";
 import { useId } from "react";
 
@@ -11,6 +15,7 @@ const PERSONA_FACE: Record<string, { color: string; brows: [string, string]; mou
   patient: { color: "var(--good)", brows: ["M 32 42 Q 38 38 44 41", "M 56 41 Q 62 38 68 42"], mouth: "M 41 68 Q 50 75 59 68" },
 };
 
+// Ink color of the drawing (it follows the light/dark theme).
 const INK = "var(--text-primary)";
 
 /** Animated face of a call participant (SVG). `agent`: the AI advisor, in the brand
@@ -39,13 +44,16 @@ export function TalkingAvatar({
   size?: number;
   label?: string;
 }) {
+  // useId gives a unique id, so two avatars on one page do not share the same SVG gradient.
   const id = useId().replace(/:/g, "");
   const reduced = !!useReducedMotion();
   const agent = kind === "agent";
   const face = PERSONA_FACE[persona] ?? PERSONA_FACE.normal;
+  // busy = thinking or typing: the eyes look up and three dots appear above the head.
   const busy = state === "thinking" || state === "typing";
   const look = busy ? { x: 0, y: -2.2 } : { x: lookAt === "left" ? -2.2 : 2.2, y: 0 };
   const eyeY = agent ? 50.5 : 52;
+  // A slow breathing movement while the participant listens.
   const breathing = !reduced && state === "listening";
 
   return (
@@ -65,6 +73,7 @@ export function TalkingAvatar({
         </linearGradient>
       </defs>
 
+      {/* Three dots above the head while thinking or typing. */}
       {busy &&
         [0, 1, 2].map((i) => (
           <motion.circle
@@ -112,15 +121,18 @@ export function TalkingAvatar({
             <ellipse cx={61} cy={eyeY} rx={6} ry={6.5} fill="white" />
           </>
         )}
+        {/* The pupils move with a spring toward the other participant (or up while busy). */}
         <motion.g animate={look} transition={{ type: "spring", stiffness: 120, damping: 14 }}>
           <circle cx={agent ? 38.5 : 39} cy={eyeY} r={3} style={{ fill: agent ? "#1e1b4b" : INK }} />
           <circle cx={agent ? 61.5 : 61} cy={eyeY} r={3} style={{ fill: agent ? "#1e1b4b" : INK }} />
         </motion.g>
       </motion.g>
 
+      {/* Eyebrows: only people have them; their angle shows the persona's mood. */}
       {!agent &&
         face.brows.map((d) => <path key={d} d={d} strokeWidth={2.6} strokeLinecap="round" fill="none" style={{ stroke: INK }} />)}
 
+      {/* The mouth: a resting line, or an ellipse that opens and closes while speaking. */}
       <Mouth
         speaking={state === "speaking"}
         word={word}
@@ -131,6 +143,7 @@ export function TalkingAvatar({
         reduced={reduced}
       />
 
+      {/* Headset: always on the AI agent; on a person only when `headset` is set. */}
       {(agent || headset) && (
         <g strokeLinecap="round" opacity={0.85} style={{ stroke: INK, fill: "none" }}>
           <path d="M 15 56 Q 15 12 50 12 Q 85 12 85 56" strokeWidth={3.6} />
@@ -144,6 +157,9 @@ export function TalkingAvatar({
   );
 }
 
+/**
+ * The mouth. Silent: the resting shape. Speaking: an ellipse whose height (ry) changes.
+ */
 function Mouth({
   speaking,
   word,
@@ -163,6 +179,7 @@ function Mouth({
 }) {
   if (!speaking) return <path d={idle} strokeWidth={2.8} strokeLinecap="round" fill="none" style={{ stroke: color }} />;
   const shape = { cx: 50, cy: y, rx: 6.5, style: { fill: color } };
+  // Reduced motion: a still, half-open mouth.
   if (reduced) return <ellipse {...shape} ry={3.5} />;
   if (lipSync === "words") {
     // a new key on every word replays the open-and-close movement
@@ -170,6 +187,7 @@ function Mouth({
       <motion.ellipse key={word} {...shape} initial={{ ry: 1.6 }} animate={{ ry: [1.6, 6.5, 2.4] }} transition={{ duration: 0.26, ease: "easeOut" }} />
     );
   }
+  // No word events from the voice: a steady open-and-close loop.
   return (
     <motion.ellipse
       {...shape}

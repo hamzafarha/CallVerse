@@ -1,16 +1,24 @@
+/**
+ * Quality page (DSO2): can the AI judge be trusted? People grade historical conversations with the same
+ * 5-criteria scorecard as the Quality agent; the calibration then measures how well the judge agrees with
+ * them (Cohen's quadratic kappa, Spearman's rho).
+ */
 import { RefreshCw, Save } from "lucide-react";
 import { useState } from "react";
 import { Card, ErrorBox, Loading, PageHeader, Status } from "@callverse/shared";
 import { postJson, useApi } from "@callverse/shared";
 import { num } from "@callverse/shared";
 
+// The five criteria of the scorecard (same list as agents/quality/rubric.py).
 const CRITERIA = ["compliance", "relevance", "satisfaction", "sentiment", "resolution"];
 
 export default function QualityPage() {
+  // The grader's name, remembered in the browser.
   const [labeler, setLabeler] = useState(() => {
     try { return localStorage.getItem("callverse-labeler") ?? ""; } catch { return ""; }
   });
   const [seed, setSeed] = useState(0);
+  // The next conversation this grader has not graded yet (a new seed = skip to another one).
   const next = useApi<any>(`/api/quality/next?labeler=${encodeURIComponent(labeler || "anonymous")}&seed=${seed}`);
   const calibration = useApi<any>("/api/quality/calibration");
   const [scores, setScores] = useState<Record<string, number>>({ compliance: 3, relevance: 3, satisfaction: 3, sentiment: 3, resolution: 3 });
@@ -19,6 +27,7 @@ export default function QualityPage() {
   const [recomputing, setRecomputing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Save the grades, reset the form, load the next conversation and refresh the calibration numbers.
   const save = async () => {
     if (!next.data) return;
     setSaving(true); setError(null);
@@ -29,6 +38,7 @@ export default function QualityPage() {
       setSeed((s) => s + 1); calibration.reload();
     } catch (e: any) { setError(e.message); } finally { setSaving(false); }
   };
+  // Recompute the judge agreement on the server (the same as `callverse judge-calibrate`).
   const recompute = async () => {
     setRecomputing(true);
     try { await postJson("/api/quality/calibrate", {}); calibration.reload(); } catch (e: any) { setError(e.message); } finally { setRecomputing(false); }
@@ -43,6 +53,8 @@ export default function QualityPage() {
         title="Human labeling & judge calibration"
         subtitle="Grade conversations with the same scorecard as the Quality agent. With 20+ human labels, the calibration switches from proxy labels (the generator's answer key) to your grades, and reports Cohen's quadratic kappa and Spearman's rho per criterion."
       />
+      {/* Progress towards the target number of human labels, and the agreement table per judge and
+         criterion (trusted when kappa reaches the threshold). */}
       {cal && (
         <div className="grid gap-4 md:grid-cols-3">
           <div className="card p-4">
@@ -76,6 +88,7 @@ export default function QualityPage() {
       )}
 
       {error && <ErrorBox error={error} />}
+      {/* Left: the conversation to grade. Right: the grading form (1 to 5 per criterion, and a comment). */}
       <div className="grid gap-6 lg:grid-cols-5">
         <Card title="Conversation to grade" className="lg:col-span-3" subtitle={next.data ? `${next.data.ticket_id} · ${next.data.intent}` : undefined}
           action={<button className="btn btn-ghost py-1 text-xs" onClick={() => setSeed((s) => s + 1)}>Skip</button>}>

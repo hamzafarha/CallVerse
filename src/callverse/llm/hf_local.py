@@ -12,6 +12,13 @@ emulates bfloat16 at the same speed and memory.) Roles that point
 to the same repository share one loaded model. One generation runs at a time.
 """
 
+# How to read this file:
+# - parse_tool_calls(): finds the tool calls written in a model's text (<tool_call>{...}</tool_call>).
+# - StreamGate: sends the visible text to the UI live, but hides tool-call markup.
+# - normalize_messages() / tools_prompt(): prepare the chat for the model's chat template.
+# - LocalModel: loads one model (4-bit on the GPU) and generates answers.
+# - ModelPool: keeps models loaded and lets only one generation run at a time. This is the BACKUP path: since
+#   v1.2, OpenRouter answers first (see openrouter.py).
 import json
 import re
 import threading
@@ -20,6 +27,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+# Regular expressions (text patterns): a tool-call block, a hidden "thinking" block, and the tags that open a
+# tool call.
 TOOL_BLOCK = re.compile(r"<\|?tool_call\|?>\s*(.*?)\s*(?:</tool_call>|$)", re.S)
 THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S)
 TOOL_MARKERS = ("<tool_call", "<|tool_call")
@@ -28,6 +37,7 @@ TOOL_MARKERS = ("<tool_call", "<|tool_call")
 # --------------------------------------------------------------------- parsing
 def _json_values(text: str) -> list[Any]:
     """Every JSON object or list found in ``text``, in order."""
+    # raw_decode reads one JSON value starting at a given position and says where it ends.
     decoder = json.JSONDecoder()
     values, index = [], 0
     while index < len(text):
@@ -46,8 +56,10 @@ def _json_values(text: str) -> list[Any]:
 
 
 def _as_call(value: Any) -> dict[str, Any] | None:
+    """One tool call {"name", "arguments"} from a decoded JSON value, or None if it is not a call."""
     if not isinstance(value, dict):
         return None
+    # Two shapes exist: {"function": {"name", "arguments"}} (OpenAI style) or {"name", "arguments"}.
     function = value.get("function") if isinstance(value.get("function"), dict) else value
     name = function.get("name")
     arguments = function.get("arguments", function.get("parameters", {}))
@@ -67,6 +79,7 @@ def parse_tool_calls(text: str, tool_names: set[str] | None = None) -> tuple[str
     Understands ``<tool_call>{json}</tool_call>`` (SmolLM3, Granite, Qwen),
     ``<|tool_call|>[{json}]`` (Granite 3) and a bare ``{"name": ..., "arguments": ...}``.
     """
+    # Remove the hidden "thinking" first, then collect every call found inside <tool_call> blocks.
     text = THINK_BLOCK.sub("", text)
     calls: list[dict[str, Any]] = []
     for block in TOOL_BLOCK.findall(text):
@@ -76,8 +89,10 @@ def parse_tool_calls(text: str, tool_names: set[str] | None = None) -> tuple[str
                 if call:
                     calls.append(call)
     visible = TOOL_BLOCK.sub("", text).strip()
+    # Keep only the tools that were really offered (a model can invent names).
     known = (lambda c: c["name"] in tool_names) if tool_names is not None else (lambda c: True)
     calls = [c for c in calls if known(c)]
+    # Some models write a bare JSON call without tags: accept it too.
     if not calls and visible.startswith(("{", "[")) and '"name"' in visible:
         values = _json_values(visible)
         found = [
@@ -95,6 +110,7 @@ def strip_thinking(text: str) -> str:
 
 def json_complete(text: str) -> bool:
     """True once the first JSON object in ``text`` is closed (strings respected)."""
+    # Count the braces outside strings: the object is complete when the count is back to 0.
     depth, in_string, escaped, started = 0, False, False, False
     for char in text:
         if in_string:
@@ -123,6 +139,7 @@ class StreamGate:
     ``<tool_call>`` block; once a tool call starts, nothing more is forwarded.
     """
 
+    # Hold back the last 12 characters: they could be the start of "<tool_call>".
     HOLD = 12
 
     def __init__(self, sink: Callable[[str], None]) -> None:
@@ -135,6 +152,8 @@ class StreamGate:
         if self.closed or not piece:
             return
         self.pending += piece
+        # Before the first visible character: a reply starting with { or [ is a bare JSON tool call, never
+        # shown to the user.
         if not self.started:
             head = self.pending.lstrip()
             if not head:
@@ -144,16 +163,19 @@ class StreamGate:
                 return
             self.started = True
             self.pending = head
+        # Found the start of a tool call: show what came before it, then stop forwarding.
         marker = min((i for i in (self.pending.find(m) for m in TOOL_MARKERS) if i >= 0), default=-1)
         if marker >= 0:
             self._emit(self.pending[:marker])
             self.closed = True
             return
+        # Safe to show everything except the last HOLD characters.
         if len(self.pending) > self.HOLD:
             self._emit(self.pending[: -self.HOLD])
             self.pending = self.pending[-self.HOLD :]
 
     def finish(self) -> None:
+        """End of the answer: release the held-back characters (unless a tool call started)."""
         if not self.closed:
             self._emit(self.pending)
         self.pending = ""
@@ -170,6 +192,7 @@ def normalize_messages(messages: list[dict[str, Any]], native_tools: bool = True
     accept a single system turn). Tool calls and tool results use the template's
     native format when it has one, otherwise ``<tool_call>`` / ``<tool_response>`` text.
     """
+    # Small models' chat templates accept only one system message: merge them all into the first.
     system = [str(m.get("content", "")) for m in messages if m["role"] == "system"]
     out: list[dict[str, Any]] = [{"role": "system", "content": "\n\n".join(system)}] if system else []
     for message in messages:
@@ -184,6 +207,7 @@ def normalize_messages(messages: list[dict[str, Any]], native_tools: bool = True
                 }
                 for c in message["tool_calls"]
             ]
+            # native_tools: the template understands tool messages; otherwise they become plain text tags.
             if native_tools:
                 out.append(
                     {
@@ -211,6 +235,8 @@ def normalize_messages(messages: list[dict[str, Any]], native_tools: bool = True
 
 def tools_prompt(tools: list[dict[str, Any]]) -> str:
     """Tool instructions for a chat template without native tool support."""
+    # For templates without tool support: list the tools as JSON in the system message and explain the call
+    # format.
     listing = "\n".join(json.dumps(t["function"]) for t in tools)
     return (
         "You can call these tools:\n<tools>\n"
@@ -235,6 +261,8 @@ class LocalModel:
     """One tokenizer + causal LM, loaded once."""
 
     def __init__(self, repo: str, revision: str | None, device: str, options: ModelOptions) -> None:
+        # Imported here, not at the top: torch and transformers are heavy, and only needed when a local model
+        # really loads.
         import torch
         from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
         from transformers.utils import logging
@@ -242,11 +270,14 @@ class LocalModel:
         logging.set_verbosity_error()  # no per-call generation-config warnings in the API log
         logging.disable_progress_bar()
         self.repo, self.revision, self.options = repo, revision, options
+        # local_files_only: never download here; `callverse llm-pull` does that once.
         kwargs: dict[str, Any] = {"revision": revision, "local_files_only": True}
         self.tokenizer = AutoTokenizer.from_pretrained(repo, **kwargs)
         config = AutoConfig.from_pretrained(repo, **kwargs)
         prequantized = getattr(config, "quantization_config", None) is not None
         self.device = "cuda" if device in ("auto", "cuda") and torch.cuda.is_available() else "cpu"
+        # On a GPU: load the weights in 4 bits (NF4) to fit a 4 GB card; "double quant" saves a little more
+        # memory. The math runs in bfloat16 because float16 overflowed in these models.
         if self.device == "cuda":
             quantization = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -261,20 +292,25 @@ class LocalModel:
                     repo, dtype=torch.bfloat16, device_map={"": 0}, quantization_config=quantization, **kwargs
                 )
             self.quantization = "4-bit NF4 (bitsandbytes), bfloat16 compute"
+        # On a CPU: full precision (float32). 4-bit weights cannot run without CUDA.
         else:
             if prequantized:
                 raise RuntimeError(f"{repo} has 4-bit bitsandbytes weights, which need a CUDA GPU.")
             self.model = AutoModelForCausalLM.from_pretrained(repo, dtype=torch.float32, **kwargs)
             self.quantization = "float32 (CPU)"
+        # eval(): inference mode (no training behaviour such as dropout).
         self.model.eval()
         template = self.tokenizer.chat_template or ""
+        # Does the model's chat template understand tool calls natively?
         self.native_tools = "tool_calls" in template and "tool" in template
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        # GPU memory used by the model, in MB (shown in the control room).
         self.footprint_mb = round(self.model.get_memory_footprint() / 2**20)
 
     def render(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> str:
         """Prompt text from the model's own chat template."""
+        # The chat template turns a list of messages into the exact prompt format the model was trained on.
         kwargs = dict(self.options.chat_template_kwargs)
         native = self.native_tools or self.options.tools_kwarg != "tools"
         chat = normalize_messages(messages, native_tools=self.native_tools)
@@ -303,6 +339,7 @@ class LocalModel:
         import torch
         from transformers import StoppingCriteriaList, TextIteratorStreamer, set_seed
 
+        # 1) Build the prompt text.
         prompt = self.render(messages, tools)
         # No prefill for JSON: a lone "{" tokenizes unlike the model's own '{"' token and
         # makes small models stop at once. Generation stops when the object is closed.
@@ -312,10 +349,13 @@ class LocalModel:
             # newline), so the next words can only be a call. SmolLM3 never called a tool by
             # itself (0 of 186 traced advisor calls); with the tag it did in 6 of 6 test turns.
             prefix = self.options.tool_call_opener
+        # 2) Tokenize: text -> numbers (token ids) that the model understands.
         inputs = self.tokenizer(prompt + prefix, return_tensors="pt", add_special_tokens=False).to(
             self.device
         )
         start = int(inputs["input_ids"].shape[1])
+        # 3) Generation settings: maximum length and sampling (temperature > 0 adds some randomness, top_p
+        # keeps only the most likely words).
         kwargs: dict[str, Any] = {
             "max_new_tokens": max_new_tokens,
             "pad_token_id": self.tokenizer.pad_token_id,
@@ -325,13 +365,16 @@ class LocalModel:
             kwargs.update(temperature=temperature, top_p=0.9)
         else:
             kwargs.update(temperature=None, top_p=None, top_k=None)
+        # JSON mode: stop as soon as the JSON object is complete (saves time).
         if json_mode:
             kwargs["stopping_criteria"] = StoppingCriteriaList([JsonStop(self.tokenizer, start, prefix)])
         if prefix and not json_mode:  # required tool call: stop once the call is closed
             closing = self.tokenizer.convert_tokens_to_ids(prefix.strip().replace("<", "</", 1))
             if isinstance(closing, int) and closing != self.tokenizer.unk_token_id:
                 kwargs["eos_token_id"] = [self.tokenizer.eos_token_id, closing]
+        # Fixed seed: the same prompt gives the same answer (reproducibility).
         set_seed(seed)
+        # 4a) Without streaming: generate everything, then decode the new tokens back into text.
         if on_token is None:
             with torch.inference_mode():
                 output = self.model.generate(**inputs, **kwargs)
@@ -339,6 +382,8 @@ class LocalModel:
             text = self.tokenizer.decode(new, skip_special_tokens=True)
             return prefix + text, start, int(new.shape[0])
 
+        # 4b) With streaming: generation runs in a background thread; the streamer yields text pieces as they
+        # come, and each piece goes to on_token (live typing in the UI).
         streamer = TextIteratorStreamer(
             self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=300
         )
@@ -374,6 +419,7 @@ class JsonStop:
     def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> Any:
         import torch
 
+        # Decode what has been generated so far and check whether the JSON object is closed.
         text = self.prefix + self.tokenizer.decode(input_ids[0, self.start :], skip_special_tokens=True)
         done = json_complete(text)
         return torch.full((input_ids.shape[0],), done, dtype=torch.bool, device=input_ids.device)
@@ -388,6 +434,7 @@ class ModelPool:
         self.generate_lock = threading.Lock()
 
     def get(self, repo: str, revision: str | None, device: str, options: ModelOptions) -> LocalModel:
+        # Load each model once. If the GPU runs out of memory, unload the others and try again.
         with self._load_lock:
             if repo not in self._models:
                 try:
@@ -400,9 +447,11 @@ class ModelPool:
             return self._models[repo]
 
     def loaded(self) -> dict[str, LocalModel]:
+        """A copy of the loaded models (for the status page)."""
         return dict(self._models)
 
     def unload(self) -> None:
+        """Free the GPU memory of every loaded model."""
         import gc
 
         self._models.clear()
@@ -424,6 +473,7 @@ def gpu_info() -> dict[str, Any] | None:
         return None
     if not torch.cuda.is_available():
         return None
+    # Free and total memory of GPU 0, converted from bytes to MB.
     free, total = torch.cuda.mem_get_info()
     return {
         "name": torch.cuda.get_device_name(0),

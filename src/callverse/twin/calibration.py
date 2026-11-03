@@ -42,6 +42,8 @@ from callverse.simulation import (
 
 def erlang_check(replications: int = 5) -> pd.DataFrame:
     """Simulated M/M/c waits vs the Erlang C formula (engine correctness)."""
+    # Test 1, engine correctness: a textbook M/M/c queue (Poisson arrivals, exponential service, c agents)
+    # whose exact answer is known from Erlang C.
     raw = load_yaml("simulation")["validation"]["erlang_check"]
     settings = load_twin_settings()
     rate, service, agents, hours = (
@@ -54,6 +56,7 @@ def erlang_check(replications: int = 5) -> pd.DataFrame:
     rows = []
     for replication in range(replications):
         rng = np.random.default_rng(1000 + replication)
+        # Arrivals with exponential gaps between them = a Poisson process.
         arrivals = np.cumsum(rng.exponential(3600 / rate, int(rate * hours * 1.2)))
         arrivals = arrivals[arrivals < (hours - 2) * 3600]
         contacts = [
@@ -68,6 +71,7 @@ def erlang_check(replications: int = 5) -> pd.DataFrame:
             trace_interval=None,
         )
         records = engine.run()
+        # Skip the first 10 hours: measure only the steady state (the warm-up is removed).
         steady = records[records["arrival"] > 10 * 3600]
         rows.append(
             {
@@ -86,6 +90,7 @@ def erlang_check(replications: int = 5) -> pd.DataFrame:
     out = []
     for kpi, expected in theory.items():
         values = sims[kpi]
+        # 95% confidence interval of the simulated mean; the check passes within 5% of the theory.
         half = stats.t.ppf(0.975, len(values) - 1) * values.std(ddof=1) / np.sqrt(len(values))
         out.append(
             {
@@ -109,9 +114,12 @@ def fidelity_report(week_start: str = "2018-05-07", weeks: int = 4, seed: int = 
     daily = loaders.daily_contacts_by_group()
     shares = loaders.hour_shares()
     days = pd.date_range(week_start, periods=7 * weeks)
+    # Simulate the arrivals of a historical period.
     contacts = make_contacts(daily, days, settings, shares, np.random.default_rng(seed))
     arrivals = np.array([c.arrival for c in contacts])
 
+    # Test 2, daily volumes: the Kolmogorov-Smirnov (KS) test compares two distributions; a p-value above
+    # alpha = no evidence that they differ.
     simulated_daily = np.bincount((arrivals // SECONDS_PER_DAY).astype(int), minlength=len(days))
     historical_daily = (
         daily[daily["date"].isin(days)]
@@ -123,10 +131,12 @@ def fidelity_report(week_start: str = "2018-05-07", weeks: int = 4, seed: int = 
     )
     volume = stats.ks_2samp(simulated_daily, historical_daily)
 
+    # Test 3, time of day: the total variation distance between the two hourly profiles (0 = identical).
     simulated_hours = np.bincount((arrivals % SECONDS_PER_DAY // SECONDS_PER_HOUR).astype(int), minlength=24)
     simulated_profile = simulated_hours / simulated_hours.sum()
     profile_gap = float(np.abs(simulated_profile - shares).sum() / 2)  # total variation distance
 
+    # Test 4, handle times: KS test between the simulated and the logged handle times.
     tickets = loaders.tickets()
     historical_aht = tickets["handle_seconds"].to_numpy(dtype=float)
     simulated_aht = np.array([c.service_seconds for c in contacts])

@@ -38,6 +38,7 @@ from callverse.tracking import log_dataframe, mlflow_run
 
 
 def _period(settings_raw: dict[str, Any], key: str) -> pd.DatetimeIndex:
+    """Dates of a period (train or test) from the config."""
     period = settings_raw[key]
     return pd.date_range(period["start"], period["end"])
 
@@ -72,6 +73,7 @@ def simulate_day_with_router(
     shares: np.ndarray,
 ) -> dict[str, float]:
     """KPIs of one stressed test day for one router (common random numbers)."""
+    # Common random numbers: the same seed gives every router the same customers and absences.
     days = pd.DatetimeIndex([day])
     rng = np.random.default_rng(seed)
     plan = hourly_requirements(daily, days, settings, shares)
@@ -87,6 +89,7 @@ def simulate_day_with_router(
     kpis = engine_kpis(
         engine, records, sim.service_level_threshold_seconds, sim.service_level_target, settings.costs
     )
+    # Mean wait of ALL live customers, counting those who abandoned until the moment they left.
     live = records[records["is_live"]]
     kpis["mean_wait_all_live_seconds"] = float(
         np.where(
@@ -112,6 +115,7 @@ def evaluate_routers(
     daily = loaders.daily_contacts_by_group()
     shares = loaders.hour_shares()
     test_days = _period(raw, "test_period")
+    # Fixed seed 2024: the same test days for every evaluation.
     rng = np.random.default_rng(2024)
     picked = sorted(rng.choice(len(test_days), size=min(n_days, len(test_days)), replace=False))
     rows = []
@@ -140,10 +144,12 @@ def paired_comparison(
 ) -> pd.DataFrame:
     """Mean of each router and paired difference vs the baseline with a 95% CI."""
     rows = []
+    # Pair the runs by (day, seed): each router against FIFO on exactly the same day.
     base = runs[runs["router"] == baseline].set_index(["day", "seed"])
     for router in runs["router"].unique():
         current = runs[runs["router"] == router].set_index(["day", "seed"])
         for kpi in kpis:
+            # The paired difference and its 95% confidence interval (Student's t distribution).
             diff = (current[kpi] - base[kpi]).dropna()
             n = len(diff)
             half = stats.t.ppf(0.975, n - 1) * diff.std(ddof=1) / np.sqrt(n) if n > 1 else np.nan
@@ -174,8 +180,11 @@ def train_routing_policy(
     ensure_dirs()
     raw = routing_settings()
     ppo = raw["ppo"]
+    # Monitor records the reward of each training episode (the learning curve).
     steps = int(total_timesteps or ppo["total_timesteps"])
     env = Monitor(make_env(seed=int(ppo["seed"])))
+    # MlpPolicy: a small neural network (layer sizes from net_arch); gamma = how much future rewards count;
+    # ent_coef = a bonus that encourages exploration.
     model = MaskablePPO(
         "MlpPolicy",
         env,
@@ -190,6 +199,7 @@ def train_routing_policy(
         verbose=0,
     )
     log(f"Training MaskablePPO for {steps:,} decisions ...")
+    # learn(): PPO plays many simulated days and updates the network to collect more reward.
     model.learn(total_timesteps=steps)
     model.save(str(POLICY_DIR / PPO_MODEL_FILE))
     episode_rewards = pd.DataFrame(
@@ -201,6 +211,7 @@ def train_routing_policy(
     )
     episode_rewards.to_csv(EVALUATION_DIR / "routing_ppo_training_curve.csv", index=False)
 
+    # Evaluate the three routers on unseen, stressed test days.
     log("Evaluating fifo / skill_score / ppo on unseen stressed days ...")
     routers = ["fifo", "skill_score", "ppo"]
     runs = evaluate_routers(routers, log=log)
@@ -208,6 +219,7 @@ def train_routing_policy(
     runs.to_csv(EVALUATION_DIR / "routing_comparison_runs.csv", index=False)
     comparison.to_csv(EVALUATION_DIR / "routing_comparison.csv", index=False)
 
+    # Record everything in MLflow: settings, learning curve, comparison table and model file.
     with mlflow_run("routing", "maskable_ppo", {"dso": "DSO1"}) as run:
         run.log_params(
             {

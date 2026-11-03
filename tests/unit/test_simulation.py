@@ -1,4 +1,5 @@
 """Unit tests for the SimPy contact-center simulation (Phase 3)."""
+# Tests simulation/ (Erlang C, contact generation, the SimPy engine, statistics of several runs).
 
 import math
 
@@ -30,6 +31,7 @@ def textbook_erlang_c(agents: int, load: float) -> float:
 
 
 def make_config(**overrides: object) -> SimulationConfig:
+    """Simulation settings for the tests; any field can be overridden."""
     settings: dict[str, object] = {
         "random_seed": 1,
         "replications": 3,
@@ -52,23 +54,27 @@ def make_config(**overrides: object) -> SimulationConfig:
 
 @pytest.mark.parametrize("agents,load", [(3, 2.0), (6, 4.0), (12, 9.5), (25, 20.0)])
 def test_erlang_c_matches_textbook_formula(agents: int, load: float) -> None:
+    """Erlang C gives the textbook probability of waiting."""
     assert erlang_c_wait_probability(agents, load) == pytest.approx(
         textbook_erlang_c(agents, load), rel=1e-9
     )
 
 
 def test_erlang_c_unstable_and_empty_cases() -> None:
+    """Edge cases: too few agents (the queue never empties) and zero traffic."""
     assert erlang_c_wait_probability(4, 4.0) == 1.0
     assert erlang_c_wait_probability(4, 0.0) == 0.0
     assert erlang_c_mean_wait(4, 60, 240) == math.inf  # load 4 Erlangs on 4 agents
 
 
 def test_service_level_increases_with_agents() -> None:
+    """More agents give a higher service level."""
     levels = [erlang_c_service_level(n, 60, 240, 20) for n in range(5, 12)]
     assert all(later > earlier for earlier, later in zip(levels, levels[1:]))
 
 
 def test_required_agents_is_minimal() -> None:
+    """The staffing function returns the smallest number of agents that meets the target."""
     agents = required_agents(60, 240, 0.8, 20, 0.9, 1)
     assert erlang_c_service_level(agents, 60, 240, 20) >= 0.8
     assert erlang_c_service_level(agents - 1, 60, 240, 20) < 0.8
@@ -98,6 +104,7 @@ def test_simulation_matches_erlang_c() -> None:
 
 
 def test_generated_contacts_follow_opening_rules() -> None:
+    """Generated contacts respect the opening hours (night contacts become backlog)."""
     config = make_config(scale_factor=20.0)
     model = LognormalServiceModel(config.service_times)
     daily = pd.DataFrame(
@@ -122,6 +129,7 @@ def test_generated_contacts_follow_opening_rules() -> None:
 
 
 def test_simulation_is_reproducible_and_conserves_contacts() -> None:
+    """Same seed, same result; and every contact is answered or abandoned (none is lost)."""
     config = make_config(scale_factor=30.0)
     model = LognormalServiceModel(config.service_times)
     daily = pd.DataFrame(
@@ -160,6 +168,7 @@ def test_simulation_is_reproducible_and_conserves_contacts() -> None:
 
 
 def test_lognormal_service_mean() -> None:
+    """Lognormal handle times have the configured mean."""
     model = LognormalServiceModel({"wismo": ServiceTimeSpec(240.0, 0.6)})
     samples = model.sample_service_time("wismo", np.random.default_rng(5), 200_000)
     assert samples.mean() == pytest.approx(240.0, rel=0.01)
@@ -167,6 +176,7 @@ def test_lognormal_service_mean() -> None:
 
 
 def test_summarize_replications_interval() -> None:
+    """The summary of several runs gives a mean and a confidence interval."""
     runs = pd.DataFrame(
         {"scenario": ["a"] * 4, "replication": range(4), "x": [1, 2, 3, 4]}
     )

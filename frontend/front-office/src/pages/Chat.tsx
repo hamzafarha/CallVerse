@@ -1,3 +1,9 @@
+/**
+ * Live chat page: the visitor plays the customer and chats with the AI Advisor agent about a real order. The
+ * conversation runs on the server through a WebSocket (useLiveSession in lib/session.ts); the right panel
+ * ("Behind the scenes") shows the agent pipeline, the tools and a live trace. At the end the customer rates
+ * the chat (CSAT) and the Quality agent reviews it.
+ */
 import {
   ActivityRow,
   LiveTrace,
@@ -27,8 +33,13 @@ import { toast } from "sonner";
 import { CsatDialog } from "../components/CsatDialog";
 import { useCustomer } from "../customer";
 
+// auto = use an LLM when one can answer (otherwise the server falls back to templates by itself); template =
+// offline mode, approved template answers only.
 type Engine = "auto" | "template";
 
+/**
+ * /chat uses the signed-in demo customer; /chat/:contactId a given one. With no customer, go to the picker.
+ */
 export default function ChatPage() {
   const { contactId } = useParams();
   const { customer } = useCustomer();
@@ -41,6 +52,7 @@ function Chat({ contactId }: { contactId: string }) {
   const profile = useApi<any>(`/api/portal/customers/${contactId}`);
   const session = useLiveSession();
   const { state } = session;
+  // Chat settings: the engine (LLM or offline) and the advisor variant (hybrid, pure RAG or agentic).
   const [engine, setEngine] = useState<Engine>("auto");
   const [variant, setVariant] = useState<"rag_policy" | "rag" | "agentic">("agentic");
   const [text, setText] = useState("");
@@ -52,12 +64,14 @@ function Chat({ contactId }: { contactId: string }) {
   const voice = useVoice();
   useAutoSpeak(state.messages, voice, (m) => (m.speaker === "advisor" && m.meta?.mode !== "human" ? { role: "advisor" } : null));
 
+  // Start a new chat session when the page opens or a setting changes; close it when leaving the page.
   useEffect(() => {
     session.start({ contact_id: contactId, customer: "human", advisor: "agent", mode: engine, variant });
     return () => session.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId, engine, variant]);
 
+  // Small notification when the server says which model answers.
   useEffect(() => {
     if (state.ready) {
       toast.success(
@@ -71,6 +85,7 @@ function Chat({ contactId }: { contactId: string }) {
   useEffect(() => {
     if (state.error) toast.error(state.error);
   }, [state.error]);
+  // Keep the newest message in view.
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
   }, [state.messages.length, state.streaming?.text, state.activeAgent, state.review]);
@@ -82,6 +97,7 @@ function Chat({ contactId }: { contactId: string }) {
   // Call band faces: the Advisor agent thinks while it works; you are "typing" while you write
   const advisorFace: AvatarState = voice.speakingRole === "advisor" ? "speaking" : busy ? "thinking" : "listening";
   const customerFace: AvatarState = text.trim() ? "typing" : voice.speakingRole === "advisor" ? "listening" : "idle";
+  // Send is allowed only while the chat runs, no agent is busy and the text is not empty.
   const canSend = !busy && !ended && state.status === "running" && text.trim().length > 0;
   const send = (message: string) => {
     if (!message.trim() || busy || ended) return;
@@ -89,7 +105,10 @@ function Chat({ contactId }: { contactId: string }) {
     session.sendCustomer(message.trim());
     setText("");
   };
+  // The latest stage event: what an agent is doing right now.
   const currentStage = state.stages[state.stages.length - 1];
+  // Quick replies above the text box: the customer's real first message, the order number, a supervisor
+  // request and a goodbye.
   const suggestions = data
     ? [
         state.messages.length === 0 ? data.opening_message : null,
@@ -116,6 +135,8 @@ function Chat({ contactId }: { contactId: string }) {
                 : "connecting…"}
             </div>
           </div>
+          {/* Voice mode (only the advisor speaks: you are the customer), the engine switch, and the button
+             that shows or hides the right panel. */}
           <VoiceControls voice={voice} roles={["advisor"]} />
           <Segmented
             id="engine"
@@ -123,7 +144,7 @@ function Chat({ contactId }: { contactId: string }) {
             value={engine}
             onChange={setEngine}
             options={[
-              { value: "auto", label: <><Cpu size={12} /> Local LLM</> },
+              { value: "auto", label: <><Cpu size={12} /> AI model</> },
               { value: "template", label: "Offline" },
             ]}
           />
@@ -131,6 +152,7 @@ function Chat({ contactId }: { contactId: string }) {
             {showTrace ? <EyeOff size={15} /> : <Eye size={15} />}
           </button>
         </div>
+        {/* The "On call" band with the two faces, in voice mode only. */}
         <AnimatePresence initial={false}>
           {voice.enabled && (
             <CallPanel
@@ -149,11 +171,14 @@ function Chat({ contactId }: { contactId: string }) {
             Chat about order <span className="font-mono">#{data?.order?.order_id?.slice(0, 10)}…</span> · the twin replays the
             day you contacted us. Every chat is reviewed by our quality agent.
           </motion.div>
+          {/* Fixed greeting (not sent by the server). */}
           <ChatBubble
             mine={false}
             showMeta={false}
             message={{ speaker: "advisor", text: `Hi ${first}! I'm the CallVerse assistant. How can I help you today?` }}
           />
+          {/* The conversation. Advisor replies that were not streamed (templates) appear with a typewriter
+             effect. */}
           {state.messages.map((m, i) => (
             <ChatBubble
               key={i}
@@ -165,6 +190,7 @@ function Chat({ contactId }: { contactId: string }) {
               onListen={m.speaker === "advisor" && voice.supported ? () => voice.replay(String(i), m.text, "advisor") : undefined}
             />
           ))}
+          {/* The reply being written (token stream), then the "is typing" row while an agent works. */}
           <AnimatePresence>
             {state.streaming && state.streaming.kind === "reply" && (
               <StreamingBubble key="stream" text={state.streaming.text} label={stageLabel(currentStage)} />
@@ -173,6 +199,7 @@ function Chat({ contactId }: { contactId: string }) {
           <AnimatePresence>
             {busy && !state.streaming && <ActivityRow key="activity" text={stageLabel(currentStage) || "Connecting…"} who={state.activeAgent === "quality" ? "system" : "advisor"} />}
           </AnimatePresence>
+          {/* After the end: the Quality agent's review and a button to start again. */}
           {state.review && (
             <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="card mx-auto max-w-md p-5">
               <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-ink">
@@ -197,6 +224,7 @@ function Chat({ contactId }: { contactId: string }) {
               ))}
             </div>
             <div className="flex items-end gap-2">
+              {/* Enter sends; Shift+Enter makes a new line. */}
               <textarea
                 rows={1}
                 value={text}
@@ -213,6 +241,7 @@ function Chat({ contactId }: { contactId: string }) {
               <motion.button whileTap={{ scale: 0.92 }} className="btn btn-primary h-[46px] px-4" disabled={!canSend} onClick={() => send(text)} aria-label="Send">
                 <SendHorizonal size={17} />
               </motion.button>
+              {/* "End chat" opens the rating window; the chat closes after the rating (or Skip). */}
               <button className="btn btn-ghost h-[46px]" disabled={busy || !state.messages.length} onClick={() => setRating(true)}>
                 <X size={15} /> End chat
               </button>
@@ -228,6 +257,8 @@ function Chat({ contactId }: { contactId: string }) {
             <div className="card p-5">
               <div className="mb-1 flex items-center justify-between">
                 <div className="text-sm font-semibold text-ink">Behind the scenes</div>
+                {/* Advisor variant: Hybrid (the rules engine decides), Pure RAG (the LLM alone, an
+                   ablation), Agentic (the LLM picks its tools). */}
                 <Segmented
                   id="variant"
                   size="sm"
@@ -255,6 +286,7 @@ function Chat({ contactId }: { contactId: string }) {
               </div>
               <LiveTrace state={state} />
             </div>
+            {/* Conversation KPIs computed by the KPI engine at the end (BO2 indicators). */}
             {state.review && (
               <div className="card p-5">
                 <div className="mb-3 text-sm font-semibold text-ink">Conversation KPIs</div>
@@ -280,6 +312,7 @@ function Chat({ contactId }: { contactId: string }) {
         )}
       </AnimatePresence>
 
+      {/* Rating window: session.end(csat) sends the rating, then the server closes the chat. */}
       <CsatDialog
         open={rating}
         onClose={() => setRating(false)}

@@ -1,3 +1,6 @@
+/**
+ * Brand pieces: the CallVerse logo, the animated background (Aurora) and the light/dark theme button.
+ */
 import { motion } from "framer-motion";
 import { Moon, Sun } from "lucide-react";
 
@@ -18,6 +21,7 @@ export function LogoMark({ size = 36, animated = true }: { size?: number; animat
         <circle cx="16" cy="13.5" r="1.5" fill="var(--brand)" />
         <circle cx="20" cy="13.5" r="1.5" fill="var(--brand)" />
       </svg>
+      {/* A small white dot that orbits the logo (one full turn every 8 seconds). */}
       {animated && (
         <motion.span
           className="absolute inset-0"
@@ -34,6 +38,9 @@ export function LogoMark({ size = 36, animated = true }: { size?: number; animat
   );
 }
 
+/**
+ * Logo mark + "CallVerse" + the product name (e.g. "Back office") and an optional tagline.
+ */
 export function Logo({ product, tagline }: { product?: string; tagline?: string }) {
   return (
     <div className="flex items-center gap-3">
@@ -72,6 +79,9 @@ export function Aurora({ intensity = 1 }: { intensity?: number }) {
   );
 }
 
+/**
+ * Sun/moon button. The `key` changes with the theme, so the icon re-enters with a spring animation.
+ */
 export function ThemeToggle({ dark, toggle }: { dark: boolean; toggle: () => void }) {
   return (
     <button onClick={toggle} className="btn btn-ghost btn-icon relative overflow-hidden" aria-label="Toggle theme">

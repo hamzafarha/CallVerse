@@ -10,6 +10,11 @@ import { Area, AreaChart, ReferenceLine, ResponsiveContainer, YAxis } from "rech
  * leaves — or hangs up (red) when its patience runs out. Desks are colored by
  * the agent's main skill and filled with the problem type being handled. */
 
+/**
+ * One simulated day sent by the server (GET /api/twin/floor): opening hours, the agents (main skill,
+ * overtime, hours on duty) and every contact (arrival, start, end or hang-up time, agent). Contacts come as
+ * columns (one array per field) to keep the JSON small.
+ */
 interface Floor {
   date: string;
   label: string;
@@ -31,6 +36,7 @@ interface Floor {
   summary: { contacts: number; backlog: number; answered: number; abandoned: number; service_level: number; mean_wait_seconds: number };
 }
 
+// Playback speeds: simulated seconds per real second (300 = 5 simulated minutes per second).
 const SPEEDS = [
   { value: "60", label: "60×" },
   { value: "300", label: "5 min/s" },
@@ -40,14 +46,22 @@ const SPEEDS = [
 const TRAVEL = 0.45; // real seconds a customer takes to walk to the desk
 const FADE = 0.9; // real seconds for leaving / hanging-up animations
 
+// CSS color variables read for the canvas (a <canvas> cannot use CSS variables directly).
 const VARS = ["--series-1", "--series-2", "--series-3", "--series-4", "--surface-1", "--surface-2", "--surface-3", "--hairline", "--text-muted", "--text-primary", "--critical", "--good", "--brand", "--baseline"];
 
+/**
+ * Seconds since midnight -> "HH:MM".
+ */
 function hhmm(seconds: number): string {
   const h = Math.floor(seconds / 3600) % 24;
   const m = Math.floor((seconds % 3600) / 60);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+/**
+ * The live floor: KPIs on top, the animated canvas, the playback controls, and a mini chart of the queue
+ * length over the day.
+ */
 export function LiveFloor({ floor }: { floor: Floor }) {
   const theme = useDocumentTheme();
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -56,17 +70,23 @@ export function LiveFloor({ floor }: { floor: Floor }) {
   const [open, close] = floor.opening_hours;
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState("300");
+  // Numbers shown above the canvas, refreshed about 8 times a second (not on every frame).
   const [view, setView] = useState({ t: open * 3600, waiting: 0, serving: 0, answered: 0, abandoned: 0, sl: 1, onDuty: 0, backlog: 0 });
+  // The simulated time and the settings live in refs: the drawing loop reads them without making React re-
+  // render on every frame.
   const time = useRef(open * 3600);
   const playingRef = useRef(playing);
   const speedRef = useRef(Number(speed));
   playingRef.current = playing;
   speedRef.current = Number(speed);
 
+  // live = false marks overnight messages (the backlog): they never wait in the live queue.
   const c = useMemo(() => ({ ...floor.contacts, live: floor.contacts.live ?? floor.contacts.id.map(() => true) }), [floor]);
   const n = c.id.length;
+  // Contacts sorted by arrival time, and agent id -> desk position.
   const order = useMemo(() => Array.from({ length: n }, (_, i) => i).sort((a, b) => c.arrival[a] - c.arrival[b]), [c, n]);
   const agentIndex = useMemo(() => new Map(floor.agents.map((a, i) => [a.agent_id, i])), [floor.agents]);
+  // Queue length every 2 simulated minutes, for the mini chart under the canvas.
   const series = useMemo(() => {
     const points = [];
     for (let t = open * 3600; t <= close * 3600 + 3600; t += 120) {
@@ -95,6 +115,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
     time.current = open * 3600;
   }, [floor, open]);
 
+  // The drawing loop: one canvas frame per screen refresh (requestAnimationFrame).
   useEffect(() => {
     const el = canvas.current;
     const container = box.current;
@@ -105,6 +126,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
     const positions = new Map<number, { x: number; y: number }>();
     let width = 0;
     let height = 0;
+    // Match the canvas to its box (and to the screen's pixel density, for sharp drawings).
     const resize = () => {
       const ratio = window.devicePixelRatio || 1;
       width = container.clientWidth;
@@ -126,6 +148,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
     let frame = 0;
 
     const draw = (now: number) => {
+      // Advance the simulated time: real seconds since the last frame x speed.
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       if (playingRef.current) {
@@ -173,6 +196,8 @@ export function LiveFloor({ floor }: { floor: Floor }) {
       let inTime = 0;
       let due = 0;
       let backlog = 0;
+      // For each contact that has arrived: waiting, being served (at which desk), answered, or gone? Also
+      // count the service level: answered within the threshold, among the contacts already due.
       for (const i of order) {
         const arrival = c.arrival[i];
         if (arrival > T) break;
@@ -202,6 +227,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
       // desks
       agents.forEach((agent, index) => {
         const p = deskPos(index);
+        // A desk is faded, with a dashed border, when its agent is off duty.
         const onDuty = agent.duty ? !!agent.duty[Math.min(23, hour)] : busy.has(index);
         const skill = groupColor[agent.primary_group] ?? colors["--baseline"];
         const serving = busy.get(index);
@@ -217,6 +243,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
         ctx.setLineDash(onDuty ? [] : [3, 3]);
         ctx.stroke();
         ctx.setLineDash([]);
+        // White arc = progress of the current conversation (from its start to its end).
         if (serving !== undefined) {
           const start = c.start[serving] ?? T;
           const end = c.end[serving] ?? T + 1;
@@ -227,6 +254,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
           ctx.arc(p.x, p.y, deskSize * 0.26, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
           ctx.stroke();
         }
+        // Overtime marker ("+OT" for an on-call agent).
         if (agent.overtime) {
           ctx.fillStyle = colors["--text-muted"];
           ctx.font = "700 8px 'Inter Variable', sans-serif";
@@ -244,6 +272,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
         positions.set(i, current);
         const waited = T - c.arrival[i];
         dot(ctx, current.x, current.y, 4.6, groupColor[c.group[i]], 1);
+        // Red ring: waiting longer than the service threshold (20 s in configs/simulation.yaml).
         if (waited > floor.threshold_seconds) {
           ctx.beginPath();
           ctx.strokeStyle = colors["--critical"];
@@ -259,6 +288,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
         if (arrival > T) break;
         if (!c.live[i]) continue;
         const start = c.start[i];
+        // Walking to the desk along a small arc.
         if (start !== null && T >= start && T < start + travel) {
           const desk = agentIndex.get(c.agent[i] ?? -1);
           if (desk === undefined) continue;
@@ -268,6 +298,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
           dot(ctx, from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k - Math.sin(k * Math.PI) * 30, 4.6, groupColor[c.group[i]], 1);
         }
         const end = c.end[i];
+        // Leaving after service: a green dot fades away.
         if (start !== null && end !== null && T >= end && T < end + fade) {
           const desk = agentIndex.get(c.agent[i] ?? -1);
           if (desk === undefined) continue;
@@ -276,14 +307,17 @@ export function LiveFloor({ floor }: { floor: Floor }) {
           dot(ctx, p.x + k * 40, p.y - k * 26, 3.5, colors["--good"], 1 - k);
         }
         const gone = c.abandon_at[i];
+        // Hanging up (abandon): a red dot falls and fades.
         if (c.abandoned[i] && gone !== null && T >= gone && T < gone + fade) {
           const p = positions.get(i) ?? { x: pad, y: 60 };
           const k = (T - gone) / fade;
           dot(ctx, p.x - k * 10, p.y + k * 40, 4.6, colors["--critical"], 1 - k);
         }
       }
+      // Forget the positions of customers who are no longer in the queue.
       for (const key of positions.keys()) if (!waiting.includes(key) && (c.start[key] ?? 0) + travel < T) positions.delete(key);
 
+      // Update the React numbers at most every 120 ms.
       if (now - lastUi > 120) {
         lastUi = now;
         const onDuty = agents.filter((a) => (a.duty ? a.duty[Math.min(23, hour)] : false)).length;
@@ -292,12 +326,14 @@ export function LiveFloor({ floor }: { floor: Floor }) {
       frame = requestAnimationFrame(draw);
     };
     frame = requestAnimationFrame(draw);
+    // Cleanup: stop the loop and the resize observer.
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
   }, [floor, colors, order, agentIndex, c, open, close]);
 
+  // Restart the day from the opening hour.
   const restart = () => {
     time.current = open * 3600;
     setPlaying(true);
@@ -305,6 +341,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+        {/* Twin clock and live KPIs (the service level turns red under 80%). */}
         <Clock t={view.t} />
         <Kpi label="Waiting now" value={num(view.waiting, 0)} accent={view.waiting > 10 ? "var(--critical)" : undefined} />
         <Kpi label="Busy agents" value={`${view.serving} / ${view.onDuty}`} />
@@ -313,9 +350,11 @@ export function LiveFloor({ floor }: { floor: Floor }) {
         <Kpi label="Hung up" value={num(view.abandoned, 0)} accent={view.abandoned ? "var(--critical)" : undefined} />
         <Kpi label={`Service level (${floor.threshold_seconds}s)`} value={pct(view.sl, 0)} accent={view.sl < 0.8 ? "var(--critical)" : "var(--good-text)"} />
       </div>
+      {/* The canvas where the floor is drawn. */}
       <div ref={box} className="relative overflow-hidden rounded-2xl border border-line bg-surface">
         <canvas ref={canvas} className="block" />
       </div>
+      {/* Controls: play/pause, restart, jump to the busiest half hour, speed, and a time slider. */}
       <div className="flex flex-wrap items-center gap-3">
         <motion.button whileTap={{ scale: 0.9 }} className="btn btn-primary btn-icon h-10 w-10" onClick={() => setPlaying(!playing)} aria-label={playing ? "Pause" : "Play"}>
           {playing ? <Pause size={16} /> : <Play size={16} />}
@@ -340,6 +379,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
           />
         </div>
       </div>
+      {/* Mini chart of the queue length over the day (the vertical line = now), and the color legend. */}
       <div className="grid gap-4 md:grid-cols-[1fr_auto]">
         <div className="h-20 rounded-2xl border border-line bg-surface px-2 pt-2">
           <ResponsiveContainer>
@@ -375,6 +415,9 @@ export function LiveFloor({ floor }: { floor: Floor }) {
   );
 }
 
+/**
+ * The twin clock (HH:MM).
+ */
 function Clock({ t }: { t: number }) {
   return (
     <div className="card col-span-2 flex items-center gap-3 p-4 md:col-span-1">
@@ -388,6 +431,9 @@ function Clock({ t }: { t: number }) {
   );
 }
 
+/**
+ * One KPI tile.
+ */
 function Kpi({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
     <div className="card p-4">
@@ -415,11 +461,17 @@ function envelope(ctx: CanvasRenderingContext2D, x: number, y: number, w: number
   ctx.restore();
 }
 
+/**
+ * Ease-in-out curve: slow start, fast middle, slow end (k from 0 to 1).
+ */
 function ease(k: number): number {
   const x = Math.max(0, Math.min(1, k));
   return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
 }
 
+/**
+ * A filled circle (alpha = transparency).
+ */
 function dot(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, alpha: number) {
   ctx.globalAlpha = Math.max(0, alpha);
   ctx.beginPath();
@@ -429,6 +481,9 @@ function dot(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, col
   ctx.globalAlpha = 1;
 }
 
+/**
+ * Rounded rectangle path (the caller fills or strokes it).
+ */
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);

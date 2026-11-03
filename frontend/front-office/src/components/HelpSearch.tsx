@@ -1,8 +1,15 @@
+/**
+ * The help centre search box. It searches the knowledge base by meaning, not by exact words (bge-m3
+ * embeddings + FAISS on the server), and shows the best sections while you type.
+ */
 import { AnimatePresence, getJson, motion, slug } from "@callverse/shared";
 import { ArrowRight, Loader2, Search, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+/**
+ * One search result: a section of a knowledge-base article, with its similarity score.
+ */
 interface Hit {
   chunk_id: string;
   article: string;
@@ -11,6 +18,7 @@ interface Hit {
   score: number;
 }
 
+// Clickable example questions under the big search box.
 const EXAMPLES = ["my parcel is late", "how do I get a refund?", "item arrived broken", "change delivery address"];
 
 /** Semantic search over the knowledge base (bge-m3 + FAISS), as you type. */
@@ -24,6 +32,8 @@ export function HelpSearch({ large = false }: { large?: boolean }) {
   const navigate = useNavigate();
   const box = useRef<HTMLDivElement>(null);
 
+  // Search while typing, but wait 280 ms after the last key ("debounce"), so the server is not called on
+  // every letter. At least 3 characters.
   useEffect(() => {
     if (query.trim().length < 3) {
       setHits([]);
@@ -40,9 +50,11 @@ export function HelpSearch({ large = false }: { large?: boolean }) {
         .catch(() => setHits([]))
         .finally(() => setLoading(false));
     }, 280);
+    // A new key before 280 ms cancels the pending search.
     return () => window.clearTimeout(timer);
   }, [query]);
 
+  // A click outside the box closes the results.
   useEffect(() => {
     const close = (event: MouseEvent) => {
       if (box.current && !box.current.contains(event.target as Node)) setFocused(false);
@@ -51,7 +63,9 @@ export function HelpSearch({ large = false }: { large?: boolean }) {
     return () => window.removeEventListener("mousedown", close);
   }, []);
 
+  // Open the article at the matching section (the #anchor is the section's slug).
   const open = (hit: Hit) => navigate(`/help/${hit.article}#${slug(hit.section)}`);
+  // Highlight the query words (longer than 3 letters) in the result text.
   const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
   const mark = (text: string) =>
     text.split(/(\s+)/).map((w, i) =>
@@ -69,6 +83,7 @@ export function HelpSearch({ large = false }: { large?: boolean }) {
       <div className={`ring-gradient rounded-2xl ${focused ? "shadow-glow" : "shadow-soft"} transition-shadow`}>
         <div className="flex items-center gap-3 rounded-2xl bg-surface px-4">
           {loading ? <Loader2 size={20} className="animate-spin text-brand" /> : <Search size={20} className="text-brand" />}
+          {/* Arrow keys move through the results; Enter opens the selected one. */}
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -86,6 +101,7 @@ export function HelpSearch({ large = false }: { large?: boolean }) {
           </span>
         </div>
       </div>
+      {/* Example questions (big box only, before typing). */}
       {!query && large && (
         <div className="mt-3 flex flex-wrap gap-2">
           {EXAMPLES.map((example) => (
@@ -95,6 +111,8 @@ export function HelpSearch({ large = false }: { large?: boolean }) {
           ))}
         </div>
       )}
+      {/* Results: a bar for the similarity score, the section, the article, and the text with the query
+         words highlighted. */}
       <AnimatePresence>
         {focused && hits.length > 0 && (
           <motion.div
@@ -124,6 +142,7 @@ export function HelpSearch({ large = false }: { large?: boolean }) {
                 <ArrowRight size={15} className="mt-1 text-muted" />
               </button>
             ))}
+            {/* Which retriever answered, and how fast. */}
             {meta && (
               <div className="border-t border-line px-3 pb-1 pt-2 text-[11px] text-muted">
                 {meta.retriever} · {meta.latency_ms.toFixed(0)} ms · cosine similarity

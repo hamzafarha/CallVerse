@@ -1,4 +1,7 @@
 """End-to-end checks on the real processed data (skipped when it is not built)."""
+# Integration tests: several parts work together on the real processed data (orders, contacts, SQLite,
+# knowledge base). Skipped when the data is not built (requires_data). TestClient calls the FastAPI app in-
+# process, without starting a server. Run: pytest tests/integration -v
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +11,9 @@ from tests.conftest import requires_data
 
 @requires_data
 def test_template_conversation_end_to_end():
+    """A full conversation (Client -> Workforce -> Advisor -> Quality -> KPIs) with the offline template
+    agents ends with a review and KPIs.
+    """
     from callverse.agents.client.profiles import sample_profiles
     from callverse.data import loaders
     from callverse.orchestration.graph import run_conversation
@@ -34,6 +40,7 @@ def test_template_conversation_end_to_end():
 
 @requires_data
 def test_twin_runs_a_scenario():
+    """The digital twin simulates a scenario week and returns KPIs."""
     from callverse.twin import DigitalTwin, runs_to_frame
 
     frame = runs_to_frame(DigitalTwin().run("baseline", "rules_erlang", "fifo", seeds=2))
@@ -43,6 +50,7 @@ def test_twin_runs_a_scenario():
 
 @requires_data
 def test_api_endpoints():
+    """The main REST endpoints answer correctly."""
     from callverse.api.app import app
 
     client = TestClient(app)
@@ -67,6 +75,7 @@ def keyword_runtime(monkeypatch):
 
 @requires_data
 def test_live_session_human_customer(keyword_runtime):
+    """A live session where a person plays the customer: the advisor answers each message."""
     from callverse.agents.client.profiles import profile_by_contact_id
     from callverse.data import loaders
     from callverse.orchestration.live import LiveSession
@@ -87,6 +96,9 @@ def test_live_session_human_customer(keyword_runtime):
 
 @requires_data
 def test_live_session_copilot_and_autopilot(keyword_runtime):
+    """Advisor desk session: the copilot drafts replies for the human advisor, and autopilot lets the
+    Advisor agent answer alone.
+    """
     from callverse.agents.client.profiles import sample_profiles
     from callverse.data import loaders
     from callverse.orchestration.live import LiveSession
@@ -104,6 +116,7 @@ def test_live_session_copilot_and_autopilot(keyword_runtime):
 
 @requires_data
 def test_desk_queue_time_starts_the_customer_clock(keyword_runtime):
+    """The time a customer already waited in the desk queue starts the Client agent's chat timer."""
     from callverse.agents.client.profiles import sample_profiles
     from callverse.data import loaders
     from callverse.orchestration.live import LiveSession
@@ -123,6 +136,7 @@ def test_desk_queue_time_starts_the_customer_clock(keyword_runtime):
 
 @requires_data
 def test_front_office_endpoints(keyword_runtime):
+    """The customer portal and help-centre endpoints answer correctly."""
     from callverse.api.app import app
 
     client = TestClient(app)
@@ -141,6 +155,7 @@ def test_front_office_endpoints(keyword_runtime):
 
 @requires_data
 def test_twin_floor_replay():
+    """The live floor endpoint returns one simulated day, contact by contact."""
     from callverse.api.app import app
 
     floor = TestClient(app).get("/api/twin/floor", params={"scenario": "baseline", "day": 1}).json()
@@ -154,6 +169,7 @@ def test_twin_floor_replay():
 
 @requires_data
 def test_websocket_session(keyword_runtime):
+    """A chat over the WebSocket: start message, server events, end."""
     from callverse.api.app import app
 
     with TestClient(app).websocket_connect("/ws/session") as ws:
@@ -172,6 +188,7 @@ def test_websocket_session(keyword_runtime):
 
 @pytest.mark.llm
 def test_llm_conversation_with_local_models():
+    """A conversation with real local LLMs (marker llm: needs a GPU and the downloaded models)."""
     from dataclasses import replace
 
     from callverse.llm import LLMClient, load_llm_settings

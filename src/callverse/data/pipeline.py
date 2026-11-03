@@ -7,6 +7,8 @@ in order, top to bottom, exactly as a reviewer would, and keeps an executed copy
 as proof of the run (``artifacts/notebook_runs/``).
 """
 
+# Why notebooks? Each data decision is explained and reviewed in a notebook (03 to 08). Running the notebooks
+# themselves, instead of copying their code, keeps a single source of truth.
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,6 +16,8 @@ from pathlib import Path
 
 from callverse.config import NOTEBOOK_RUN_DIR, PROJECT_ROOT, RAW_DIR, load_yaml
 
+# The raw datasets that must be downloaded first: Olist (real Brazilian e-commerce orders) and Bitext
+# (customer-service messages, each labelled with its intent).
 REQUIRED_RAW_FILES = [
     "olist/olist_orders_dataset.csv",
     "olist/olist_order_items_dataset.csv",
@@ -46,6 +50,7 @@ def run_notebook(path: Path, output_dir: Path = NOTEBOOK_RUN_DIR, timeout: int =
     import nbformat
     from nbclient import NotebookClient
 
+    # nbclient runs every cell of the notebook, like "Run all" in Jupyter, without a browser.
     notebook = nbformat.read(path, as_version=4)
     client = NotebookClient(
         notebook,
@@ -56,6 +61,7 @@ def run_notebook(path: Path, output_dir: Path = NOTEBOOK_RUN_DIR, timeout: int =
     start = time.perf_counter()
     client.execute()
     seconds = time.perf_counter() - start
+    # Save the executed copy (with all its outputs) as proof of the run.
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / path.name
     nbformat.write(notebook, output_path)
@@ -67,12 +73,14 @@ def run_data_pipeline(
     log: Callable[[str], None] = print,
 ) -> list[NotebookRun]:
     """Execute the configured notebooks in order; stops at the first failure."""
+    # Stop early, with a clear message, when a raw file is missing.
     missing = missing_raw_files()
     if missing:
         raise FileNotFoundError(
             "Raw data missing: " + ", ".join(missing) + ". See docs/RUN_GUIDE.md, section 'Get the raw data'."
         )
     settings = load_yaml("data")["pipeline"]
+    # The list of notebooks comes from configs/data.yaml (pipeline.notebooks).
     names = notebooks or settings["notebooks"]
     runs = []
     for name in names:

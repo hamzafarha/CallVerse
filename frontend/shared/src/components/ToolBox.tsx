@@ -1,3 +1,8 @@
+/**
+ * The tools panel (Advisor desk and Live chat): every tool of the Advisor agent, grouped by kind and updated
+ * live. Dashed border = offered to the LLM right now; blue = used in this turn; small counters = calls per
+ * caller (AI, pipeline step, safety net). On the desk it also shows the Client agent's tools.
+ */
 import { motion } from "framer-motion";
 import { Bot, Cog, ShieldCheck, XCircle } from "lucide-react";
 import type { StageEvent } from "../lib/session";
@@ -33,7 +38,8 @@ const TOOLBOX: { kind: string; tools: { name: string; what: string }[] }[] = [
   { kind: "Checks", tools: [{ name: "check_draft_reply", what: "fact check of every draft" }] },
 ];
 
-/** The four tools added for agentic tool calling. */
+/** The tools added for agentic tool calling (shown with a "new" badge): four for the Advisor agent,
+ * three for the Client agent. */
 export const NEW_TOOLS = new Set([
   "get_customer_history",
   "validate_bank_code",
@@ -51,9 +57,13 @@ const CUSTOMER_TOOLS = [
   { name: "send_evidence", what: "attaches photos or a statement screenshot: offered when you ask for proof" },
 ];
 
+// Who called the tool: the LLM chose it (AI), a fixed pipeline step, or a safety net.
 const CALLER_ICON: Record<string, any> = { llm: Bot, code: Cog, safety_net: ShieldCheck };
 const CALLER_SHORT: Record<string, string> = { llm: "AI", code: "pipeline", safety_net: "safety net" };
 
+/**
+ * How one tool was used so far: calls per caller, the last summary, success, and whether it ran in this turn.
+ */
 interface Usage {
   counts: Record<string, number>; // by caller: llm, code, safety_net
   summary?: string;
@@ -61,6 +71,9 @@ interface Usage {
   thisTurn: boolean;
 }
 
+/**
+ * One sentence that explains the current advisor mode (agentic, hybrid, pure RAG, or offline backup).
+ */
 function modeHint(variant: string | undefined, offline: boolean): string {
   if (offline) return "Offline backup: tools run as fixed pipeline steps (no AI choice). The bank check and the escalation still run.";
   if (variant === "rag_policy") return "Hybrid: the pipeline opens the order and the rules engine decides; the AI only sees 2 tools. Choose Agentic to let the AI pick its tools and use the 4 new ones.";
@@ -80,11 +93,13 @@ export function ToolBox({
   offline?: boolean;
   customerTools?: boolean; // the customer is the Client agent (Advisor desk): show its tool too
 }) {
+  // Find where the advisor's current turn starts (its last "start" event).
   const advisor = stages.filter((s) => s.agent === "advisor");
   let turnStart = -1;
   advisor.forEach((s, i) => {
     if (s.step === "start") turnStart = i;
   });
+  // Count every tool call, by tool and by caller.
   const usage: Record<string, Usage> = {};
   advisor.forEach((s, i) => {
     if (s.step !== "tool") return;
@@ -95,6 +110,8 @@ export function ToolBox({
     entry.ok = !!s.ok && s.passed !== false;
     if (i > turnStart) entry.thisTurn = true;
   });
+  // What the LLM was offered in this turn: read from the latest generation event (its tool list and
+  // tool_choice).
   let offered = new Set<string>();
   let required = false;
   for (let i = advisor.length - 1; i > turnStart; i--) {
@@ -105,6 +122,7 @@ export function ToolBox({
       break;
     }
   }
+  // Totals for the sentence under the title.
   const used = Object.values(usage).reduce((n, u) => n + Object.values(u.counts).reduce((a, b) => a + b, 0), 0);
   const byAi = Object.values(usage).reduce((n, u) => n + (u.counts.llm ?? 0), 0);
 
@@ -113,6 +131,7 @@ export function ToolBox({
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Advisor tools</div>
         <div className="flex items-center gap-2 text-[10px] text-muted">
+          {/* Legend of the caller icons. */}
           {Object.entries(CALLER_ICON).map(([caller, Icon]) => (
             <span key={caller} className="inline-flex items-center gap-0.5">
               <Icon size={10} className={caller === "llm" ? "text-brand" : undefined} /> {CALLER_SHORT[caller]}
@@ -135,22 +154,26 @@ export function ToolBox({
           </div>
         ))}
       </div>
+      {/* Client agent tools, only on the Advisor desk (the customer is simulated there). */}
       {customerTools && <CustomerTools stages={stages} offline={offline} />}
     </div>
   );
 }
 
-/** The Client agent's tools: its own order page and its chat timer. */
+/** The Client agent's tools: its own order page, its chat timer and sending evidence. */
 function CustomerTools({ stages, offline }: { stages: StageEvent[]; offline: boolean }) {
   const client = stages.filter((s) => s.agent === "client");
+  // The customer's current turn starts after its last "typing" event.
   let turnStart = -1;
   client.forEach((s, i) => {
     if (s.step === "typing") turnStart = i;
   });
   const thisTurn = client.slice(turnStart + 1);
+  // Tools offered to the customer's LLM in this turn (the server sends "offer" events).
   const offers = thisTurn.filter((s) => s.step === "offer");
   const offered = new Set<string>(offers.flatMap((s) => s.offered ?? []));
   const required = offers.some((s) => s.tool_choice === "required"); // its patience just ran out
+  // Every customer tool call is chosen by the AI: the Client agent has no fixed pipeline step.
   const usage = (name: string): Usage | undefined => {
     const calls = client.filter((s) => s.step === "tool" && s.name === name);
     if (!calls.length) return undefined;
@@ -178,8 +201,13 @@ function CustomerTools({ stages, offline }: { stages: StageEvent[]; offline: boo
   );
 }
 
+/**
+ * One tool line: its name (+ a "new" badge), "offered" or "must choose", call counts per caller, and the
+ * latest result summary (or what the tool does).
+ */
 function ToolRow({ name, what, usage, offered, required }: { name: string; what: string; usage?: Usage; offered: boolean; required: boolean }) {
   const active = usage?.thisTurn;
+  // Solid blue border: used in this turn. Dashed border: offered, not used (yet).
   const style = active
     ? { borderColor: "var(--brand)", background: "color-mix(in srgb, var(--brand) 7%, transparent)" }
     : offered

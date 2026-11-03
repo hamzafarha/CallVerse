@@ -1,3 +1,7 @@
+/**
+ * "My orders" page: pick a demo customer (no password), then see their order as it was on the contact date:
+ * status, timeline, details, the message they sent, and their previous contacts.
+ */
 import {
   Avatar,
   Card,
@@ -20,6 +24,9 @@ import { CustomerCard } from "../components/CustomerCard";
 import { OrderTimeline } from "../components/OrderTimeline";
 import { useCustomer } from "../customer";
 
+/**
+ * /account: go to the remembered customer, or show the picker. /account/:contactId: that customer.
+ */
 export default function AccountPage() {
   const { contactId } = useParams();
   const { customer } = useCustomer();
@@ -27,6 +34,9 @@ export default function AccountPage() {
   return <Account contactId={contactId} />;
 }
 
+/**
+ * The demo customer picker (the same cards as on the home page).
+ */
 function Picker() {
   const customers = useApi<any[]>("/api/portal/customers");
   const { setCustomer } = useCustomer();
@@ -52,9 +62,13 @@ function Picker() {
   );
 }
 
+/**
+ * The account page of one demo customer.
+ */
 function Account({ contactId }: { contactId: string }) {
   const { data, error } = useApi<any>(`/api/portal/customers/${contactId}`);
   const { customer, setCustomer } = useCustomer();
+  // Opening a link /account/<id> directly also signs in as that customer.
   useEffect(() => {
     if (data && customer?.contact_id !== data.contact_id) setCustomer({ contact_id: data.contact_id, name: data.name });
   }, [data, customer, setCustomer]);
@@ -70,6 +84,7 @@ function Account({ contactId }: { contactId: string }) {
   const order = data.order;
   const status = ORDER_STATUS[order.status_at_contact] ?? { label: humanize(order.status_at_contact), color: "var(--series-1)" };
   const late = Number(order.days_past_estimate) > 0 && order.status_at_contact !== "delivered";
+  // Copy the order number to the clipboard and show a small confirmation (toast).
   const copy = () => {
     navigator.clipboard?.writeText(order.order_id);
     toast.success("Order number copied");
@@ -89,6 +104,7 @@ function Account({ contactId }: { contactId: string }) {
             {data.is_repeat_contact && <span className="chip py-0.5 text-[11px]">repeat contact</span>}
           </div>
         </div>
+        {/* Twin clock: the page shows the order as it was on the day of the contact (history replay). */}
         <div className="glass ml-auto flex items-center gap-2 rounded-2xl px-4 py-2 text-xs text-ink2">
           <CalendarClock size={15} className="text-brand" />
           Twin clock: <b className="text-ink">{dateLabel(data.contact_timestamp, true)}</b>
@@ -118,6 +134,7 @@ function Account({ contactId }: { contactId: string }) {
               <OrderTimeline steps={data.timeline} />
             </div>
           </div>
+          {/* Warning when the delivery is late. */}
           {late && (
             <motion.div
               initial={{ opacity: 0, scale: 0.98 }}
@@ -129,6 +146,7 @@ function Account({ contactId }: { contactId: string }) {
               tracking and open an investigation with the carrier.
             </motion.div>
           )}
+          {/* Order details: category, value (in Brazilian reais), items, payment, dates. */}
           <Stagger className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
             {[
               { label: "Category", value: humanize(order.category) },
@@ -147,6 +165,7 @@ function Account({ contactId }: { contactId: string }) {
         </Card>
 
         <div className="space-y-6">
+          {/* The message the customer sent, and a button to chat about it. */}
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="card ring-gradient overflow-hidden p-6">
             <div className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full opacity-25 blur-2xl gradient-brand" />
             <Sparkles className="text-brand" />

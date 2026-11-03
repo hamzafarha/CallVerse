@@ -16,6 +16,10 @@ The engine can also run step by step for reinforcement learning: with an
 (``pending``), the RL loop answers with ``resolve(index)``, then ``advance()``.
 """
 
+# How it works (discrete-event simulation): instead of ticking every second, SimPy jumps from event to event
+# (a customer arrives, a chat ends, a shift hour starts). Three "processes" run side by side: _arrivals()
+# releases the customers, _serve() finishes the chats, _shift_clock() puts agents on or off duty every hour.
+# _dispatch() matches free agents with waiting customers, using the router.
 from dataclasses import dataclass
 from typing import Any
 
@@ -61,6 +65,7 @@ def build_agent_pool(
     Primary groups are spread in proportion to each group's share of the workload
     (volume x handle time), so the pool matches the demand mix.
     """
+    # Spread the agents' primary groups in proportion to the workload of each group.
     groups = list(workload_share)
     shares = np.array([workload_share[g] for g in groups], dtype=float)
     shares = shares / shares.sum()
@@ -71,6 +76,8 @@ def build_agent_pool(
         counts[index] += 1
     primaries = [g for g, c in zip(groups, counts) for _ in range(c)]
     rng.shuffle(primaries)
+    # Each agent is faster on its primary group (specialist), slower on one weak group, and normal on the
+    # others.
     agents = []
     for offset, primary in enumerate(primaries):
         others = [g for g in groups if g != primary]
@@ -91,6 +98,7 @@ def uniform_agents(n_agents: int, groups: list[str]) -> list[Agent]:
 def duty_from_counts(staffing: np.ndarray, n_agents: int | None = None) -> np.ndarray:
     """Duty matrix where agent ``a`` works hour ``h`` when ``a < staffing[h]``."""
     n_agents = int(staffing.max(initial=0)) if n_agents is None else n_agents
+    # Row a, column h is True when agent a works hour h.
     return np.arange(n_agents)[:, None] < np.asarray(staffing)[None, :]
 
 
@@ -112,6 +120,7 @@ class CallCenterEngine:
             raise ValueError("Contacts must be sorted by arrival time.")
         if duty.shape[0] != len(agents):
             raise ValueError("The duty matrix needs one row per agent.")
+        # The settings of the run.
         self.contacts = contacts
         self.agents = list(agents)
         self.duty = np.asarray(duty, dtype=bool)
@@ -131,6 +140,7 @@ class CallCenterEngine:
             agent.idle_since = agent.busy_seconds = 0.0
             agent.handled = 0
 
+        # The SimPy environment (the clock), the queue, the free agents, and the counters.
         self.env = simpy.Environment()
         self.waiting: list[Contact] = []
         self.free: list[Agent] = []
@@ -147,6 +157,8 @@ class CallCenterEngine:
     # ----------------------------------------------------------------- bookkeeping
     def _tick(self, at: float | None = None) -> None:
         """Accumulate waiting time since the last event and drop abandoned contacts."""
+        # Add the waiting time of everyone in the queue since the last event (the "area under the queue
+        # curve"); customers past their patience leave the queue (they abandon).
         now = self.env.now if at is None else at
         if now > self._last:
             for contact in self.waiting:
@@ -167,6 +179,7 @@ class CallCenterEngine:
 
     def _start_service(self, agent: Agent, contact: Contact) -> None:
         now = self.env.now
+        # Handle time = the customer's base time x the agent's speed on that problem.
         handle = contact.service_seconds * agent.speed.get(contact.intent_group, 1.0)
         contact.start = now
         contact.agent_id = agent.agent_id
@@ -186,6 +199,8 @@ class CallCenterEngine:
         if self.pending is not None:
             return
         now = self.env.now
+        # Pair free agents with waiting customers. One customer: the best-skilled free agent takes it.
+        # Several: the agent idle for the longest time chooses, through the router.
         while self.free and self.waiting:
             if len(self.waiting) == 1:
                 contact = self.waiting[0]
@@ -193,6 +208,7 @@ class CallCenterEngine:
                 self._assign(agent, contact)
                 continue
             agent = min(self.free, key=lambda a: a.idle_since)  # longest idle first
+            # RL training: pause here and let the PPO agent choose.
             if self.router.external:
                 self.pending = (agent, list(self.waiting))
                 return
@@ -201,6 +217,7 @@ class CallCenterEngine:
 
     # ------------------------------------------------------------------- processes
     def _arrivals(self):
+        # Process 1: release every customer at its arrival time, then try to dispatch.
         for contact in self.contacts:
             if contact.arrival >= self.end_time:
                 return
@@ -210,6 +227,7 @@ class CallCenterEngine:
             self._dispatch()
 
     def _serve(self, agent: Agent, contact: Contact, handle: float):
+        # Process 2: one chat; when it ends, the agent is free again.
         yield self.env.timeout(handle)
         self._tick()
         contact.end = self.env.now
@@ -231,6 +249,8 @@ class CallCenterEngine:
                 self.free.remove(agent)
 
     def _shift_clock(self):
+        # Process 3: at the top of every hour, set who is on duty; the real-time overtime rule may call extra
+        # agents when the queue is long.
         for hour in range(self.hours):
             yield self.env.timeout(hour * SECONDS_PER_HOUR - self.env.now)
             self._tick()
@@ -250,6 +270,7 @@ class CallCenterEngine:
             self._dispatch()
 
     def _queue_sampler(self):
+        # Every 15 minutes, record the queue length and the busy agents (for the live floor charts).
         while self.env.now < self.end_time:
             self._tick()
             self.queue_trace.append(
@@ -276,6 +297,7 @@ class CallCenterEngine:
     def advance(self) -> bool:
         """Run until a routing decision is pending (True) or the horizon ends (False)."""
         self.start()
+        # RL stepping: run the simulation event by event until a decision is needed.
         while self.pending is None:
             if self.env.peek() >= self.end_time:
                 self._tick(self.end_time)  # count waiting up to the end of the horizon
@@ -297,6 +319,7 @@ class CallCenterEngine:
         """Simulate the whole horizon with an internal router."""
         if self.router.external:
             raise RuntimeError("An external router must drive the engine with advance().")
+        # Normal run: simulate the whole horizon at once.
         self.start()
         self.env.run(until=self.end_time)
         return self.records()
@@ -333,6 +356,7 @@ class CallCenterEngine:
                 "agent_id": [c.agent_id for c in contacts],
             }
         )
+        # Wait = when an agent started - when the customer arrived.
         records["wait"] = records["start"] - records["arrival"]
         return records
 
@@ -385,6 +409,7 @@ def engine_kpis(
     - understaffed hours: open hours whose service level is below the target
     - labour cost: paid hours x rate (overtime x multiplier); cost per handled contact
     """
+    # Score only the contacts that arrived before evaluation_end (the end lets the queue drain).
     scored = records if evaluation_end is None else records[records["arrival"] < evaluation_end]
     live = scored[scored["is_live"]]
     backlog = scored[~scored["is_live"]]
@@ -393,6 +418,7 @@ def engine_kpis(
     in_time = answered_live["wait"] <= threshold_seconds
 
     until_hour = None if evaluation_end is None else int(evaluation_end // SECONDS_PER_HOUR)
+    # Paid hours and labour cost (overtime costs more); occupancy = busy time / paid time.
     hours = engine.staffed_hours(until_hour)
     paid_regular = hours["regular_hours"]
     paid_overtime = hours["planned_overtime_hours"] + hours["dynamic_overtime_hours"]
@@ -400,6 +426,7 @@ def engine_kpis(
     staffed_seconds = (paid_regular + paid_overtime) * SECONDS_PER_HOUR
     busy = engine.busy_seconds(None if until_hour is None else until_hour * SECONDS_PER_HOUR)
 
+    # Understaffed hours: open hours with at least 3 live contacts whose service level is under target.
     hourly = live.assign(hour=(live["arrival"] // SECONDS_PER_HOUR).astype(int))
     hourly_in_time = hourly["start"].notna() & (hourly["wait"] <= threshold_seconds)
     per_hour = hourly_in_time.groupby(hourly["hour"]).mean()

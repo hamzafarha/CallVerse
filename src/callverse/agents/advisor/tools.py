@@ -12,6 +12,14 @@ rules (refund eligibility, rules engine), external API (bank code check, BrasilA
 actions (open a ticket, escalate to a human) and a reflection check of every draft.
 """
 
+# How to read this file:
+# - ToolCall: the record of one tool execution (name, arguments, ok, result, time, caller).
+# - AdvisorTools: the tools as Python methods. Each one reads the SQLite store "as of" the chat date and
+#   records its call with _record().
+# - execute(): runs a tool the LLM asked for (by name, with its JSON arguments).
+# - The JSON schemas at the bottom describe each tool to the LLM (name, description, parameters). The LLM
+#   reads these descriptions to decide which tool to call.
+# - agentic_tool_names(): gating, i.e. which tools the agentic advisor sees at each stage.
 import json
 import re
 import sqlite3
@@ -31,12 +39,14 @@ from callverse.config import config_path, database_path, load_yaml
 from callverse.data import TICKET_ORDER_COLUMNS, add_contact_facts, connect, load_ticket_config
 from callverse.data.conversations import SUPERVISOR_PROMISE
 
+# Every problem type (intent) the rules engine knows, read from configs/data.yaml.
 PROBLEM_TYPES = [
     intent
     for intents in load_yaml("data")["generation"]["contacts"]["intent_groups"].values()
     for intent in intents
 ]
 
+# Date columns of the orders table (SQLite stores them as text; we turn them back into dates).
 DATE_COLUMNS = [
     "order_purchase_timestamp",
     "order_approved_at",
@@ -66,6 +76,7 @@ class ToolCall:
 
 def summarize_tool_call(name: str, ok: bool, result: dict[str, Any]) -> str:
     """One plain line saying what a tool call found."""
+    # A failed call shows its error message.
     if not ok or "error" in result:
         return str(result.get("error", "failed"))
     if name == "lookup_order":
@@ -103,6 +114,9 @@ class AdvisorTools:
     """Order lookup, ticket and customer history, refund eligibility, tickets, KB search,
     bank code check, escalation and the draft check."""
 
+    # as_of: the moment the customer writes (history is replayed: the tools only see the past). calls: every
+    # tool call of the chat (the success metric is computed from it). opened_tickets: the tickets created
+    # during the chat.
     as_of: pd.Timestamp
     db_path: Path = field(default_factory=database_path)
     retriever: Any = None
@@ -116,15 +130,19 @@ class AdvisorTools:
     current_caller: str = field(default="code", init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        # Investigation thresholds from configs/data.yaml (how late before the carrier must investigate).
         config = load_ticket_config(config_path("data"))
         self._late_days = config.investigation_after_days_late
         self._transit_days = config.investigation_transit_days
 
     # ----------------------------------------------------------------- helpers
     def _connection(self) -> sqlite3.Connection:
+        """A connection to the SQLite store."""
         return connect(self.db_path)
 
     def _order_row(self, order_id: str) -> pd.DataFrame:
+        # Read one order row with plain SQL. The "?" placeholder keeps the order number out of the SQL text,
+        # which prevents SQL injection.
         columns = ", ".join(
             f'o."{c}"'
             for c in TICKET_ORDER_COLUMNS
@@ -137,9 +155,11 @@ class AdvisorTools:
         )
         with self._connection() as connection:
             frame = pd.read_sql_query(query, connection, params=(order_id.strip(),))
+        # SQLite stores dates as text: convert them back into real dates.
         for column in DATE_COLUMNS:
             if column in frame:
                 frame[column] = pd.to_datetime(frame[column], errors="coerce")
+        # A gap between the amount paid and the order value hints at a payment problem.
         if not frame.empty:
             frame["payment_minus_order_value"] = frame["payment_total"] - frame["order_value"]
         return frame
@@ -149,6 +169,8 @@ class AdvisorTools:
         frame = self._order_row(order_id)
         if frame.empty:
             return None
+        # add_contact_facts() computes the status AT the chat date, the days late and whether the carrier must
+        # investigate (the same rules that built the ticket history).
         frame["opened_at"] = self.as_of
         frame["intent"] = intent or ""
         frame = add_contact_facts(frame, self._late_days, self._transit_days)
@@ -157,6 +179,8 @@ class AdvisorTools:
     def _record(
         self, name: str, arguments: dict[str, Any], started: float, ok: bool, result: dict[str, Any]
     ) -> dict[str, Any]:
+        # Every tool ends here: the call is stored with its result, its duration and who called it, and the
+        # live UI is notified (listener).
         call = ToolCall(
             name, arguments, ok, result, (time.perf_counter() - started) * 1000, self.current_caller
         )
@@ -168,6 +192,7 @@ class AdvisorTools:
     @contextmanager
     def called_by(self, caller: str) -> Iterator[None]:
         """Label the tool calls made inside the block: ``llm``, ``code`` or ``safety_net``."""
+        # Usage: `with tools.called_by("safety_net"): tools.lookup_order(...)`.
         previous, self.current_caller = self.current_caller, caller
         try:
             yield
@@ -175,6 +200,7 @@ class AdvisorTools:
             self.current_caller = previous
 
     def _new_ticket(self, order_id: str, reason: str, handed_to: str) -> dict[str, Any]:
+        # Tickets opened during a chat stay in memory, with ids NEW-001, NEW-002, ...
         ticket = {
             "ticket_id": f"NEW-{len(self.opened_tickets) + 1:03d}",
             "order_id": order_id,
@@ -186,6 +212,7 @@ class AdvisorTools:
         return ticket
 
     # ------------------------------------------------------------------- tools
+    # Each tool follows the same pattern: start a timer, compute the result, return self._record(...).
     def lookup_order(self, order_id: str) -> dict[str, Any]:
         """Status, dates, amounts and items of an order, as known now."""
         started = time.perf_counter()
@@ -202,6 +229,7 @@ class AdvisorTools:
         def fmt(value: Any) -> str | None:
             return None if pd.isna(value) else pd.Timestamp(value).strftime("%Y-%m-%d")
 
+        # Only what the advisor needs, in simple types (text, numbers, true/false) the LLM reads as JSON.
         result = {
             "order_id": facts["order_id"],
             "status_now": facts["order_status_at_contact"],
@@ -236,6 +264,7 @@ class AdvisorTools:
     def get_ticket_history(self, order_id: str) -> dict[str, Any]:
         """Earlier support tickets of this order (before now)."""
         started = time.perf_counter()
+        # Tickets opened BEFORE the chat date only (the advisor cannot see the future).
         with self._connection() as connection:
             frame = pd.read_sql_query(
                 "SELECT ticket_id, intent, opened_at, outcome, outcome_class, resolved_at "
@@ -258,6 +287,9 @@ class AdvisorTools:
                 False,
                 {"error": f"No order {order_id}."},
             )
+        # Refund rules (policy): canceled -> automatic refund; not shipped -> free cancellation; shipped ->
+        # refuse the delivery or return it; delivered up to 7 days ago -> free return (the Brazilian right of
+        # withdrawal); up to 30 days -> return if defective, or exchange; later -> no standard return.
         status = facts["order_status_at_contact"]
         delivered = facts["order_delivered_customer_date"]
         days_since_delivery = (
@@ -283,6 +315,7 @@ class AdvisorTools:
             "option": option,
             "days_since_delivery": days_since_delivery,
             "payment_type": facts["primary_payment_type"],
+            # Boleto (bank slip) payments are refunded by bank transfer, so the bank details are needed.
             "refund_channel": "bank_transfer_needs_bank_details"
             if facts["primary_payment_type"] == "boleto"
             else "same_payment_method",
@@ -292,6 +325,7 @@ class AdvisorTools:
     def open_ticket(self, order_id: str, reason: str, handed_to: str = "back_office") -> dict[str, Any]:
         """Open a follow-up case (carrier, seller, payments team, supervisor)."""
         started = time.perf_counter()
+        # Validation: the team must be one of a fixed list (an LLM could invent a team name).
         allowed = {"carrier", "seller", "payments_team", "supervisor", "back_office"}
         if handed_to not in allowed:
             return self._record(
@@ -314,6 +348,7 @@ class AdvisorTools:
         """Hand the conversation to a human supervisor (playbook: "When to escalate")."""
         started = time.perf_counter()
         arguments = {"order_id": order_id, "reason": reason, "urgency": urgency}
+        # Validation: urgency must be "normal" or "high".
         if urgency not in {"normal", "high"}:
             return self._record(
                 "escalate_to_human", arguments, started, False, {"error": "urgency: 'normal' or 'high'"}
@@ -332,6 +367,7 @@ class AdvisorTools:
 
         started = time.perf_counter()
         arguments = {"order_id": order_id}
+        # Long-term memory: the same customer's earlier orders and tickets, before the chat date.
         order_id, now = str(order_id).strip(), self.as_of.isoformat(sep=" ")
         with self._connection() as connection:
             owner = connection.execute(
@@ -381,6 +417,7 @@ class AdvisorTools:
             }
             for row in tickets.itertuples()
         ]
+        # A fraud sign from the playbook: many orders sent to different addresses.
         cities = {(owner[1], owner[2])}
         cities |= {(row.customer_city, row.customer_state) for row in orders.itertuples()}
         signals = []
@@ -412,6 +449,7 @@ class AdvisorTools:
         code is ever looked up: account numbers stay out of the chat (sent by e-mail)."""
         started = time.perf_counter()
         arguments = {"bank_code": bank_code}
+        # Keep only the digits. A Brazilian bank code has 1 to 3 digits (e.g. 341 = Itau).
         digits = re.sub(r"\D", "", str(bank_code))
         if not 1 <= len(digits) <= 3:
             result = {
@@ -420,8 +458,10 @@ class AdvisorTools:
                 "reason": "Brazilian bank codes have 3 digits. Ask the customer to check the code.",
             }
             return self._record("validate_bank_code", arguments, started, True, result)
+        # zfill(3): "1" -> "001".
         code = digits.zfill(3)
         try:
+            # Look the code up in the BrasilAPI bank list (downloaded once, then cached on disk).
             bank = (self.banks or bank_directory()).lookup(code)
         except BankDirectoryUnavailable as error:
             return self._record("validate_bank_code", arguments, started, False, {"error": str(error)})
@@ -451,6 +491,8 @@ class AdvisorTools:
         """Reflection check (always run by code): every date, amount, timing and order number
         of the draft must come from a tool result, the approved answer or the policy."""
         started = time.perf_counter()
+        # The "sources of truth": the results of the tools that worked, the approved answer, the policy texts
+        # and today's date. Every fact of the draft must appear in one of them.
         sources = Sources.collect(
             (c.result for c in self.calls if c.ok and c.name != "check_draft_reply"),
             [approved_answer, *policy_texts, self.as_of.strftime("%Y-%m-%d")],
@@ -471,6 +513,7 @@ class AdvisorTools:
                 False,
                 {"error": "knowledge base unavailable"},
             )
+        # The 3 best policy sections from the retriever (bge-m3 vectors or TF-IDF keywords).
         hits = self.retriever.search(query, top_k=3)
         result = {
             "results": [
@@ -492,6 +535,7 @@ class AdvisorTools:
 
         started = time.perf_counter()
         arguments = {"order_id": order_id, "problem_type": problem_type}
+        # Validation: the problem type must be one the rules engine knows.
         if problem_type not in PROBLEM_TYPES:
             return self._record(
                 "recommend_resolution",
@@ -505,6 +549,8 @@ class AdvisorTools:
             return self._record(
                 "recommend_resolution", arguments, started, False, {"error": f"No order {order_id}."}
             )
+        # decide_outcome() = the company rules (data/tickets.py); answer_and_summary() = the approved text for
+        # that outcome (data/conversations.py).
         row = pd.Series({**facts, "intent": problem_type})
         outcome, chunk, handed_to = decide_outcome(row)
         row["outcome"] = outcome
@@ -521,6 +567,7 @@ class AdvisorTools:
     # ---------------------------------------------------------- LLM interface
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
         """Run a tool requested by the LLM; returns JSON for the tool message."""
+        # The tools the LLM may call, by name. check_draft_reply is not in this list: only code runs it.
         functions = {
             "lookup_order": self.lookup_order,
             "get_ticket_history": self.get_ticket_history,
@@ -533,16 +580,20 @@ class AdvisorTools:
             "search_knowledge_base": self.search_knowledge_base,
         }
         started = time.perf_counter()
+        # Everything run here is labelled caller="llm" (the model chose it).
         with self.called_by("llm"):
             if name not in functions:
                 result = self._record(name, arguments, started, False, {"error": f"unknown tool {name}"})
             else:
                 try:
+                    # **arguments passes the LLM's JSON arguments as Python keyword arguments; a wrong
+                    # argument name raises TypeError, caught below.
                     result = functions[name](**arguments)
                 except TypeError as error:
                     result = self._record(
                         name, arguments, started, False, {"error": f"bad arguments: {error}"}
                     )
+        # The result goes back to the LLM as JSON text (a "tool" message).
         return json.dumps(result, default=str)
 
     def success_rate(self) -> float | None:
@@ -553,6 +604,9 @@ class AdvisorTools:
 
 
 def _schema(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    """A tool description in the OpenAI "function calling" format: name, description and a JSON Schema of
+    its parameters.
+    """
     return {
         "type": "function",
         "function": {
@@ -563,6 +617,7 @@ def _schema(name: str, description: str, properties: dict[str, Any], required: l
     }
 
 
+# The tools of the "rag" variant. The descriptions matter: the LLM chooses from them.
 TOOL_SCHEMAS = [
     _schema(
         "lookup_order",
@@ -603,6 +658,7 @@ TOOL_SCHEMAS = [
     ),
 ]
 
+# The rules engine as a tool (the rag_policy and agentic variants).
 POLICY_TOOL = _schema(
     "recommend_resolution",
     "Company rules engine: returns the policy-approved action, the approved answer and who to "
@@ -612,6 +668,9 @@ POLICY_TOOL = _schema(
 )
 
 
+# Three of the four tools added for agentic tool calling: escalation (action), bank code check (external API)
+# and customer history (memory). The fourth, check_draft_reply, has no schema:
+# only code runs it.
 ESCALATE_TOOL = _schema(
     "escalate_to_human",
     "Hand the chat to a human supervisor. Use it when the playbook says to escalate: the customer "
@@ -639,6 +698,7 @@ HISTORY_TOOL = _schema(
     {"order_id": {"type": "string"}},
     ["order_id"],
 )
+# Look up a schema by tool name.
 SCHEMAS_BY_NAME = {
     schema["function"]["name"]: schema
     for schema in [*TOOL_SCHEMAS, POLICY_TOOL, ESCALATE_TOOL, BANK_TOOL, HISTORY_TOOL]
@@ -659,11 +719,15 @@ def agentic_tool_names(
 ) -> list[str]:
     """Tools offered at a stage: ``verify`` (no order number yet), ``investigate`` (order
     known, not answered yet) or ``follow_up`` (after the answer)."""
+    # verify: only search and escalation (no order tools without an order number, so the LLM cannot invent
+    # one).
     if stage == "verify":
         return ["search_knowledge_base", "escalate_to_human"]
+    # investigate: open the order first (lookup_order), plus the extras useful for this problem group.
     if stage == "investigate":
         extras = INVESTIGATE_EXTRAS.get(intent_group or "", ["get_ticket_history", "get_customer_history"])
         return ["lookup_order", *extras, "search_knowledge_base", "escalate_to_human"]
+    # follow_up: after the answer. The bank check only for boleto payments.
     if stage == "follow_up":
         bank = ["validate_bank_code"] if paid_by_boleto else []
         return ["search_knowledge_base", "open_ticket", "escalate_to_human", *bank]

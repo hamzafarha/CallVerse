@@ -21,6 +21,8 @@ from callverse.simulation.service import LognormalServiceModel
 
 @dataclass(frozen=True)
 class TwinSettings:
+    # sim = configs/simulation.yaml; costs = wages; skills = how much faster or slower agents are;
+    # patience_mix = persona shares and patience multipliers.
     """Everything the twin assumes, in one object."""
 
     sim: SimulationConfig
@@ -32,14 +34,17 @@ class TwinSettings:
 
     @property
     def groups(self) -> list[str]:
+        """The 4 problem groups."""
         return list(self.sim.service_times)
 
     @property
     def mean_handle(self) -> dict[str, float]:
+        """Mean handle time (seconds) per problem group."""
         return {g: s.mean_seconds for g, s in self.sim.service_times.items()}
 
     @property
     def service_model(self) -> LognormalServiceModel:
+        """The random generator of handle times."""
         return LognormalServiceModel(self.sim.service_times)
 
 
@@ -78,6 +83,7 @@ def hourly_requirements(
     remain after absences (this is how a "prepared" plan anticipates a shortage).
     """
     sim = settings.sim
+    # Expected arrivals and work per hour (the night backlog moved to the morning).
     planned, handle, open_mask = hourly_plan_inputs(
         daily_counts,
         days,
@@ -90,6 +96,7 @@ def hourly_requirements(
         group_multipliers,
         handle_time_multiplier,
     )
+    # Erlang C agents per hour.
     plan = plan_hourly_staffing(
         planned,
         handle,
@@ -99,6 +106,7 @@ def hourly_requirements(
         sim.max_occupancy,
         sim.min_agents,
     )
+    # Plan extra agents so that enough are left after absences.
     if absence_rate > 0:
         plan = np.where(open_mask, np.ceil(plan / (1 - absence_rate)), 0).astype(int)
     return plan
@@ -162,6 +170,7 @@ def apply_absence(duty: np.ndarray, rate: float, rng: np.random.Generator) -> np
         return duty
     duty = duty.copy()
     n_days = duty.shape[1] // 24
+    # For each agent and each day: absent or not (random).
     absent = rng.random((duty.shape[0], n_days)) < rate
     for day in range(n_days):
         duty[absent[:, day], day * 24 : (day + 1) * 24] = False

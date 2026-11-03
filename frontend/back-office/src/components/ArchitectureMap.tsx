@@ -1,7 +1,14 @@
+/**
+ * The architecture diagram of the Overview page, drawn in SVG: five layers (data, forecast, digital twin,
+ * evaluation, serving) with animated dots flowing between them. A click on a layer opens its page.
+ */
 import { motion } from "@callverse/shared";
 import { Activity, Database, FlaskConical, Server, TrendingUp, type LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+/**
+ * One box of the diagram: its title, three lines of text, its color, icon and page.
+ */
 interface Layer {
   id: string;
   title: string;
@@ -18,8 +25,10 @@ const LAYERS: Layer[] = [
   { id: "eval", title: "Evaluation", lines: ["scenarios × seeds", "95% CIs · KPI engine", "BO → DSO scorecard"], color: "var(--layer-eval)", icon: FlaskConical, to: "/evaluation" },
   { id: "serve", title: "Serving & MLOps", lines: ["FastAPI · WebSocket", "React front + back office", "MLflow · Docker · CI"], color: "var(--layer-serve)", icon: Server, to: "/mlops" },
 ];
+// The four agents, drawn as small chips inside the digital twin box.
 const AGENTS = ["Client", "Advisor", "Quality", "Workforce"];
 
+// Drawing sizes (SVG units): the boxes are spread evenly across the width; x(i) is the left edge of box i.
 const W = 1000;
 const H = 250;
 const BOX_W = 168;
@@ -34,6 +43,7 @@ export function ArchitectureMap() {
     <div className="w-full overflow-x-auto">
       <svg viewBox={`0 0 ${W} ${H}`} className="min-w-[760px]" role="img" aria-label="CallVerse architecture">
         <defs>
+          {/* Gradient for the arrows, and a glow filter for the moving dots. */}
           <linearGradient id="flow-gradient" x1="0" x2="1">
             <stop offset="0%" stopColor="var(--brand)" />
             <stop offset="100%" stopColor="var(--brand-2)" />
@@ -46,6 +56,7 @@ export function ArchitectureMap() {
             </feMerge>
           </filter>
         </defs>
+        {/* Arrows between neighbouring boxes, with two glowing dots moving along each (SVG animateMotion). */}
         {LAYERS.slice(0, -1).map((_, i) => {
           const x1 = x(i) + BOX_W;
           const x2 = x(i + 1);
@@ -75,6 +86,8 @@ export function ArchitectureMap() {
         <text x={(x(2) + x(3)) / 2 + BOX_W / 2} y={H - 6} textAnchor="middle" fontSize={10} fill="var(--text-muted)">
           test first, then decide
         </text>
+        {/* The boxes: a colored top bar, an icon, the title and three lines (or the four agent chips for
+           the twin). */}
         {LAYERS.map((layer, i) => (
           <motion.g
             key={layer.id}

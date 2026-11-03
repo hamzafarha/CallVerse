@@ -1,5 +1,7 @@
 """State passed between the LangGraph nodes of one conversation."""
 
+# TypedDict: a dictionary whose keys and value types are declared (it helps the editor and LangGraph).
+# total=False: every key is optional, because the nodes fill them in turn.
 from typing import Any, TypedDict
 
 

@@ -1,9 +1,15 @@
+/**
+ * Voice mode controls (Live chat and Advisor desk): an on/off switch, a Stop button while an agent speaks,
+ * and a small menu to choose the voices and the speed. The speaking itself happens in lib/voice.ts, with the
+ * browser's built-in speech synthesis (no server, no cost).
+ */
 import { AnimatePresence, motion } from "framer-motion";
 import { AudioLines, ChevronDown, Square, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Voice, VoiceRole } from "../lib/voice";
 import { clsx } from "./ui";
 
+// Labels of the two voices in the menu.
 const ROLE_LABEL: Record<VoiceRole, string> = { advisor: "Advisor agent voice", customer: "Customer voice" };
 
 /** Voice mode switch, a Stop button while an agent speaks, and a menu to pick the voices. */
@@ -11,6 +17,7 @@ export function VoiceControls({ voice, roles = ["advisor", "customer"] }: { voic
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
+  // While the menu is open, a click outside it or the Escape key closes it.
   useEffect(() => {
     if (!open) return;
     const close = (event: MouseEvent | KeyboardEvent) => {
@@ -24,6 +31,7 @@ export function VoiceControls({ voice, roles = ["advisor", "customer"] }: { voic
     };
   }, [open]);
 
+  // Some browsers have no speech synthesis: show a disabled button.
   if (!voice.supported) {
     return (
       <button className="btn btn-ghost py-1.5 text-xs" disabled title="This browser has no speech synthesis">
@@ -31,6 +39,7 @@ export function VoiceControls({ voice, roles = ["advisor", "customer"] }: { voic
       </button>
     );
   }
+  // The voice currently used for each role.
   const current: Record<VoiceRole, SpeechSynthesisVoice | undefined> = { advisor: voice.advisorVoice, customer: voice.customerVoice };
   return (
     <div ref={box} className="relative flex items-center gap-1">
@@ -48,6 +57,7 @@ export function VoiceControls({ voice, roles = ["advisor", "customer"] }: { voic
       >
         {voice.enabled ? <Volume2 size={14} /> : <VolumeX size={14} />} Voice
       </button>
+      {/* Stop button, only while an agent is speaking. */}
       <AnimatePresence>
         {voice.speaking !== null && (
           <motion.button
@@ -62,6 +72,7 @@ export function VoiceControls({ voice, roles = ["advisor", "customer"] }: { voic
           </motion.button>
         )}
       </AnimatePresence>
+      {/* Opens the voice settings menu. */}
       <button className="btn btn-ghost btn-icon h-8 w-8" title="Voice settings" aria-expanded={open} onClick={() => setOpen(!open)}>
         <ChevronDown size={14} />
       </button>
@@ -81,6 +92,7 @@ export function VoiceControls({ voice, roles = ["advisor", "customer"] }: { voic
                 language → Speech, or use Chrome or Edge (they offer online English voices).
               </p>
             )}
+            {/* One voice picker per role. */}
             {roles.map((role) => (
               <label key={role} className="block">
                 <span className="label">{ROLE_LABEL[role]}</span>
@@ -97,6 +109,7 @@ export function VoiceControls({ voice, roles = ["advisor", "customer"] }: { voic
                 </select>
               </label>
             ))}
+            {/* Speaking speed, from 0.7x to 1.5x. */}
             <label className="block">
               <span className="label">Speed ×{voice.rate.toFixed(1)}</span>
               <input

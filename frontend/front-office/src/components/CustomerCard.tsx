@@ -3,7 +3,9 @@ import { ArrowRight, MapPin } from "lucide-react";
 
 /** A demo customer (one real contact of the twin) the visitor can sign in as. */
 export function CustomerCard({ customer, onSelect, index = 0 }: { customer: any; onSelect: () => void; index?: number }) {
+  // Order status at the contact date, with its label and color.
   const status = ORDER_STATUS[customer.order.status_at_contact] ?? { label: humanize(customer.order.status_at_contact), color: "var(--series-1)" };
+  // Late = past the estimated delivery date and still not delivered.
   const late = Number(customer.order.days_past_estimate) > 0 && customer.order.status_at_contact !== "delivered";
   return (
     <motion.button
@@ -13,6 +15,7 @@ export function CustomerCard({ customer, onSelect, index = 0 }: { customer: any;
       onClick={onSelect}
       className="group text-left"
     >
+      {/* Name, city, persona dot, problem type, first message and order status. */}
       <Spotlight className="card card-hover h-full overflow-hidden p-5">
         <div className="flex items-center gap-3">
           <Avatar name={customer.name} size={44} />
@@ -22,6 +25,7 @@ export function CustomerCard({ customer, onSelect, index = 0 }: { customer: any;
               <MapPin size={11} /> {customer.city}, {customer.state}
             </div>
           </div>
+          {/* Dot whose color shows the persona (impatient, normal or patient). */}
           <span
             className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full"
             title={`${customer.persona} persona`}

@@ -1,3 +1,7 @@
+/**
+ * Overview page of the back office (the control room's home): a hero with the BO/DSO verdicts, key data
+ * numbers, the scorecard cards, the architecture map and the live LLM status.
+ */
 import {
   APP_URLS,
   Card,
@@ -18,6 +22,7 @@ import { Activity, ArrowRight, Bot, Cpu, Database, MessageSquare, Package, Smile
 import { Link } from "react-router-dom";
 import { ArchitectureMap } from "../components/ArchitectureMap";
 
+// One color per business objective (BO1 to BO4).
 const BO_COLOR: Record<string, string> = {
   BO1: "var(--series-1)",
   BO2: "var(--series-7)",
@@ -26,14 +31,17 @@ const BO_COLOR: Record<string, string> = {
 };
 
 export default function OverviewPage() {
+  // Data from /api/overview (data numbers, objectives, scorecard) and /api/system (LLMs).
   const { data, error } = useApi<any>("/api/overview");
   const system = useApi<any>("/api/system");
   if (error) return <ErrorBox error={error} />;
   if (!data) return <PageSkeleton />;
   const d = data.data;
+  // No evaluation saved yet: build empty cards from the objectives, so the page still shows the plan.
   const cards = data.scorecard.length
     ? data.scorecard
     : Object.entries(data.objectives).map(([bo, o]: any) => ({ bo, dso: o.dso, objective: o.title, result: null, passed: null, main_idea: "", baseline: "" }));
+  // How many main ideas beat their baseline (the ring in the hero).
   const passed = cards.filter((c: any) => c.passed).length;
 
   return (
@@ -69,6 +77,7 @@ export default function OverviewPage() {
               </a>
             </div>
           </div>
+          {/* Ring: main ideas kept out of 4; then one line per DSO. */}
           <div className="flex items-center justify-center gap-6">
             <Ring value={passed / Math.max(cards.length, 1)} size={150} stroke={12} color="var(--brand)">
               <div className="text-center">
@@ -119,6 +128,8 @@ export default function OverviewPage() {
           </div>
         </Reveal>
         <div className="grid gap-4 md:grid-cols-2">
+          {/* One card per business objective: its DSO, the verdict, main idea vs baseline, the result and
+             the switch rule. */}
           {cards.map((card: any, i: number) => (
             <Reveal key={card.bo} delay={i * 0.08}>
               <Spotlight className="card card-hover h-full p-6">
@@ -164,6 +175,7 @@ export default function OverviewPage() {
           </Link>
         }
       >
+        {/* Provider status, GPU, the model of each agent role, and the retriever. */}
         {system.data ? (
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <Status

@@ -1,5 +1,6 @@
 """Discrete-event simulation of the contact center (SimPy): the digital twin core."""
 
+# Re-export everything the twin, the agents and the API need from the simulator.
 from callverse.simulation.customers import (
     PATIENCE_CLASSES,
     SECONDS_PER_DAY,

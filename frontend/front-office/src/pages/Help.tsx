@@ -4,11 +4,17 @@ import { useEffect } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { HelpSearch } from "../components/HelpSearch";
 
+/**
+ * Help centre: the list of articles (/help), or one article (/help/:articleId).
+ */
 export default function HelpPage() {
   const { articleId } = useParams();
   return articleId ? <Article id={articleId} /> : <Index />;
 }
 
+/**
+ * All knowledge-base articles, with the search box on top. Internal articles carry a "staff" lock.
+ */
 function Index() {
   const articles = useApi<any[]>("/api/kb/articles");
   return (
@@ -54,10 +60,15 @@ function Index() {
   );
 }
 
+/**
+ * One article: table of contents on the left, the Markdown text in the middle, a chat button on the right.
+ */
 function Article({ id }: { id: string }) {
   const { data, error } = useApi<any>(`/api/kb/articles/${id}`);
   const location = useLocation();
   const anchor = location.hash.slice(1);
+  // Coming from a search result (#section in the URL): scroll to that section once the text is loaded;
+  // otherwise start at the top.
   useEffect(() => {
     if (data && anchor) window.setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }), 300);
     else window.scrollTo({ top: 0 });
@@ -71,6 +82,7 @@ function Article({ id }: { id: string }) {
             <ArrowLeft size={14} /> Help centre
           </Link>
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">On this page</div>
+          {/* Table of contents: one link per section; the current one is highlighted. */}
           {(data?.sections ?? []).map((s: string) => (
             <a
               key={s}
@@ -83,6 +95,7 @@ function Article({ id }: { id: string }) {
         </div>
       </aside>
       <article className="card min-w-0 p-6 md:p-10">
+        {/* The article text, rendered by our small Markdown component. */}
         {data ? <Markdown text={data.markdown} highlight={anchor} /> : <Skeleton className="h-96" />}
       </article>
       <aside>

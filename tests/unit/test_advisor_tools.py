@@ -1,4 +1,6 @@
 """Advisor tools for agentic tool calling: fact check, bank directory, gating, history."""
+# Tests agents/advisor/tools.py, draft_check.py and bank_directory.py. No LLM: the tools are plain Python
+# functions, so they can be tested directly.
 
 import json
 import sqlite3
@@ -19,6 +21,7 @@ APPROVED = (
 
 
 def sources() -> Sources:
+    """Facts the advisor is allowed to state: the order facts and one approved policy sentence."""
     facts = {
         "order_id": ORDER,
         "estimated_delivery": "2018-05-20",
@@ -30,6 +33,7 @@ def sources() -> Sources:
 
 # ------------------------------------------------------------------ draft check
 def test_draft_with_sourced_facts_passes() -> None:
+    """A draft whose dates, amounts and promises all come from the sources passes the fact check."""
     draft = (
         "Your order was due on May 20, 2018 and is 5 days late (R$ 129,90). "
         "Please allow three more business days."
@@ -50,16 +54,19 @@ def test_draft_with_sourced_facts_passes() -> None:
     ],
 )
 def test_draft_problems_are_caught(draft: str, problem: str) -> None:
+    """Invented facts in a draft (wrong date, amount or promise) are caught by the fact check."""
     check = check_draft(draft, sources())
     assert not check.passed and any(problem in p for p in check.problems)
 
 
 def test_negations_and_ordinary_words_are_not_flagged() -> None:
+    """Negations and ordinary words are not mistaken for promises or facts (no false alarms)."""
     draft = "We will never ask for your password. Maybe the Marketing team can help."
     assert check_draft(draft, sources()).passed
 
 
 def test_extraction_helpers() -> None:
+    """The helpers that pull dates, timings and amounts out of a text work."""
     assert find_dates("on 12/03/2018")[0][1] == {(2018, 3, 12), (2018, 12, 3)}
     assert find_timings("within forty-eight hours")[0][1] == (48, "hour")
     assert find_timings("5 working days")[0][1] == (5, "business day")
@@ -69,6 +76,7 @@ def test_extraction_helpers() -> None:
 
 # --------------------------------------------------------------- bank directory
 def fake_banks(url: str, timeout: float) -> list[dict]:
+    """Stand-in for the BrasilAPI download: two banks, one of them without a code."""
     return [
         {"code": 341, "name": "ITAU", "fullName": "Itaú Unibanco S.A.", "ispb": "60701190"},
         {"code": None, "name": "an institution without a code"},
@@ -76,6 +84,7 @@ def fake_banks(url: str, timeout: float) -> list[dict]:
 
 
 def test_bank_directory_downloads_once_then_reads_the_cache(tmp_path) -> None:
+    """The bank list is downloaded once, then read from the cache file."""
     downloads: list[str] = []
 
     def downloader(url: str, timeout: float) -> list[dict]:
@@ -95,6 +104,7 @@ def test_bank_directory_downloads_once_then_reads_the_cache(tmp_path) -> None:
 
 
 def test_bank_directory_offline_without_cache(tmp_path) -> None:
+    """Offline and without a cache, the bank directory reports that it is unavailable (no crash)."""
     def offline(url: str, timeout: float) -> list[dict]:
         raise OSError("no network")
 
@@ -104,6 +114,7 @@ def test_bank_directory_offline_without_cache(tmp_path) -> None:
 
 # ---------------------------------------------------------------------- gating
 def test_gating_offers_at_most_five_tools_per_stage() -> None:
+    """Gating: at most five tools are offered to the LLM at each stage of the chat."""
     for group in ["wismo", "cancel_refund", "post_delivery", "order_admin", None]:
         names = agentic_tool_names("investigate", group)
         assert names[0] == "lookup_order" and len(names) <= 5
@@ -117,11 +128,13 @@ def test_gating_offers_at_most_five_tools_per_stage() -> None:
 
 # ----------------------------------------------------------------------- tools
 def make_tools(tmp_path) -> AdvisorTools:
+    """Advisor tools as of a fixed date, with the fake bank directory."""
     banks = BankDirectory("https://example.test/banks", tmp_path / "banks.json", downloader=fake_banks)
     return AdvisorTools(as_of=pd.Timestamp("2018-05-25 10:00"), banks=banks)
 
 
 def test_validate_bank_code(tmp_path) -> None:
+    """validate_bank_code accepts a real bank code and rejects an unknown one."""
     tools = make_tools(tmp_path)
     assert tools.validate_bank_code("341")["bank_name"] == "Itaú Unibanco S.A."
     assert tools.validate_bank_code("1")["valid"] is False  # 001 is not in the fake list
@@ -130,6 +143,9 @@ def test_validate_bank_code(tmp_path) -> None:
 
 
 def test_escalation_happens_once_and_callers_are_recorded(tmp_path) -> None:
+    """escalate_to_human runs only once per chat, and every call records who made it (LLM, code or safety
+    net).
+    """
     tools = make_tools(tmp_path)
     first = json.loads(tools.execute("escalate_to_human", {"reason": "PROCON complaint", "urgency": "high"}))
     assert first["handed_to"] == "supervisor" and "1 business day" in first["tell_customer"]
@@ -141,6 +157,7 @@ def test_escalation_happens_once_and_callers_are_recorded(tmp_path) -> None:
 
 
 def test_check_draft_reply_ignores_its_own_earlier_results(tmp_path) -> None:
+    """The fact check does not treat its own earlier results as sources."""
     tools = make_tools(tmp_path)
     assert not tools.check_draft_reply("It arrives on 15 May.")["passed"]
     # The first result quotes "15 May" in its problems: that must not become a source.
@@ -149,6 +166,7 @@ def test_check_draft_reply_ignores_its_own_earlier_results(tmp_path) -> None:
 
 
 def test_tool_calls_have_a_one_line_summary(tmp_path) -> None:
+    """Every tool call gets a one-line summary (shown in the UI)."""
     from callverse.agents.advisor.tools import summarize_tool_call
 
     tools = make_tools(tmp_path)
@@ -167,6 +185,9 @@ def test_tool_calls_have_a_one_line_summary(tmp_path) -> None:
 
 @requires_data
 def test_customer_history_never_shows_the_future() -> None:
+    """get_customer_history only shows orders and tickets from before the contact date (no look into the
+    future).
+    """
     from callverse.config import database_path
 
     with sqlite3.connect(database_path()) as connection:
@@ -186,6 +207,7 @@ def test_customer_history_never_shows_the_future() -> None:
 
 # ------------------------------------------------------- simulated customer side
 def test_customer_bank_is_fixed_by_the_contact_and_sometimes_mistyped() -> None:
+    """The simulated customer's bank is fixed by the contact id, and is sometimes mistyped on purpose."""
     from callverse.agents.client.profiles import CUSTOMER_BANKS, customer_bank
 
     banks = [customer_bank(f"SC{i:06d}") for i in range(500)]
@@ -196,6 +218,7 @@ def test_customer_bank_is_fixed_by_the_contact_and_sometimes_mistyped() -> None:
 
 
 def test_customer_gives_the_bank_code_and_fixes_a_typo() -> None:
+    """The simulated customer gives its bank code and corrects a typo when the advisor says it is wrong."""
     from callverse.agents.client.profiles import CustomerProfile, customer_bank
     from callverse.agents.client.simulator import ClientAgent
 

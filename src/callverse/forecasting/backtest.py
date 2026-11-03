@@ -6,6 +6,9 @@ up to that Sunday. Errors are measured per intent group and for the total
 naive baseline ("same day last week").
 """
 
+# Rolling-origin backtest = replaying the past: stand on a Sunday, forecast the next 7 days with only what was
+# known then, compare with what really happened, move one week on, repeat. It is the honest way to test a
+# forecast.
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -30,6 +33,8 @@ FAST_MODELS = ["seasonal_naive", "weekday_mean_4w", "lightgbm"]
 
 def accuracy(table: pd.DataFrame) -> pd.Series:
     """wMAPE (%), MAE, RMSE and bias (%) of a table with forecast and actual."""
+    # wMAPE = total absolute error / total actual contacts, in %: the main metric. MAE = the average error in
+    # contacts. RMSE punishes big errors more. bias = forecasts too high (+) or too low (-).
     error = table["forecast"] - table["actual"]
     total = table["actual"].sum()
     return pd.Series(
@@ -85,6 +90,7 @@ def run_backtest(
     holidays = baselines.prophet_holidays(daily_calendar) if "prophet" in models else None
     problems: dict[str, int] = {}
     rows = []
+    # For each Sunday origin and each problem group, run every baseline.
     for number, origin in enumerate(origins, start=1):
         days = baselines.target_days(origin)
         for group in feature_set.groups:
@@ -100,6 +106,7 @@ def run_backtest(
             for model_name, values in per_model.items():
                 for horizon, (day, value) in enumerate(zip(days, values), start=1):
                     rows.append((origin, day, horizon, group, model_name, float(value)))
+        # LightGBM is retrained at every origin, with data up to that Sunday only.
         if "lightgbm" in models:
             model = fit_lightgbm(feature_set, train_end=origin)
             for row in predict_days(model, feature_set, days).itertuples():
@@ -119,6 +126,7 @@ def run_backtest(
     predictions = pd.DataFrame(
         rows, columns=["origin", "date", "horizon", "intent_group", "model", "forecast"]
     )
+    # Join the real values, and add a "total" level (the sum of the 4 groups).
     actuals = series.rename_axis(index="date", columns="intent_group").stack().rename("actual").reset_index()
     predictions = predictions.merge(actuals, on=["date", "intent_group"], how="left", validate="many_to_one")
     total = predictions.groupby(["origin", "date", "horizon", "model"], as_index=False)[
@@ -126,6 +134,7 @@ def run_backtest(
     ].sum()
     total["intent_group"] = "total"
     all_levels = pd.concat([predictions, total], ignore_index=True)
+    # One row of metrics per level and model.
     metrics = (
         all_levels.groupby(["intent_group", "model"])
         .apply(accuracy, include_groups=False)

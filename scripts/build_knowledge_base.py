@@ -18,6 +18,9 @@ def order_linked_intents(data_config_path: Path) -> set[str]:
 
 
 def main() -> None:
+    """Read the Markdown documents, split them into sections, embed them with bge-m3 and save the FAISS
+    index.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config", type=Path, default=PROJECT_ROOT / "configs" / "agents.yaml"
@@ -38,5 +41,6 @@ def main() -> None:
     )
 
 
+# Run: python scripts/build_knowledge_base.py (again after changing a document in data/knowledge_base/docs).
 if __name__ == "__main__":
     main()

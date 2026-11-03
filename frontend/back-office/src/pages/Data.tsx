@@ -1,3 +1,8 @@
+/**
+ * Data page: how the synthetic contacts are built from the real Olist orders, with charts (weekly contacts,
+ * contacts per problem type, hour profile, CSAT), the hidden causes, the Pandera data contracts and sample
+ * contacts.
+ */
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, ChartTooltip, ErrorBox, Legend, Loading, PageHeader, Status } from "@callverse/shared";
 import { useApi } from "@callverse/shared";
@@ -7,7 +12,9 @@ export default function DataPage() {
   const { data, error, loading } = useApi<any>("/api/data/summary");
   if (error) return <ErrorBox error={error} />;
   if (loading || !data) return <Loading />;
+  // Keep only the date part of each week (YYYY-MM-DD) for the x axis.
   const weekly = data.weekly.map((r: any) => ({ ...r, week: String(r.week).slice(0, 10) }));
+  // Total contacts per problem group (the sum of its intents).
   const groupTotals = GROUPS.map((g) => ({
     group: GROUP_LABEL[g],
     key: g,
@@ -34,6 +41,7 @@ export default function DataPage() {
               <XAxis dataKey="week" tickLine={false} axisLine={{ stroke: "var(--baseline)" }} minTickGap={40} />
               <YAxis tickLine={false} axisLine={false} width={40} />
               <Tooltip content={<ChartTooltip />} />
+              {/* Stacked areas: one per problem group (stackId puts them on top of each other). */}
               {GROUPS.map((g) => (
                 <Area key={g} type="monotone" dataKey={g} name={GROUP_LABEL[g]} stackId="1"
                   stroke="var(--surface-1)" strokeWidth={1} fill={GROUP_COLOR[g]} fillOpacity={0.9} />
@@ -90,6 +98,7 @@ export default function DataPage() {
           <table className="data">
             <thead><tr><th>Situation</th><th className="text-right">Contacts</th></tr></thead>
             <tbody>
+              {/* The order situation that generated each contact (e.g. late delivery, cancellation). */}
               {data.situations.map((r: any) => (
                 <tr key={r.situation}><td className="text-ink">{r.situation.replaceAll("_", " ")}</td><td className="text-right">{num(r.contacts, 0)}</td></tr>
               ))}
@@ -100,6 +109,7 @@ export default function DataPage() {
           <table className="data">
             <thead><tr><th>Table</th><th className="text-right">Rows</th><th>Contract</th></tr></thead>
             <tbody>
+              {/* One row per table: number of rows and whether its contract passed. */}
               {data.contracts.map((r: any) => (
                 <tr key={r.table}><td className="text-ink">{r.table}</td><td className="text-right">{num(r.rows, 0)}</td><td><Status ok={r.passed} /></td></tr>
               ))}

@@ -2,12 +2,16 @@ import { PolarAngleAxis, PolarGrid, Radar, RadarChart, ResponsiveContainer } fro
 import { Ring } from "./motion";
 import { Status } from "./ui";
 
+// The five criteria of the Quality agent's rubric (same list as agents/quality/rubric.py), each scored out of
+// 5.
 const CRITERIA = ["compliance", "relevance", "satisfaction", "sentiment", "resolution"];
 
 /** Quality agent's scorecard: radar of the five criteria + overall ring + verdicts. */
 export function QualityScore({ review, compact = false }: { review: { scorecard: any; reference?: any; kpis?: any }; compact?: boolean }) {
   const card = review.scorecard;
   const data = CRITERIA.map((c) => ({ criterion: c, score: card.scores?.[c] ?? 0 }));
+  // Overall score: the judge's own, or else the mean of the five criteria. Green from 4, orange from 3, red
+  // below.
   const overall = card.overall ?? data.reduce((sum, d) => sum + d.score, 0) / data.length;
   const color = overall >= 4 ? "var(--good)" : overall >= 3 ? "var(--warning)" : "var(--critical)";
   return (
@@ -28,6 +32,7 @@ export function QualityScore({ review, compact = false }: { review: { scorecard:
           </div>
         </div>
       </div>
+      {/* Radar chart: one axis per criterion. */}
       <div className={compact ? "h-44" : "h-56"}>
         <ResponsiveContainer>
           <RadarChart data={data} outerRadius="72%">

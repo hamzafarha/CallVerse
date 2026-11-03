@@ -1,3 +1,8 @@
+/**
+ * Agent theater (DSO2): one real customer contact runs through the twin with no human. The Client agent plays
+ * the customer, the Workforce agent routes, the Advisor agent answers and the Quality agent grades. Every
+ * step is shown live (pipeline, conversation, trace, scorecard).
+ */
 import {
   ActivityRow,
   AgentPipeline,
@@ -24,6 +29,7 @@ import { Bot, Cpu, Play, RotateCcw, Square, Timer } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 export default function AgentsPage() {
+  // LLM status, and a list of 30 historical contacts to choose from.
   const status = useApi<any>("/api/agents/status");
   const contacts = useApi<any[]>("/api/agents/contacts?n=30");
   const [contactId, setContactId] = useState("");
@@ -34,6 +40,7 @@ export default function AgentsPage() {
   const scroller = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(Date.now());
 
+  // A clock that ticks twice a second (the run timer), and auto-scroll to the newest message.
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(timer);
@@ -43,6 +50,7 @@ export default function AgentsPage() {
   }, [state.messages.length, state.streaming?.text]);
 
   const running = state.status === "running" || state.status === "connecting";
+  // Both sides are agents (customer: agent, advisor: agent). A random seed makes each run different.
   const start = () =>
     session.start({
       contact_id: contactId || null,
@@ -55,6 +63,7 @@ export default function AgentsPage() {
   const llm = status.data?.llm_available;
   const profile = state.ready?.profile;
   const stage = state.stages[state.stages.length - 1];
+  // Run time: until the last stage once the review is in, otherwise until now.
   const elapsed = state.startedAt ? ((state.review ? state.stages[state.stages.length - 1]?.at ?? now : now) - state.startedAt) / 1000 : 0;
 
   return (
@@ -67,12 +76,18 @@ export default function AgentsPage() {
       >
         {status.data && (
           <Pill color={llm ? "var(--good-text)" : "var(--warning)"}>
-            <Cpu size={12} /> {llm ? "Local Hugging Face LLMs ready" : "Offline backups only"}
+            <Cpu size={12} /> {llm
+              ? status.data.llm?.backend === "openrouter"
+                ? "OpenRouter LLMs ready (local backup)"
+                : "Local LLMs ready"
+              : "Offline backups only"}
           </Pill>
         )}
       </PageHeader>
 
       <Card>
+        {/* Run settings: the contact (or a random one), the engine (LLM or offline backups), the advisor
+           variant, and start/stop. */}
         <div className="grid gap-4 lg:grid-cols-[2fr_auto_auto_auto] lg:items-end">
           <div>
             <label className="label">Customer contact (from history)</label>
@@ -92,7 +107,7 @@ export default function AgentsPage() {
               value={engine}
               onChange={setEngine}
               options={[
-                { value: "auto", label: <><Cpu size={13} /> Local LLMs</>, disabled: status.data && !llm },
+                { value: "auto", label: <><Cpu size={13} /> LLMs</>, disabled: status.data && !llm },
                 { value: "template", label: "Offline backups" },
               ]}
             />
@@ -122,6 +137,7 @@ export default function AgentsPage() {
             )}
           </div>
         </div>
+        {/* Which model plays each role, and the retriever. */}
         {status.data?.llm && (
           <div className="mt-4 flex flex-wrap gap-2 text-xs">
             {Object.entries(status.data.llm.roles).map(([role, m]: any) => (
@@ -145,6 +161,7 @@ export default function AgentsPage() {
           ) : null
         }
       >
+        {/* The agent cards light up as the graph runs. */}
         <AgentPipeline active={state.activeAgent} visited={state.visited} stages={state.stages} done={!!state.review} />
       </Card>
 
@@ -156,6 +173,7 @@ export default function AgentsPage() {
         >
           <div ref={scroller} className="space-y-5">
             {!state.messages.length && !running && <EmptyState title="Nothing running" text="Pick a contact and start: every step appears as the agent works." icon={<Bot size={20} />} />}
+            {/* Advisor messages on the right, the simulated customer on the left. */}
             {state.messages.map((m, i) => (
               <ChatBubble key={i} message={m} mine={m.speaker === "advisor"} name={`Customer ${profile?.contact_id ?? ""}`} />
             ))}
@@ -170,6 +188,7 @@ export default function AgentsPage() {
             <LiveTrace state={state} />
           </Card>
           <AnimatePresence>
+            {/* After the run: the Quality agent's scorecard and the conversation KPIs. */}
             {state.review && (
               <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
                 <Card title="Quality agent scorecard">

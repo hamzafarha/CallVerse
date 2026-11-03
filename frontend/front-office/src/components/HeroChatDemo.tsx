@@ -14,12 +14,17 @@ const SCRIPT: { who: "customer" | "advisor"; text: string; tools?: string[] }[] 
   },
 ];
 
+/**
+ * Plays the script message by message: customer messages appear at once, advisor messages are typed two
+ * letters at a time. After the last message it waits 4.5 s and starts again.
+ */
 export function HeroChatDemo() {
   const [round, setRound] = useState(0);
   const [step, setStep] = useState(0);
   const [typed, setTyped] = useState(0);
 
   useEffect(() => {
+    // End of the script: wait, then restart (round + 1 gives new React keys, so the animations replay).
     if (step >= SCRIPT.length) {
       const reset = window.setTimeout(() => {
         setRound((r) => r + 1);
@@ -29,10 +34,12 @@ export function HeroChatDemo() {
       return () => window.clearTimeout(reset);
     }
     const current = SCRIPT[step];
+    // Advisor message not finished: type 2 more letters (after a 1 s pause before the first ones).
     if (current.who === "advisor" && typed < current.text.length) {
       const t = window.setTimeout(() => setTyped((n) => n + 2), typed === 0 ? 1000 : 22);
       return () => window.clearTimeout(t);
     }
+    // Message complete: go to the next one after a short pause.
     const next = window.setTimeout(() => {
       setStep((s) => s + 1);
       setTyped(0);
@@ -40,6 +47,7 @@ export function HeroChatDemo() {
     return () => window.clearTimeout(next);
   }, [step, typed]);
 
+  // The messages shown so far.
   const shown = SCRIPT.slice(0, Math.min(step + 1, SCRIPT.length));
   return (
     <div className="relative mx-auto w-full max-w-md">
@@ -93,6 +101,7 @@ export function HeroChatDemo() {
           })}
         </div>
       </motion.div>
+      {/* Floating cards around the chat that show the agents at work (illustration only, fixed values). */}
       <Floating className="-bottom-7 -left-8 hidden sm:flex" delay={0.6} icon={ScanSearch} title="Knowledge base" text="“Order late” · cosine 0.80" />
       <Floating className="-right-10 -top-6 hidden md:flex" delay={1} icon={Gauge} title="Workforce agent" text="WISMO desk · 12 s wait" />
       <Floating className="-bottom-7 -right-6 hidden md:flex" delay={1.4} icon={ShieldCheck} title="Quality review" text="4.8 / 5 · policy-correct" />
@@ -100,6 +109,9 @@ export function HeroChatDemo() {
   );
 }
 
+/**
+ * A small floating card (icon, title, text) that bobs gently (animate-float).
+ */
 function Floating({ className, delay, icon: Icon, title, text }: { className: string; delay: number; icon: any; title: string; text: string }) {
   return (
     <motion.div

@@ -1,4 +1,8 @@
 """Shared fixtures: synthetic inputs so unit tests never need the real data."""
+# How pytest works here: it collects the files named test_*.py and runs every function named test_*. A fixture
+# (a function marked @pytest.fixture) prepares test data; a test receives it just by naming it as a parameter.
+# The fixtures in this file are shared by all tests. Run everything with pytest -m "not llm" (this skips the
+# tests that need a real LLM).
 
 import os
 from pathlib import Path
@@ -36,6 +40,7 @@ def daily_counts() -> pd.DataFrame:
 
 @pytest.fixture
 def hour_shares() -> np.ndarray:
+    """Share of the day's contacts per hour: night hours (0-6) get less. The shares sum to 1."""
     shares = np.ones(24)
     shares[:7] = 0.2
     return shares / shares.sum()
@@ -43,4 +48,5 @@ def hour_shares() -> np.ndarray:
 
 @pytest.fixture
 def project_root() -> Path:
+    """Folder of the project (the parent of tests/)."""
     return Path(__file__).resolve().parents[1]

@@ -1,3 +1,8 @@
+/**
+ * Workforce agent page (DSO1 + DSO3). Shift planning: the week's roster from the forecast (OR-Tools CP-SAT),
+ * with costs, labour rules and heatmaps. Real-time routing: how the MaskablePPO router compares with FIFO and
+ * the skill-score backup.
+ */
 import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, ErrorBar, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { StaffingHeatmap } from "../components/Heatmap";
@@ -23,12 +28,16 @@ export default function WorkforcePage() {
   );
 }
 
+/**
+ * Shift planning tab: choose a scenario week, a planner and the demand; the server solves the roster.
+ */
 function Schedule() {
   const [scenario, setScenario] = useState("baseline");
   const [planner, setPlanner] = useState("cpsat");
   const [prepared, setPrepared] = useState(true);
   const config = useApi<any>("/api/twin/config");
   const { data, error, loading } = useApi<any>(`/api/workforce/schedule?scenario=${scenario}&planner=${planner}&prepared=${prepared}`);
+  // One row per agent in the roster table.
   const roster = data?.roster ?? [];
   const agents = Array.from(new Set(roster.map((r: any) => r.agent_id))) as number[];
   return (
@@ -67,6 +76,7 @@ function Schedule() {
             <Stat label="Understaffed hours" value={num(data.costs.planned_understaffed_hours, 0)} hint="vs Erlang C requirement" tone={data.costs.planned_understaffed_hours ? "bad" : "good"} />
             <Stat label="Headcount" value={num(data.costs.headcount, 0)} hint={data.status !== "ok" ? `CP-SAT ${data.status} in ${num(data.solve_seconds, 1)} s` : undefined} />
           </div>
+          {/* The hard labour rules of the roster, checked after solving. */}
           {data.compliance && (
             <Card title="Labour rules" subtitle="Hard constraints of the CP-SAT roster">
               <div className="flex flex-wrap gap-4">
@@ -77,6 +87,8 @@ function Schedule() {
               </div>
             </Card>
           )}
+          {/* Left: agents needed per hour (Erlang C on the forecast). Right: agents scheduled (red outline
+             = too few). */}
           <div className="grid gap-6 xl:grid-cols-2">
             <Card title="Required agents (Erlang C on the forecast)" subtitle="80% of chats answered within 20 s, occupancy ≤ 90%">
               <StaffingHeatmap rows={data.plan} value={(r) => r.required} />
@@ -85,6 +97,7 @@ function Schedule() {
               <StaffingHeatmap rows={data.plan} value={(r) => r.regular + r.overtime} highlight={(r) => r.regular + r.overtime < r.required} />
             </Card>
           </div>
+          {/* Roster: each agent's shift per day (start-end hour), and total hours. */}
           {roster.length > 0 && (
             <Card title="Roster" subtitle={`${agents.length} agents, shifts of 4, 6 or 8 hours`}>
               <div className="max-h-96 overflow-auto">
@@ -115,12 +128,18 @@ function Schedule() {
   );
 }
 
+/**
+ * Real-time routing tab: how the PPO agent decides (state, action, reward) and its results vs FIFO on unseen
+ * stressed days.
+ */
 function Routing() {
   const { data, error, loading } = useApi<any>("/api/workforce/routing");
   if (error) return <ErrorBox error={error} />;
   if (loading || !data) return <Loading />;
   const comparison = data.comparison ?? [];
   const routers = Array.from(new Set(comparison.map((r: any) => r.router))) as string[];
+  // Bars per router for one KPI; the error bar is half the 95% CI of the paired difference vs FIFO (none for
+  // FIFO itself).
   const bars = (kpi: string) => routers.map((router) => {
     const row = comparison.find((r: any) => r.router === router && r.kpi === kpi) ?? {};
     return { router: ROUTER_LABEL[router] ?? router, key: router, mean: row.mean,
@@ -179,6 +198,9 @@ function Routing() {
   );
 }
 
+/**
+ * Bar chart of one KPI per router, with error bars (scale = 100 shows rates in %).
+ */
 function RouterBars({ data, unit, scale = 1 }: { data: any[]; unit: string; scale?: number }) {
   const scaled = data.map((d) => ({ ...d, mean: d.mean * scale, err: d.err * scale }));
   return (

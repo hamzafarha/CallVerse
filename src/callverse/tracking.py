@@ -5,6 +5,8 @@ points it at the MLflow server). If MLflow is not installed, runs are not tracke
 but the code still works.
 """
 
+# MLflow is a tool that records each training or evaluation "run": its settings (params), its scores (metrics)
+# and its files (artifacts). The MLOps page of the back office lists them.
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -16,8 +18,10 @@ from callverse.config import PROJECT_ROOT, load_yaml
 
 def tracking_uri() -> str:
     """Absolute tracking URI (a relative ``sqlite:///mlflow.db`` is anchored at the project)."""
+    # The environment variable wins (Docker sets it), otherwise the URI of configs/app.yaml.
     uri = os.environ.get("MLFLOW_TRACKING_URI") or load_yaml("app")["mlflow"]["tracking_uri"]
     prefix = "sqlite:///"
+    # A relative SQLite path is made absolute, so the same mlflow.db is used from any folder.
     if uri.startswith(prefix) and not Path(uri.removeprefix(prefix)).is_absolute():
         return prefix + (PROJECT_ROOT / uri.removeprefix(prefix)).resolve().as_posix()
     return uri
@@ -25,6 +29,7 @@ def tracking_uri() -> str:
 
 def _set_experiment(mlflow: Any, name: str) -> None:
     """Create the experiment with artifacts under the project, then select it."""
+    # Only for a local MLflow: keep the run artifacts inside the project (mlruns/).
     if mlflow.get_experiment_by_name(name) is None and not os.environ.get("MLFLOW_TRACKING_URI"):
         artifacts = PROJECT_ROOT / load_yaml("app")["mlflow"].get("artifact_dir", "mlruns")
         artifacts.mkdir(parents=True, exist_ok=True)
@@ -45,14 +50,17 @@ def mlflow_run(experiment: str, run_name: str, tags: dict[str, str] | None = Non
 
     ``experiment`` is a key of ``mlflow.experiments`` in ``configs/app.yaml``.
     """
+    # MLflow is optional: without it the code receives a do-nothing object and keeps working.
     try:
         import mlflow
     except ImportError:
         yield _NullRun()
         return
     mlflow.set_tracking_uri(tracking_uri())
+    # The readable experiment name, looked up in configs/app.yaml.
     name = load_yaml("app")["mlflow"]["experiments"].get(experiment, experiment)
     _set_experiment(mlflow, name)
+    # Everything logged inside this `with` block belongs to this run.
     with mlflow.start_run(run_name=run_name, tags=tags or {}):
         yield mlflow
 
@@ -61,6 +69,7 @@ def log_dataframe(run: Any, frame: Any, artifact_path: str, file_name: str) -> N
     """Log a DataFrame as a CSV artifact."""
     import tempfile
 
+    # Write the CSV into a temporary folder, then attach it to the run.
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / file_name
         frame.to_csv(path, index=False)
@@ -74,6 +83,7 @@ def recent_runs(max_results: int = 50) -> list[dict[str, Any]]:
     except ImportError:
         return []
     mlflow.set_tracking_uri(tracking_uri())
+    # The runs of all our experiments, newest first.
     names = list(load_yaml("app")["mlflow"]["experiments"].values())
     experiments = [e for e in (mlflow.get_experiment_by_name(n) for n in names) if e]
     if not experiments:
@@ -85,6 +95,7 @@ def recent_runs(max_results: int = 50) -> list[dict[str, Any]]:
         output_format="list",
     )
     by_id = {e.experiment_id: e.name for e in experiments}
+    # Plain dictionaries, ready to be sent as JSON to the frontend.
     return [
         {
             "run_id": run.info.run_id,

@@ -1,3 +1,10 @@
+/**
+ * Advisor desk (staff page): a training and demo desk where YOU are the advisor.
+ * - Left: the queue of waiting customers (real contacts; the Client agent plays them).
+ * - Middle: the conversation, with the AI copilot's draft above the reply box, or autopilot, where the
+ *   Advisor agent answers alone.
+ * - Right: tools, customer 360, copilot details and the quality review.
+ */
 import {
   ActivityRow,
   LiveTrace,
@@ -34,15 +41,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { OrderTimeline } from "../components/OrderTimeline";
 
+// Tabs of the right panel, and the advisor variants.
 type Tab = "tools" | "customer" | "copilot" | "quality";
 type Variant = "rag_policy" | "rag" | "agentic";
 
 export default function DeskPage() {
+  // seed: changing it loads a new random queue from the server.
   const [seed, setSeed] = useState(0);
   const queue = useApi<any[]>(`/api/desk/queue?n=10&seed=${seed}`);
+  // loadedAt + now: the waiting times keep ticking on screen after the queue was loaded.
   const [loadedAt, setLoadedAt] = useState(Date.now());
   const [now, setNow] = useState(Date.now());
   const [selected, setSelected] = useState<any | null>(null);
+  // Chats finished in this session, for the stats strip (quality, handle time).
   const [handled, setHandled] = useState<{ id: string; overall: number; seconds: number }[]>([]);
   const [autopilot, setAutopilot] = useState(false);
   const [engine, setEngine] = useState<"auto" | "template">("auto");
@@ -54,6 +65,7 @@ export default function DeskPage() {
   const { state } = session;
   const scroller = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
+  // Full profile of the selected customer (order, timeline, previous contacts) for the Customer tab.
   const details = useApi<any>(selected ? `/api/portal/customers/${selected.contact_id}` : null);
   // Voice mode: the agents speak (the Client agent, and the Advisor agent on autopilot),
   // each with its own voice; what you type yourself is never read back.
@@ -62,6 +74,7 @@ export default function DeskPage() {
     m.meta?.mode === "human" ? null : m.speaker === "advisor" ? { role: "advisor" } : { role: "customer", persona: selected?.persona },
   );
 
+  // Restart the wait clocks when a new queue arrives; tick every second.
   useEffect(() => setLoadedAt(Date.now()), [queue.data]);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -77,6 +90,7 @@ export default function DeskPage() {
     box.style.height = "auto";
     box.style.height = `${box.scrollHeight + 2}px`;
   }, [text]);
+  // When the Quality agent's review arrives: record the chat, open the Quality tab, show the score.
   useEffect(() => {
     if (state.review && selected) {
       const seconds = state.startedAt ? (Date.now() - state.startedAt) / 1000 : 0;
@@ -89,12 +103,16 @@ export default function DeskPage() {
     if (state.error) toast.error(state.error);
   }, [state.error]);
 
+  // Customers still waiting: not handled yet and not the one in the chat.
   const waiting = useMemo(
     () => (queue.data ?? []).filter((q) => !handled.some((h) => h.id === q.contact_id) && q.contact_id !== selected?.contact_id),
     [queue.data, handled, selected],
   );
+  // Waiting time = the server's value + the time since the queue was loaded.
   const elapsed = (q: any) => q.waiting_seconds + (now - loadedAt) / 1000;
   const longest = waiting.length ? Math.max(...waiting.map(elapsed)) : 0;
+  // Accept a customer: start a new chat session where the Client agent plays the customer and you (or the
+  // Advisor agent on autopilot) answer.
   const accept = (item: any) => {
     voice.stop();
     setSelected(item);
@@ -110,12 +128,14 @@ export default function DeskPage() {
       waited_seconds: Math.round(elapsed(item)), // the Client agent's chat timer starts from here
     });
   };
+  // Send your own reply (typed, edited, or the copilot draft as it is).
   const sendAdvisor = (message: string) => {
     if (!message.trim()) return;
     voice.stop(); // like on a call: answering interrupts the customer
     session.sendAdvisor(message.trim());
     setText("");
   };
+  // Autopilot can be switched on or off in the middle of a chat.
   const toggleAutopilot = (on: boolean) => {
     setAutopilot(on);
     if (state.status === "running") session.autopilot(on);
@@ -128,6 +148,7 @@ export default function DeskPage() {
     voice.speakingRole === "advisor" ? "speaking" : advisorWorking ? "thinking" : !autopilot && text.trim() ? "typing" : "listening";
   const customerFace: AvatarState =
     voice.speakingRole === "customer" ? "speaking" : session.busy && state.activeAgent === "client" ? "typing" : "listening";
+  // Averages over the chats handled so far.
   const avgQuality = handled.length ? handled.reduce((s, h) => s + h.overall, 0) / handled.length : null;
   const avgHandle = handled.length ? handled.reduce((s, h) => s + h.seconds, 0) / handled.length : null;
 
@@ -138,11 +159,14 @@ export default function DeskPage() {
         <span className="inline-flex items-center gap-2 font-semibold text-ink">
           <Headset size={15} className="text-brand" /> Advisor desk
         </span>
+        {/* Live numbers; the longest wait turns red after 3 minutes. */}
         <Metric label="Waiting" value={String(waiting.length)} />
         <Metric label="Longest wait" value={clock(longest)} alert={longest > 180} />
         <Metric label="Handled" value={String(handled.length)} />
         <Metric label="Avg quality" value={avgQuality ? `${avgQuality.toFixed(1)}/5` : "–"} />
         <Metric label="Avg handle time" value={avgHandle ? clock(avgHandle) : "–"} />
+        {/* Settings for the next accepted chat: advisor variant and engine; "New queue" loads other
+           customers. */}
         <div className="ml-auto flex items-center gap-2">
           <Segmented
             id="desk-variant"
@@ -155,7 +179,7 @@ export default function DeskPage() {
               { value: "agentic", label: "Agentic" },
             ]}
           />
-          <Segmented id="desk-engine" size="sm" value={engine} onChange={setEngine} options={[{ value: "auto", label: "Local LLM" }, { value: "template", label: "Offline" }]} />
+          <Segmented id="desk-engine" size="sm" value={engine} onChange={setEngine} options={[{ value: "auto", label: "AI model" }, { value: "template", label: "Offline" }]} />
           <button className="btn btn-ghost py-1 text-xs" onClick={() => setSeed((s) => s + 1)}>
             <RefreshCw size={13} /> New queue
           </button>
@@ -171,6 +195,8 @@ export default function DeskPage() {
           </div>
           <div className="flex-1 space-y-2 overflow-y-auto px-3 pb-4">
             <AnimatePresence initial={false}>
+              {/* One card per waiting customer: problem group color, name, wait clock, first message,
+                 persona. Disabled while a chat is running. */}
               {waiting.map((item) => {
                 const seconds = elapsed(item);
                 return (
@@ -213,6 +239,7 @@ export default function DeskPage() {
 
         {/* ---------------------------------------------------- conversation */}
         <section className="flex min-h-0 min-w-0 flex-col">
+          {/* Nothing selected yet: a short explanation and a button to take the longest-waiting customer. */}
           {!selected ? (
             <div className="flex flex-1 items-center justify-center p-8">
               <div className="max-w-md text-center">
@@ -242,6 +269,8 @@ export default function DeskPage() {
                     {humanize(selected.intent)} · <span className="capitalize">{selected.persona}</span> customer · Client agent
                   </div>
                 </div>
+                {/* Voice mode, who answers (you or autopilot), and Wrap up (ends the chat and starts the
+                   review). */}
                 <div className="flex shrink-0 items-center gap-2">
                   <VoiceControls voice={voice} />
                   <Segmented
@@ -259,6 +288,8 @@ export default function DeskPage() {
                   </button>
                 </div>
               </div>
+              {/* Voice mode: the "On call" band. On the left: you (with a headset) or the Advisor agent on
+                 autopilot. */}
               <AnimatePresence initial={false}>
                 {voice.enabled && (
                   <CallPanel
@@ -288,9 +319,11 @@ export default function DeskPage() {
                   />
                 )}
               </AnimatePresence>
+              {/* The agent pipeline, as one slim line. */}
               <div className="border-b border-line bg-raised/40 px-4 py-2 sm:px-6">
                 <AgentPipeline compact active={state.activeAgent} visited={state.visited} stages={state.stages} done={!!state.review} />
               </div>
+              {/* The conversation: your replies on the right, the simulated customer on the left. */}
               <div ref={scroller} className="scroll-fade min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-6">
                 {state.messages.map((m, i) => {
                   const role = m.speaker === "advisor" ? "advisor" : "customer";
@@ -305,14 +338,18 @@ export default function DeskPage() {
                     />
                   );
                 })}
+                {/* The reply being streamed, or the "is typing" row while an agent works. */}
                 <AnimatePresence>
                   {state.streaming?.kind === "reply" && <StreamingBubble key="s" mine text={state.streaming.text} label={stageLabel(stage)} />}
                   {session.busy && !state.streaming && <ActivityRow key="a" text={stageLabel(stage)} who={state.activeAgent === "client" ? "customer" : "advisor"} />}
                 </AnimatePresence>
               </div>
+              {/* Reply area (only when you answer): the copilot draft, then the text box. */}
               {!ended && !autopilot && (
                 <div className="border-t border-line bg-surface px-3 py-2.5 sm:px-4">
                   <AnimatePresence>
+                    {/* The Advisor agent's draft (streamed while it is written): send it as it is, or copy
+                       it into the box to edit it first. */}
                     {(state.suggestion || state.streaming?.kind === "draft") && (
                       <motion.div
                         initial={{ opacity: 0, y: 10 }}
@@ -342,6 +379,8 @@ export default function DeskPage() {
                     )}
                   </AnimatePresence>
                   <div className="flex items-end gap-2">
+                    {/* Grows with the text (see the effect above); Enter sends, Shift+Enter makes a new
+                       line. */}
                     <textarea
                       ref={composer}
                       rows={1}
@@ -362,6 +401,7 @@ export default function DeskPage() {
                   </div>
                 </div>
               )}
+              {/* After the end: go straight to the next customer. */}
               {ended && (
                 <div className="border-t border-line bg-surface p-4 text-center text-sm text-ink2">
                   Conversation closed.{" "}
@@ -379,6 +419,7 @@ export default function DeskPage() {
         {/* ---------------------------------------------------- context panel */}
         <aside className="hidden min-h-0 flex-col border-l border-line lg:flex">
           <div className="px-4 py-3">
+            {/* Tabs: Tools, Customer, Copilot, Quality (enabled once the review arrives). */}
             <Segmented
               id="desk-tab"
               size="sm"
@@ -394,10 +435,13 @@ export default function DeskPage() {
           </div>
           <div className="flex-1 overflow-y-auto px-4 pb-6">
             {!selected && <EmptyState title="No customer selected" text="Accept a chat to see the customer's order and history." />}
+            {/* Tools tab: the advisor's tools and the Client agent's tools. */}
             {selected && tab === "tools" && (
               <ToolBox stages={state.stages} variant={chatVariant} offline={state.ready ? !state.ready.llm : engine === "template"} customerTools />
             )}
             {selected && tab === "customer" && <Customer360 data={details.data} />}
+            {/* Copilot tab: the policy state (intent, order verified, rules-engine action, handover), the
+               sources of the draft, and the live trace. */}
             {selected && tab === "copilot" && (
               <div className="space-y-4">
                 {state.advisor && (
@@ -425,6 +469,7 @@ export default function DeskPage() {
                 <LiveTrace state={state} />
               </div>
             )}
+            {/* Quality tab: the review scorecard and the conversation KPIs. */}
             {selected && tab === "quality" && state.review && (
               <div className="space-y-4">
                 <QualityScore review={state.review} />
@@ -443,6 +488,9 @@ export default function DeskPage() {
   );
 }
 
+/**
+ * One number of the stats strip (red when `alert` is true).
+ */
 function Metric({ label, value, alert = false }: { label: string; value: string; alert?: boolean }) {
   return (
     <span className="inline-flex items-center gap-1.5 text-muted">
@@ -452,6 +500,9 @@ function Metric({ label, value, alert = false }: { label: string; value: string;
   );
 }
 
+/**
+ * A small label + value box.
+ */
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl bg-raised p-2.5">
@@ -461,6 +512,9 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * Customer tab: who the customer is, their order (status, timeline, key facts) and previous contacts.
+ */
 function Customer360({ data }: { data: any }) {
   if (!data) return <div className="skeleton h-80" />;
   const order = data.order;

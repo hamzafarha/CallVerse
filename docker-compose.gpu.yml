@@ -5,6 +5,7 @@ services:
     build:
       args:
         TORCH_INDEX: https://download.pytorch.org/whl/cu126
+    # Give the container one NVIDIA GPU.
     deploy:
       resources:
         reservations:

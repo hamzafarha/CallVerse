@@ -8,6 +8,7 @@ import pandas as pd
 from callverse.simulation.scenarios import SimulationConfig
 from callverse.simulation.service import LognormalServiceModel
 
+# Time is measured in seconds since the simulation started.
 SECONDS_PER_HOUR = 3600
 SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
 PATIENCE_CLASSES = ["impatient", "normal", "patient"]
@@ -24,6 +25,8 @@ class Contact:
     takes the contact scales it by their skill (``handle_seconds``).
     """
 
+    # arrival: when the customer writes; start / end: when an agent takes the chat and finishes it;
+    # abandon_at: when the customer would give up waiting; is_live: arrived while the centre is open.
     contact_id: int
     arrival: float
     intent_group: str
@@ -64,6 +67,8 @@ def generate_contacts(
     if not np.isclose(hour_shares.sum(), 1.0) or len(hour_shares) != 24:
         raise ValueError("hour_shares must have 24 values adding up to 1.")
 
+    # Step 1, arrivals: each day and problem group's expected contacts are spread over the 24 hours; the real
+    # number per hour is drawn from a Poisson distribution (random, with the right average).
     rows = daily_counts.sort_values(["date", "intent_group"])
     arrivals: list[tuple[float, str]] = []
     for row in rows.itertuples():
@@ -77,9 +82,11 @@ def generate_contacts(
             if count == 0:
                 continue
             hour_start = day_offset * SECONDS_PER_DAY + hour * SECONDS_PER_HOUR
+            # Within the hour, the arrival times are uniform.
             times = hour_start + rng.uniform(0, SECONDS_PER_HOUR, count)
             arrivals.extend((float(time), row.intent_group) for time in times)
 
+    # Step 2, each customer: a persona (patience class), a patience deadline and a handle time.
     arrivals.sort()
     personas = list(patience_mix) if patience_mix else []
     persona_shares = (
@@ -100,6 +107,8 @@ def generate_contacts(
         if is_live:
             day_start = arrival - arrival % SECONDS_PER_DAY
             closing_time = day_start + config.close_hour * SECONDS_PER_HOUR
+            # Patience is random: exponential with the persona's mean (impatient = half, patient = double). A
+            # deadline after closing time does not count: the customer then waits as backlog.
             deadline = arrival + rng.exponential(
                 config.patience_mean_seconds * patience_multiplier
             )

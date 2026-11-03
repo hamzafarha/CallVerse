@@ -11,11 +11,15 @@ the approved answer of the rules engine and the retrieved policy text.
 - never ask for a card number, security code or password; always English.
 """
 
+# How to read this file: the find_* functions find the facts written in a text (dates, amounts, timings);
+# Sources collects every fact the advisor may quote; check_draft() compares the two and lists the problems.
+# Only regular expressions: fast, explainable, no LLM.
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+# Month names and abbreviations, to read dates written like "3 May" or "March 13".
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
@@ -27,13 +31,16 @@ MONTHS["Sept"] = 9
 MONTH = "(" + "|".join(sorted(MONTHS, key=len, reverse=True)) + r")\b\.?"
 DAY = r"(\d{1,2})(?:st|nd|rd|th)?(?!\d)"
 YEAR = r"(?:,?\s+(\d{4}))?"
+# Date patterns: "13 March 2017", "March 13", "2017-03-13" and "13/03/2017".
 DAY_MONTH = re.compile(rf"\b{DAY}\s+(?:of\s+)?{MONTH}{YEAR}")
 MONTH_DAY = re.compile(rf"\b{MONTH}\s+{DAY}{YEAR}")
 ISO_DATE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
 SLASH_DATE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
 
+# Money: "R$ 30", "129.90 BRL", "45 reais".
 AMOUNT = re.compile(r"R\$\s?(\d[\d.,]*)|\b(\d[\d.,]*)\s?(?:BRL|reais|reals)\b", re.I)
 
+# Durations: "3 business days", "forty-eight hours", ...
 NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
     "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "fourteen": 14,
@@ -46,9 +53,11 @@ TIMING = re.compile(
     re.I,
 )
 
+# The same 32-character order number pattern as the advisor.
 ORDER_NUMBER = re.compile(r"\b[0-9a-f]{32}\b", re.I)
 # A relative promise ("it arrives tomorrow") is a date too, so it needs a source.
 RELATIVE_DAY = re.compile(r"\b(tomorrow|tonight)\b", re.I)
+# Never ask for these (a sentence with a negation, like "never share your password", is fine).
 FORBIDDEN = re.compile(r"\b(card number|security code|cvv|cvc|password)\b", re.I)
 NEGATION = re.compile(r"\b(never|not|don't|do not|won't|will not|no need|without)\b", re.I)
 # Small models drift to Portuguese (the orders, cities and names are Brazilian)
@@ -69,6 +78,7 @@ Date = tuple[int | None, int, int]  # (year or None, month, day)
 
 
 def _date(year: str | int | None, month: int, day: int) -> Date | None:
+    """A (year, month, day) triple, or None for an impossible date."""
     if not (1 <= month <= 12 and 1 <= day <= 31):
         return None
     return (int(year) if year else None, month, day)
@@ -88,6 +98,7 @@ def find_dates(text: str) -> list[tuple[str, set[Date]]]:
         found.append((match.group(0), {_date(year, int(month), int(day))}))
     for match in SLASH_DATE.finditer(text):
         first, second, year = match.groups()
+        # "12/03/2017" can be 12 March or 3 December: keep both readings.
         readings = {_date(year, int(second), int(first)), _date(year, int(first), int(second))}
         found.append((match.group(0), readings))
     return [(written.rstrip("."), {d for d in readings if d}) for written, readings in found if any(readings)]
@@ -96,6 +107,7 @@ def find_dates(text: str) -> list[tuple[str, set[Date]]]:
 def parse_amount(text: str) -> float | None:
     """'1.234,56', '1,234.56', '30', '30,00' -> float."""
     text = text.rstrip(".,")
+    # Brazil writes 1.234,56 and the US writes 1,234.56: find which sign is the decimal separator.
     if "," in text and "." in text:
         decimal = "," if text.rfind(",") > text.rfind(".") else "."
         text = text.replace("." if decimal == "," else ",", "").replace(decimal, ".")
@@ -129,6 +141,7 @@ def find_timings(text: str) -> list[tuple[str, tuple[int, str]]]:
         number, kind, unit = match.groups()
         count = NUMBER_WORDS[number.lower()] if number.lower() in NUMBER_WORDS else int(number)
         unit = unit.lower()
+        # "business days" and "working days" count as the same unit.
         if kind and kind.strip().lower() in {"business", "working"}:
             unit = f"business {unit}"
         found.append((match.group(0), (count, unit)))
@@ -171,6 +184,7 @@ class Sources:
         texts: Iterable[str] = (),
         order_id: str | None = None,
     ) -> "Sources":
+        """Build the sources from the tool results, the extra texts and the order number."""
         sources = cls()
         for result in results:
             sources.add_result(result)
@@ -183,12 +197,15 @@ class Sources:
         return sources
 
     def dates(self) -> set[Date]:
+        """Every date written in the sources."""
         return {d for text in self.texts for _, readings in find_dates(text) for d in readings}
 
     def amounts(self) -> set[float]:
+        """Every number and money amount in the sources."""
         return self.numbers | {value for text in self.texts for _, value in find_amounts(text)}
 
     def timings(self) -> set[tuple[int, str]]:
+        """Every duration in the sources (plus the day counts given by the tools)."""
         written = {timing for text in self.texts for _, timing in find_timings(text)}
         return written | {(n, "day") for n in self.day_counts}
 
@@ -207,6 +224,7 @@ class DraftCheck:
 
 
 def _known_date(readings: set[Date], known: set[Date]) -> bool:
+    """True when a written date matches a known date (a missing year matches any year)."""
     return any(
         (month, day) == (k_month, k_day) and (year is None or k_year is None or year == k_year)
         for year, month, day in readings
@@ -219,8 +237,10 @@ def check_draft(draft: str, sources: Sources) -> DraftCheck:
     problems: list[str] = []
     if not draft.strip():
         return DraftCheck(["The reply is empty."], {})
+    # 1) Extract the facts of the draft and of the sources.
     dates, amounts, timings = find_dates(draft), find_amounts(draft), find_timings(draft)
     known_dates, known_amounts, known_timings = sources.dates(), sources.amounts(), sources.timings()
+    # 2) Every date, amount and timing of the draft must exist in the sources.
     for written, readings in dates:
         if not _known_date(readings, known_dates):
             problems.append(
@@ -232,13 +252,16 @@ def check_draft(draft: str, sources: Sources) -> DraftCheck:
     for written, timing in timings:
         if timing not in known_timings:
             problems.append(f"The timing '{written}' is not in the approved answer or the policy.")
+    # 3) "tomorrow" and "tonight" are promises too: they need a source.
     for word in {w.lower() for w in RELATIVE_DAY.findall(draft)}:
         if not any(word in text.lower() for text in sources.texts):
             problems.append(f"The promise '{word}' is not in the order record or the approved answer.")
+    # 4) Only this customer's order number may appear.
     numbers = [m.lower() for m in ORDER_NUMBER.findall(draft)]
     for number in numbers:
         if number not in sources.order_numbers:
             problems.append(f"The order number {number} is not this customer's order.")
+    # 5) Never ask for card numbers or passwords. 6) Always English.
     for sentence in re.split(r"(?<=[.!?])\s+", draft):
         if FORBIDDEN.search(sentence) and not NEGATION.search(sentence):
             problems.append("Never ask for a card number, security code or password.")

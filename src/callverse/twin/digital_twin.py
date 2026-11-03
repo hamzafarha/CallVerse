@@ -13,6 +13,9 @@ One twin run = one scenario week:
 Ten seeds take a few seconds, so a manager can compare options interactively.
 """
 
+# How to read this file: DigitalTwin.plan() asks the Workforce agent for a shift plan (built from the
+# FORECAST); simulate() replays the week's REALITY against that plan with a router; run() repeats it over
+# several seeds; floor() returns one day, contact by contact, for the animated live floor.
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +47,7 @@ from callverse.simulation import (
 )
 from callverse.twin.state import ScenarioSpec, load_scenarios, scenario_defaults
 
+# The planners and routers that can be compared.
 PLAN_KINDS = ["cpsat", "rules_erlang", "fixed", "fixed_tuned", "erlang_hourly"]
 ROUTERS = ["fifo", "skill_score", "ppo"]
 
@@ -73,7 +77,9 @@ class DigitalTwin:
         self.hour_shares = loaders.hour_shares()
         self.scenarios = load_scenarios()
         self.drain_days = scenario_defaults()["drain_days"]
+        # The agents' skill mix follows the workload mix (volume x handle time per group).
         self.agent_mix = workload_shares(self.daily, self.settings)
+        # Plans are cached: the same scenario and planner are solved only once.
         self._plan_cache: dict[tuple, SchedulePlan] = {}
 
     # ------------------------------------------------------------------ planning
@@ -93,6 +99,8 @@ class DigitalTwin:
         """Erlang C agents needed per day and hour, from the forecast."""
         days = pd.date_range(spec.week_start, periods=spec.days)
         forecast = self.forecast_counts(spec)
+        # Prepared: the planner knows the scenario (extra volume, longer chats, absences). Unprepared: it
+        # plans from the normal forecast (the "business as usual" manager).
         if prepared:
             need = hourly_requirements(
                 forecast,
@@ -109,6 +117,7 @@ class DigitalTwin:
 
     def plan(self, spec: ScenarioSpec, kind: str, prepared: bool = True) -> SchedulePlan:
         """Shift plan of a planner for a scenario (cached)."""
+        # The cache key: everything that can change the plan.
         key = (
             spec.name,
             spec.week_start,
@@ -157,6 +166,8 @@ class DigitalTwin:
     ) -> TwinRun:
         """Replay the scenario's reality against a plan and a router."""
         days = self._horizon(spec)
+        # REALITY: the customers of the scenario days (+ drain days), with the scenario multipliers. The seed
+        # changes the random arrivals and handle times.
         contacts = make_contacts(
             self.daily,
             days,
@@ -166,6 +177,7 @@ class DigitalTwin:
             spec.multipliers,
             spec.handle_time_multiplier,
         )
+        # The plan's duty matrices become agents (regular + planned overtime) with skills.
         regular, overtime = plan.duty_matrices(self.drain_days)
         agents = make_agent_pool(regular.shape[0], self.agent_mix, self.settings)
         overtime_agents = make_agent_pool(
@@ -176,9 +188,11 @@ class DigitalTwin:
             seed_offset=99,
             first_id=len(agents),
         )
+        # Random absences hit the regular agents.
         regular = apply_absence(regular, spec.absence_rate, np.random.default_rng(seed + 7))
         duty = np.vstack([regular, overtime]) if len(overtime_agents) else regular
         rule = pool = None
+        # Backup planner: overtime is decided in real time by the queue rule.
         if plan.realtime_overtime:
             sim = self.settings.sim
             rule = OvertimeRule(
@@ -204,6 +218,7 @@ class DigitalTwin:
             overtime_pool=pool,
             trace_interval=900.0 if trace else None,
         )
+        # Run the simulation, then compute the KPIs of the scenario days (not the drain days).
         records = engine.run()
         sim = self.settings.sim
         kpis = engine_kpis(
@@ -218,6 +233,7 @@ class DigitalTwin:
             plan.planned_cost(self.settings.costs.regular_hourly, self.settings.costs.overtime_multiplier)
         )
         staff = None
+        # For the live floor: every agent with its duty hours.
         if keep_records:
             staff = [
                 {
@@ -267,6 +283,7 @@ class DigitalTwin:
         """
         spec = self.scenario(spec) if isinstance(spec, str) else spec
         day = int(np.clip(day, 0, spec.days - 1))
+        # Simulate the whole week, then cut out one day.
         plan = self.plan(spec, plan_kind, prepared)
         run = self.simulate(spec, plan, router, seed, keep_records=True, prepared=prepared)
         assert run.records is not None and run.staff is not None
@@ -297,6 +314,7 @@ class DigitalTwin:
         sim = self.settings.sim
 
         def rel(column: str) -> list[float | None]:
+            """Times relative to midnight of that day (None when missing)."""
             return [None if pd.isna(v) else round(float(v) - start, 1) for v in rows[column]]
 
         return {
@@ -344,6 +362,8 @@ class DigitalTwin:
     ) -> list[TwinRun]:
         """Simulate one configuration over several seeds (common random numbers)."""
         spec = self.scenario(spec) if isinstance(spec, str) else spec
+        # Common random numbers: the same seeds (0, 1, 2, ...) for every plan and router, so they all face
+        # exactly the same customers.
         seeds = seeds or scenario_defaults()["seeds"]
         plan = self.plan(spec, plan_kind, prepared)
         return [
@@ -361,6 +381,7 @@ class DigitalTwin:
 
     def describe(self) -> dict[str, Any]:
         """Settings shown on the dashboard."""
+        # Everything the Scenario lab needs to fill its menus.
         sim = self.settings.sim
         return {
             "scenarios": {

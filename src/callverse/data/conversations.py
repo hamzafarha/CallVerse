@@ -1,5 +1,8 @@
 """Template-based chat logs for synthetic tickets."""
 
+# How to read this file: the approved texts of the advisor (the only sentences the offline advisor may say),
+# and generate_chat_messages(), which turns each synthetic ticket into a realistic chat log with timestamps.
+# The *_CHUNK constants name the knowledge-base section each kind of message comes from.
 import numpy as np
 import pandas as pd
 
@@ -7,6 +10,7 @@ VERIFY_CHUNK = "advisor_playbook__s01"
 ESCALATION_CHUNK = "advisor_playbook__s04"
 CLOSING_CHUNK = "advisor_playbook__s05"
 
+# Order statuses and payment types in customer-friendly words.
 STATUS_TEXT = {
     "created": "placed, and we are waiting for the payment confirmation",
     "approved": "paid and being prepared by the seller",
@@ -24,6 +28,7 @@ PAYMENT_TEXT = {
     "not_defined": "an unidentified payment method",
 }
 
+# Refund timing per payment method (from the refund policy).
 REFUND_TIMING = {
     "credit_card": "The reversal will show on your next 1 or 2 card statements.",
     "debit_card": "The money will be back in your account in 5 to 10 business days.",
@@ -31,6 +36,7 @@ REFUND_TIMING = {
     "not_defined": "Our payments team will confirm the refund method by e-mail.",
 }
 
+# Lists of variants: a random one is picked each time, so the chats do not all look the same.
 GREETINGS = [
     "Hello, thank you for contacting us. I'm happy to help.",
     "Hi! Thanks for reaching out, I'll look into this for you.",
@@ -111,6 +117,8 @@ def fmt_date(timestamp: pd.Timestamp) -> str:
 
 def answer_and_summary(t: pd.Series) -> tuple[str, str]:
     """Advisor's main answer and one-sentence summary for the ticket's outcome."""
+    # One branch per outcome below: each returns (the approved answer, a one-sentence summary used in the
+    # closing message). These texts follow the policy documents exactly.
     status = STATUS_TEXT.get(t["order_status_at_contact"], t["order_status_at_contact"])
     estimate = fmt_date(t["order_estimated_delivery_date"])
     payment = t["primary_payment_type"]
@@ -301,8 +309,11 @@ def build_chat(ticket: pd.Series, rng: np.random.Generator) -> list[dict[str, ob
     """Messages of one ticket (speaker, text, knowledge-base chunk), without times."""
 
     def pick(options: list[str]) -> str:
+        """One random variant from a list."""
         return options[int(rng.integers(len(options)))]
 
+    # The standard chat: customer message -> greeting + verification -> order number -> approved answer ->
+    # reaction (or supervisor request) -> closing -> goodbye (60% of the time).
     answer, summary = answer_and_summary(ticket)
     messages: list[dict[str, object]] = [
         {"speaker": "customer", "text": ticket["message_text"], "kb_chunk_id": None},
@@ -359,6 +370,7 @@ def generate_chat_messages(
     gaps in between are proportional to message length plus a random pause.
     """
     rng = np.random.default_rng(random_seed)
+    # Join each ticket with its customer message and its order facts.
     facts = tickets.merge(
         contacts[["contact_id", "message_text"]], on="contact_id", validate="one_to_one"
     ).merge(
@@ -381,6 +393,8 @@ def generate_chat_messages(
         messages = build_chat(ticket_series, rng)
         # Time before each message after the first: typing time + a random pause
         weights = np.array([len(str(m["text"])) for m in messages[1:]], dtype=float)
+        # Each gap = the message length plus a random pause; the gaps are then scaled so the chat lasts
+        # exactly the ticket's handle time.
         weights = weights + rng.exponential(60, len(weights))
         offsets = np.concatenate([[0.0], np.cumsum(weights) / weights.sum()])
         offsets *= ticket.handle_seconds

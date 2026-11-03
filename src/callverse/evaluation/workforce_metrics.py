@@ -14,6 +14,7 @@ def routing_training_curve(window: int = 50) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     curve = pd.read_csv(path)
+    # A rolling mean smooths the noisy episode rewards into a learning curve.
     curve["reward_rolling"] = curve["reward"].rolling(window, min_periods=1).mean()
     return curve
 

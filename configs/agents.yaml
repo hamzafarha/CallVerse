@@ -35,9 +35,11 @@ llm:
   # on: fail if a model cannot run. off: always use the backups.
   mode: auto
   device: auto                # auto | cuda | cpu (CALLVERSE_LLM_DEVICE overrides)
+  # temperature 0.2: answers vary little (0 would always pick the most likely next word).
   temperature: 0.2
   seed: 42                    # fixed seed: same prompt + same model = same answer
   cache: true                 # identical calls are answered from artifacts/traces/llm_cache.sqlite
+  # Longest answer each role may write, in tokens (a token is about 3/4 of a word).
   max_new_tokens: {client: 160, advisor: 320, judge: 256}
   # The judge is from a DIFFERENT family and organisation than the advisor
   # (IBM Granite vs Hugging Face SmolLM3), so it does not share its blind spots.
@@ -123,6 +125,8 @@ advisor:
   # variant agentic: the LLM chooses its tools (at most 5 offered per stage), the rules
   #   engine still decides, safety nets call what the LLM forgot, every draft is fact-checked.
   variant: rag_policy
+  # max_tool_rounds: how many times the LLM may call tools before it must answer. retrieval_top_k:
+  # knowledge-base sections given to the LLM.
   max_tool_rounds: 4
   retrieval_top_k: 3
   # External API of the validate_bank_code tool: Brazilian bank codes from BrasilAPI,
@@ -176,6 +180,7 @@ workforce:
     # one of the K oldest waiting contacts.
     queue_slots: 10
     abandon_penalty_seconds: 600   # one abandonment costs as much as 10 minutes of waiting
+    # Rewards are divided by this number, to keep them small for the neural network.
     reward_scale_seconds: 600
     train_period: {start: 2017-02-01, end: 2018-03-31}   # days the agent practises on
     test_period: {start: 2018-04-01, end: 2018-08-19}    # never seen during training
@@ -183,6 +188,9 @@ workforce:
     group_surge: [1.0, 1.6]                # and each problem type surges on its own (promo, delays)
     absence_rate: {low: 0.05, high: 0.30}   # and some planned agents are absent
     backlog_wait_weight: 0.1               # overnight messages count less than live chats
+    # PPO training settings (stable-baselines3): total_timesteps = decisions practised; n_steps = steps
+    # collected before each update; gamma = how much future waiting counts (close to 1 = long-term view);
+    # ent_coef = small bonus for trying new actions; net_arch = two hidden layers of 128 neurons.
     ppo:
       total_timesteps: 300000
       n_steps: 2048

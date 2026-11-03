@@ -13,6 +13,7 @@ __all__ = ["accuracy", "forecast_summary"]
 
 def forecast_summary(forecast_dir=FORECAST_DIR) -> dict[str, Any]:
     """wMAPE table, the main model's gain over the seasonal naive, and the verdict."""
+    # Read the backtest metrics written by `callverse forecast`.
     path = forecast_dir / METRICS_FILE
     if not path.exists():
         return {"available": False}
@@ -21,6 +22,7 @@ def forecast_summary(forecast_dir=FORECAST_DIR) -> dict[str, Any]:
     total = metrics[metrics["intent_group"] == "total"].set_index("model")
     naive = float(total.loc["seasonal_naive", "wMAPE_percent"])
     main = float(total.loc["lightgbm", "wMAPE_percent"])
+    # Gain = how much smaller the LightGBM error is than the naive error, in %.
     gain = (naive - main) / naive * 100
     return {
         "available": True,
