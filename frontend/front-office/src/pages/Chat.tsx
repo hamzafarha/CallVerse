@@ -12,6 +12,7 @@ import {
   StreamingBubble,
   ToolBox,
   VoiceControls,
+  modelName,
   motion,
   stageLabel,
   useApi,
@@ -59,7 +60,12 @@ function Chat({ contactId }: { contactId: string }) {
 
   useEffect(() => {
     if (state.ready) {
-      toast.success(state.ready.llm ? `AI advisor online · ${String(state.ready.model).split("/").pop()}` : "Advisor online · offline backups (approved templates)", { id: "ready" });
+      toast.success(
+        state.ready.llm
+          ? `AI advisor online · ${modelName(state.ready.model)}${state.ready.provider === "openrouter" ? " via OpenRouter" : ""}`
+          : "Advisor online · offline backups (approved templates)",
+        { id: "ready" },
+      );
     }
   }, [state.ready]);
   useEffect(() => {
@@ -103,7 +109,11 @@ function Chat({ contactId }: { contactId: string }) {
             <div className="font-semibold text-ink">CallVerse assistant</div>
             <div className="flex items-center gap-1.5 text-xs text-muted">
               {state.status === "running" || ended ? <span className="live-dot" /> : <span className="h-2 w-2 rounded-full bg-[var(--warning)]" />}
-              {state.ready ? (state.ready.llm ? <>AI · {String(state.ready.model).split("/").pop()?.replace("-bnb-4bit", "")} on GPU</> : "offline backups · approved templates") : "connecting…"}
+              {state.ready
+                ? state.ready.llm
+                  ? `AI · ${modelName(state.ready.model)} ${state.ready.provider === "openrouter" ? "via OpenRouter" : "on GPU"}`
+                  : "offline backups · approved templates"
+                : "connecting…"}
             </div>
           </div>
           <VoiceControls voice={voice} roles={["advisor"]} />

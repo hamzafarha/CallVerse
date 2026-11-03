@@ -852,6 +852,7 @@ async def ws_session(websocket: WebSocket) -> None:
                 "profile": profile.to_dict(),
                 "llm": llm,
                 "model": advisor.llm.resolve_model("advisor") if llm and advisor.llm else None,
+                "provider": advisor.llm.backend() if llm and advisor.llm else "off",
                 "retriever": type(advisor.retriever).__name__,
             },
         )

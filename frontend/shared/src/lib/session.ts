@@ -27,7 +27,7 @@ export interface StageEvent {
 
 export interface LiveState {
   status: "idle" | "connecting" | "running" | "done" | "error";
-  ready: { profile: any; llm: boolean; model?: string | null; retriever?: string } | null;
+  ready: { profile: any; llm: boolean; model?: string | null; provider?: string; retriever?: string } | null;
   messages: ChatMessage[];
   streaming: { kind: string; text: string } | null;
   stages: StageEvent[];

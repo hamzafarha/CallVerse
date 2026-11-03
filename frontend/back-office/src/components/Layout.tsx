@@ -17,6 +17,7 @@ import {
   Bot,
   ChevronsLeft,
   ClipboardCheck,
+  Cloud,
   Cpu,
   Database,
   ExternalLink,
@@ -197,7 +198,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   );
 }
 
-/** Live status of the local LLMs and the GPU (polled). */
+/** Live status of the LLMs: OpenRouter (requests left today) or the local GPU (polled). */
 function SystemCard({ collapsed }: { collapsed: boolean }) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -209,10 +210,38 @@ function SystemCard({ collapsed }: { collapsed: boolean }) {
   const gpu = llm?.gpu;
   const loaded = llm ? Object.values(llm.roles).filter((r: any) => r.loaded).length : 0;
   const ok = !!data?.llm_available;
+  const hosted = llm?.backend === "openrouter";
+  const quota = llm?.openrouter?.quota;
   if (collapsed)
     return (
       <div className="mx-auto mb-1 flex h-10 w-10 items-center justify-center rounded-xl border border-line" title={ok ? "LLMs ready" : "Offline backups"}>
         <span className={ok ? "live-dot" : "h-2 w-2 rounded-full bg-[var(--warning)]"} />
+      </div>
+    );
+  if (hosted)
+    return (
+      <div className="rounded-2xl border border-line bg-surface/60 p-3 text-xs">
+        <div className="flex items-center gap-2 font-semibold text-ink">
+          <span className="live-dot" /> OpenRouter LLMs ready
+        </div>
+        <div className="mt-1.5 flex items-center gap-1.5 text-muted">
+          <Cloud size={12} /> {loaded} hosted model{loaded === 1 ? "" : "s"} · local backup
+        </div>
+        {quota?.limit ? (
+          <div className="mt-2">
+            <div className="h-1.5 overflow-hidden rounded-full bg-sunken">
+              <motion.div className="h-full rounded-full gradient-brand" animate={{ width: `${Math.min(100, (quota.used / quota.limit) * 100)}%` }} />
+            </div>
+            <div className="mt-1 flex justify-between text-[10px] text-muted">
+              <span>{quota.remaining} free requests left today</span>
+              <span>
+                {quota.used} / {quota.limit}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-1 text-[10px] text-muted">free tier · quota not reported</div>
+        )}
       </div>
     );
   return (
@@ -221,6 +250,11 @@ function SystemCard({ collapsed }: { collapsed: boolean }) {
         {ok ? <span className="live-dot" /> : <span className="h-2 w-2 rounded-full bg-[var(--warning)]" />}
         {ok ? "Local LLMs ready" : "Offline backups"}
       </div>
+      {llm?.openrouter && !llm.openrouter.usable && (
+        <div className="mt-1 text-[10px] text-muted" title={llm.openrouter.last_error ?? undefined}>
+          OpenRouter off: {llm.openrouter.reason}
+        </div>
+      )}
       <div className="mt-1.5 flex items-center gap-1.5 text-muted">
         <Cpu size={12} /> {gpu ? gpu.name.replace("NVIDIA GeForce ", "").replace(" with Max-Q Design", "") : "no GPU"}
       </div>

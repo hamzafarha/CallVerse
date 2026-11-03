@@ -157,7 +157,7 @@ export default function OverviewPage() {
 
       <Card
         title="Agent runtime"
-        subtitle="Open-weight Hugging Face models run locally with transformers; every agent keeps an offline backup."
+        subtitle="Hosted open models on OpenRouter, local Hugging Face models as backup; every agent keeps an offline backup."
         action={
           <Link to="/mlops" className="btn btn-ghost py-1.5 text-xs">
             Models & MLOps <ArrowRight size={13} />
@@ -166,7 +166,16 @@ export default function OverviewPage() {
       >
         {system.data ? (
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <Status ok={system.data.llm_available} label={system.data.llm_available ? "local LLMs ready" : system.data.llm_reason ?? "offline backups in use"} />
+            <Status
+              ok={system.data.llm_available}
+              label={
+                system.data.llm_available
+                  ? system.data.llm.backend === "openrouter"
+                    ? "OpenRouter LLMs ready (local backup)"
+                    : "local LLMs ready"
+                  : system.data.llm_reason ?? "offline backups in use"
+              }
+            />
             {system.data.llm.gpu && (
               <Pill>
                 <Cpu size={12} /> {system.data.llm.gpu.name}

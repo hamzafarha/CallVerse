@@ -62,9 +62,14 @@ export function ToolChip({ name, ok, caller, summary }: { name: string; ok?: boo
   );
 }
 
+/** Short model name: "google/gemma-4-31b-it:free" -> "gemma-4-31b-it", "…SmolLM3-3B-bnb-4bit" -> "SmolLM3-3B". */
+export function modelName(model: unknown): string {
+  return String(model ?? "").split("/").pop()!.replace("-bnb-4bit", "").replace(/:free$/, "");
+}
+
 function modeLabel(meta: Record<string, any> | undefined): string | null {
   if (!meta?.mode) return null;
-  if (meta.mode === "llm") return `AI · ${String(meta.model ?? "").split("/").pop()?.replace("-bnb-4bit", "")}`;
+  if (meta.mode === "llm") return `AI · ${modelName(meta.model)}`;
   if (meta.mode === "human") return meta.copilot_draft ? (meta.copilot_edited ? "human · edited AI draft" : "human · AI draft") : "human";
   if (meta.mode === "template" || meta.mode === "template_fallback") return "approved template";
   if (meta.mode === "history") return "real customer message";
