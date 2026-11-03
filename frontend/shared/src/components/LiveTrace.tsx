@@ -15,7 +15,7 @@ function describe(stage: StageEvent): { icon: any; title: string; detail?: strin
     if (stage.step === "tool")
       return {
         icon: User,
-        title: `Customer opened ${TOOL_LABEL[stage.name] ?? stage.name} ${stage.ok ? "✓" : "✗"} · ${CALLER_LABEL[stage.caller] ?? "chosen by the AI"}`,
+        title: `Customer checked ${TOOL_LABEL[stage.name] ?? stage.name} ${stage.ok ? "✓" : "✗"} · ${CALLER_LABEL[stage.caller] ?? "chosen by the AI"}`,
         detail: [stage.summary, `${num(stage.latency_ms, 0)} ms`].filter(Boolean).join(" · "),
       };
     return { icon: User, title: "Client agent answers as the customer" };

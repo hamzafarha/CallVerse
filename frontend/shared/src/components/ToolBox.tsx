@@ -34,7 +34,20 @@ const TOOLBOX: { kind: string; tools: { name: string; what: string }[] }[] = [
 ];
 
 /** The four tools added for agentic tool calling. */
-export const NEW_TOOLS = new Set(["get_customer_history", "validate_bank_code", "escalate_to_human", "check_draft_reply", "view_my_order_page"]);
+export const NEW_TOOLS = new Set([
+  "get_customer_history",
+  "validate_bank_code",
+  "escalate_to_human",
+  "check_draft_reply",
+  "view_my_order_page",
+  "check_my_waiting_time",
+]);
+
+/** The Client agent's tools (Advisor desk: the customer is simulated). */
+const CUSTOMER_TOOLS = [
+  { name: "view_my_order_page", what: "its own order page: offered when you state a status, date or amount" },
+  { name: "check_my_waiting_time", what: "its chat timer vs its patience: offered once the wait gets long" },
+];
 
 const CALLER_ICON: Record<string, any> = { llm: Bot, code: Cog, safety_net: ShieldCheck };
 const CALLER_SHORT: Record<string, string> = { llm: "AI", code: "pipeline", safety_net: "safety net" };
@@ -125,32 +138,40 @@ export function ToolBox({
   );
 }
 
-/** The Client agent's tool: it checks what the advisor says against its own order page. */
+/** The Client agent's tools: its own order page and its chat timer. */
 function CustomerTools({ stages, offline }: { stages: StageEvent[]; offline: boolean }) {
   const client = stages.filter((s) => s.agent === "client");
   let turnStart = -1;
   client.forEach((s, i) => {
     if (s.step === "typing") turnStart = i;
   });
-  const calls = client.filter((s) => s.step === "tool");
-  const usage: Usage | undefined = calls.length
-    ? {
-        counts: { llm: calls.length },
-        summary: calls[calls.length - 1].summary,
-        ok: calls.every((c) => c.ok),
-        thisTurn: client.slice(turnStart + 1).some((s) => s.step === "tool"),
-      }
-    : undefined;
-  const offered = client.slice(turnStart + 1).some((s) => s.step === "offer");
+  const thisTurn = client.slice(turnStart + 1);
+  const offers = thisTurn.filter((s) => s.step === "offer");
+  const offered = new Set<string>(offers.flatMap((s) => s.offered ?? []));
+  const required = offers.some((s) => s.tool_choice === "required"); // its patience just ran out
+  const usage = (name: string): Usage | undefined => {
+    const calls = client.filter((s) => s.step === "tool" && s.name === name);
+    if (!calls.length) return undefined;
+    return {
+      counts: { llm: calls.length },
+      summary: calls[calls.length - 1].summary,
+      ok: calls.every((c) => c.ok),
+      thisTurn: thisTurn.some((s) => s.step === "tool" && s.name === name),
+    };
+  };
   return (
     <div className="mt-4 border-t border-line pt-3">
       <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted">Customer tools</div>
       <p className="mb-2.5 text-[11px] leading-snug text-ink2">
         {offline
-          ? "Offline backup: the simulated customer answers by rules and does not open its order page."
-          : "The simulated customer can check what you say against its own order page (only what a real customer sees). It is offered when you mention a status, a date or an amount."}
+          ? "Offline backup: the simulated customer answers by rules and uses no tool."
+          : "The simulated customer sees only what a real customer sees. The AI decides whether to use a tool when it is offered."}
       </p>
-      <ToolRow name="view_my_order_page" what="the customer's own order page" usage={usage} offered={offered} required={false} />
+      <div className="space-y-1">
+        {CUSTOMER_TOOLS.map((tool) => (
+          <ToolRow key={tool.name} name={tool.name} what={tool.what} usage={usage(tool.name)} offered={offered.has(tool.name)} required={required} />
+        ))}
+      </div>
     </div>
   );
 }

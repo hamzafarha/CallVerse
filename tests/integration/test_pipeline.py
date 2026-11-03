@@ -21,6 +21,7 @@ def test_template_conversation_end_to_end():
     assert state["kpis"]["tool_calls"] >= 1
     # The rule-based customer (offline backup) never opens its order page
     assert state["kpis"]["customer_page_checks"] == 0 and state["kpis"]["customer_mismatches"] == 0
+    assert state["kpis"]["customer_wait_checks"] == 0 and state["kpis"]["customer_left_waiting"] is False
     assert state["reference"]["outcome"]
     assert set(state["scorecard"]["scores"]) == {
         "compliance",
@@ -99,6 +100,25 @@ def test_live_session_copilot_and_autopilot(keyword_runtime):
     assert "suggestion" in events
     session.handle({"type": "autopilot", "on": True})  # the agent finishes the chat
     assert session.finished and "review" in events
+
+
+@requires_data
+def test_desk_queue_time_starts_the_customer_clock(keyword_runtime):
+    from callverse.agents.client.profiles import sample_profiles
+    from callverse.data import loaders
+    from callverse.orchestration.live import LiveSession
+
+    profile = sample_profiles(loaders.contacts(), 1, seed=4)[0]
+    session = LiveSession(
+        profile,
+        lambda kind, data: None,
+        mode="template",
+        customer="agent",
+        advisor="human",
+        waited_seconds=250,
+    )
+    session.begin()  # routing happens after the opening message
+    assert session.session.clock.queue_wait_seconds == 250  # the time shown on the desk's queue card
 
 
 @requires_data

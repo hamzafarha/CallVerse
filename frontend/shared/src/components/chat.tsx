@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { AlertTriangle, AudioLines, Bot, CheckCircle2, FileSearch, ShieldCheck, Sparkles, Volume2, Wrench, XCircle } from "lucide-react";
+import { AlertTriangle, AudioLines, Bot, CheckCircle2, FileSearch, ShieldCheck, Sparkles, Timer, Volume2, Wrench, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ChatMessage, StageEvent } from "../lib/session";
 import { Typewriter, TypingDots } from "./motion";
@@ -16,7 +16,8 @@ export const TOOL_LABEL: Record<string, string> = {
   escalate_to_human: "Escalated to a human",
   search_knowledge_base: "Knowledge base",
   check_draft_reply: "Fact check",
-  view_my_order_page: "My order page", // the Client agent's tool
+  view_my_order_page: "My order page", // the Client agent's tools
+  check_my_waiting_time: "My waiting time",
 };
 
 /** Who decided to call a tool: the LLM itself, a fixed pipeline step, or a safety net. */
@@ -30,7 +31,10 @@ export const CALLER_LABEL: Record<string, string> = {
 export function stageLabel(stage: StageEvent | undefined): string {
   if (!stage) return "";
   if (stage.agent === "workforce") return "Workforce agent is routing the conversation…";
-  if (stage.agent === "client") return stage.step === "tool" ? "Customer is reading their order page…" : "Customer is typing…";
+  if (stage.agent === "client") {
+    if (stage.step !== "tool") return "Customer is typing…";
+    return stage.name === "check_my_waiting_time" ? "Customer is looking at the clock…" : "Customer is reading their order page…";
+  }
   if (stage.agent === "quality") return "Quality agent is reviewing the conversation…";
   if (stage.step === "retrieval") return "Searching the help centre…";
   if (stage.step === "tool") return `${TOOL_LABEL[stage.name] ?? stage.name} ${stage.ok ? "✓" : "✗"}`;
@@ -102,6 +106,8 @@ export function ChatBubble({
   const label = modeLabel(message.meta);
   // Client agent: true when what the advisor said contradicts the customer's order page
   const mismatch: boolean | undefined = message.meta?.mismatch;
+  // Client agent: its chat timer showed it had waited longer than its patience
+  const outOfPatience = tools.some((t) => t.name === "check_my_waiting_time" && t.result?.over_my_patience);
   return (
     <motion.div
       layout
@@ -124,7 +130,7 @@ export function ChatBubble({
         >
           {animate ? <Typewriter text={message.text} /> : message.text}
         </div>
-        {showMeta && (label || tools.length > 0 || sources.length > 0 || onListen || speaking || mismatch !== undefined) && (
+        {showMeta && (label || tools.length > 0 || sources.length > 0 || onListen || speaking || mismatch !== undefined || outOfPatience) && (
           <div className={clsx("mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted", mine && "justify-end")}>
             {onListen && (
               <button
@@ -157,6 +163,15 @@ export function ChatBubble({
               </span>
             )}
             {mismatch === false && tools.length > 0 && <span>matches my order page</span>}
+            {outOfPatience && (
+              <span
+                title="The customer's chat timer showed a wait longer than its patience"
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-warn"
+                style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}
+              >
+                <Timer size={10} /> waited too long{message.meta?.end ? " · left the chat" : ""}
+              </span>
+            )}
             {sources.length > 0 && (
               <span className="inline-flex items-center gap-1">
                 <FileSearch size={11} /> {sources.length} source{sources.length > 1 ? "s" : ""}

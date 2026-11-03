@@ -93,7 +93,14 @@ export default function DeskPage() {
     setTab("tools");
     setText("");
     setChatVariant(variant);
-    session.start({ contact_id: item.contact_id, customer: "agent", advisor: autopilot ? "agent" : "human", mode: engine, variant });
+    session.start({
+      contact_id: item.contact_id,
+      customer: "agent",
+      advisor: autopilot ? "agent" : "human",
+      mode: engine,
+      variant,
+      waited_seconds: Math.round(elapsed(item)), // the Client agent's chat timer starts from here
+    });
   };
   const sendAdvisor = (message: string) => {
     if (!message.trim()) return;

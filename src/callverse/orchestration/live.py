@@ -15,6 +15,7 @@ the same helpers as the automatic graph, so live chats count like simulated ones
 from collections.abc import Callable
 from typing import Any
 
+from callverse.agents.client.chat_clock import queue_wait_from_twin
 from callverse.agents.client.profiles import CustomerProfile
 from callverse.config import TRACE_DIR
 from callverse.orchestration.graph import (
@@ -43,6 +44,7 @@ class LiveSession:
         variant: str | None = None,
         customer: str = "human",
         advisor: str = "agent",
+        waited_seconds: float | None = None,
     ) -> None:
         if customer not in SIDES["customer"] or advisor not in SIDES["advisor"]:
             raise ValueError("customer and advisor must be 'human' or 'agent'")
@@ -56,6 +58,8 @@ class LiveSession:
         self.draft: dict[str, Any] | None = None
         self.csat: int | None = None
         self.finished = False
+        # Advisor desk: how long the customer already waited in your queue (else: the twin's)
+        self.waited_seconds = waited_seconds
 
     # ---------------------------------------------------------------- helpers
     @property
@@ -96,6 +100,11 @@ class LiveSession:
         if self.routing is None:
             self.emit("stage", {"agent": "workforce", "step": "routing"})
             self.routing = route_contact(self.session, self.messages[0]["text"])
+            self.session.clock.queue_wait_seconds = (
+                float(self.waited_seconds)
+                if self.waited_seconds is not None
+                else queue_wait_from_twin(self.routing)
+            )
             self.emit("routing", {"routing": self.routing})
         self.draft = None
         if self.advisor == "agent":
@@ -146,6 +155,7 @@ class LiveSession:
             self.messages,
             turns,
             on_event=lambda step, data: self.emit("stage", {"agent": "client", "step": step, **data}),
+            clock=self.session.clock,
         )
         self._add("customer", turn.text, turn.meta())
         if turn.end or turns + 1 > self.session.max_turns:

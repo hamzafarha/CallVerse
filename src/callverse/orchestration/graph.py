@@ -14,7 +14,7 @@
 
 import json
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,7 @@ from langgraph.graph import END, START, StateGraph
 
 from callverse.agents.advisor.advisor import AdvisorAgent, AdvisorMemory
 from callverse.agents.advisor.tools import AdvisorTools
+from callverse.agents.client.chat_clock import ChatClock, persona_patience, queue_wait_from_twin
 from callverse.agents.client.profiles import CustomerProfile
 from callverse.agents.client.simulator import ClientAgent
 from callverse.agents.quality.reviewer import QualityReviewer
@@ -53,6 +54,8 @@ class ConversationSession:
     tools: AdvisorTools
     memory: AdvisorMemory
     max_turns: int
+    # Timer of the chat (the customer's waiting-time tool); queue wait set at routing
+    clock: ChatClock = field(default_factory=lambda: ChatClock(patience_seconds=180.0))
 
 
 def make_session(
@@ -91,6 +94,7 @@ def make_session(
         tools=AdvisorTools(as_of=profile.contact_timestamp, retriever=retriever),
         memory=AdvisorMemory(),
         max_turns=int(settings["client"]["max_turns"]),
+        clock=ChatClock(patience_seconds=persona_patience(profile.persona)),
     )
 
 
@@ -209,6 +213,13 @@ def review_conversation(
     return reference, session.reviewer.review(transcript, reference, meta)
 
 
+def _out_of_patience(call: dict[str, Any]) -> bool:
+    """A waiting-time check that showed the customer had waited longer than its patience."""
+    return call.get("name") == "check_my_waiting_time" and bool(
+        (call.get("result") or {}).get("over_my_patience")
+    )
+
+
 def kpi_row(
     session: ConversationSession,
     messages: list[dict[str, Any]],
@@ -256,6 +267,14 @@ def kpi_row(
             t.get("name") == "view_my_order_page" for meta in customer_meta for t in meta.get("tools", [])
         ),
         "customer_mismatches": sum(meta.get("mismatch") is True for meta in customer_meta),
+        # ... and how often it looked at its chat timer, and left because it waited too long
+        "customer_wait_checks": sum(
+            t.get("name") == "check_my_waiting_time" for meta in customer_meta for t in meta.get("tools", [])
+        ),
+        "customer_left_waiting": any(
+            meta.get("end") and any(_out_of_patience(t) for t in meta.get("tools", []))
+            for meta in customer_meta
+        ),
         "expected_wait_seconds": routing.get("expected_wait_seconds"),
         "expected_handle_seconds": routing.get("expected_handle_seconds"),
         **{f"score_{k}": v for k, v in card["scores"].items()},
@@ -279,6 +298,8 @@ def build_graph(session: ConversationSession):
 
     def workforce_route(state: ConversationState) -> dict[str, Any]:
         routing = route_contact(session, state["messages"][0]["text"])
+        # The customer waited in the twin's queue: the Erlang C wait of the hour
+        session.clock.queue_wait_seconds = queue_wait_from_twin(routing)
         return {
             "routing": routing,
             "events": _event(
@@ -309,7 +330,7 @@ def build_graph(session: ConversationSession):
 
     def client_reply(state: ConversationState) -> dict[str, Any]:
         messages = state["messages"]
-        turn = session.client.respond(session.profile, messages, state["customer_turns"])
+        turn = session.client.respond(session.profile, messages, state["customer_turns"], clock=session.clock)
         message = {"speaker": "customer", "text": turn.text, "meta": turn.meta()}
         return {
             "messages": [*messages, message],
@@ -485,6 +506,12 @@ def conversation_kpis(frame: pd.DataFrame) -> dict[str, float]:
         ),
         "customer_mismatches_mean": (
             mean("customer_mismatches") if "customer_mismatches" in frame else float("nan")
+        ),
+        "customer_wait_checks_mean": (
+            mean("customer_wait_checks") if "customer_wait_checks" in frame else float("nan")
+        ),
+        "customer_left_waiting_rate": (
+            mean("customer_left_waiting") if "customer_left_waiting" in frame else float("nan")
         ),
         "intent_accuracy": mean("intent_correct"),
         "mean_turns": mean("turns"),

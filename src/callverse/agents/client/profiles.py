@@ -34,6 +34,7 @@ def customer_bank(contact_id: str) -> tuple[str, str]:
     typo = (digest // len(CUSTOMER_BANKS)) % 100 < BANK_TYPO_SHARE * 100
     return code, (code + code[-1] if typo else code)
 
+
 SITUATION_TEXT = {
     "overdue_never_delivered": "Your order has not arrived and the promised delivery date has passed.",
     "delivered_late": "Your order is late: the promised delivery date has passed.",
@@ -126,7 +127,6 @@ def sample_profiles(
         frame = frame[~frame["bitext_tags"].fillna("").str.contains("W")]
     picked = frame.iloc[rng.choice(len(frame), size=min(n, len(frame)), replace=False)]
     return [build_profile(row, rng, bool(row["is_repeat"])) for _, row in picked.iterrows()]
-
 
 
 def profile_by_contact_id(contacts: pd.DataFrame, contact_id: str, seed: int = 0) -> CustomerProfile:

@@ -4,10 +4,11 @@ It opens with a real customer message, answers the advisor's questions (order
 number), reacts to the answer according to its persona, may ask for a supervisor,
 and fills a 1-5 satisfaction survey at the end (simulated CSAT).
 
-Tool: like a real customer, it can open its own "My orders" page
-(``view_my_order_page``) to check what the advisor says, and flags a mismatch.
-It only sees what a customer sees (information asymmetry): never the advisor's
-tools, tickets or decisions.
+Tools: like a real customer, it can open its own "My orders" page
+(``view_my_order_page``) to check what the advisor says, and flag a mismatch; and
+look at its chat timer (``check_my_waiting_time``) when the wait gets long, to react
+like its persona (complain, leave). It only sees what a customer sees (information
+asymmetry): never the advisor's tools, tickets or decisions.
 
 Without an LLM, a rule-based customer gives the same protocol (backup).
 """
@@ -21,6 +22,7 @@ from typing import Any
 
 import numpy as np
 
+from callverse.agents.client.chat_clock import ChatClock, summarize_clock
 from callverse.agents.client.order_page import my_order_page, summarize_page
 from callverse.agents.client.profiles import CustomerProfile
 from callverse.data.conversations import (
@@ -63,18 +65,19 @@ Your situation: {situation}
 Your original request was: "{opening}"
 Your order number is {order_id} (give it when asked).
 Your personality: {persona} - {tone}.
-{page_note}
+
 Reply with a JSON object: {{"message": "<your next chat message, 1-2 short sentences>",
 "end": <true if your problem is handled or you want to leave>, "csat": <your satisfaction 1-5 if
 end is true, else null>, "mismatch": <true if something the advisor said contradicts your order
 page, false if it matches, null if you have not seen the page>}}.
 If the advisor gives a clear answer with a next step, thank them and end. If the answer is vague,
-wrong or you are {persona} and unhappy, say so (you may ask for a supervisor once)."""
+wrong or you are {persona} and unhappy, say so (you may ask for a supervisor once).
+{tool_notes}"""
 
 PAGE_NOTE_OFFERED = """You can open your own "My orders" page with the tool view_my_order_page: it shows what
 the store's app shows you (status, dates, amount paid). The advisor just told you something about your
 order: if you want to check it, open the page before you answer. If the page says something different,
-point it out politely in your message.
+tell the advisor politely, for example: "My order page says ..., but you told me ...".
 """
 PAGE_NOTE_SEEN = """You already opened your "My orders" page in this chat (see the tool result). If the
 advisor says something different from it, point it out politely in your message.
@@ -103,6 +106,30 @@ CHECKABLE = re.compile(
 )
 MAX_PAGE_CHECKS = 2  # a real customer looks once or twice per chat, not after every message
 
+CLOCK_NOTE_OFFERED = """This chat feels long: you have been waiting a lot. Before you answer, check how long
+exactly with the tool check_my_waiting_time (the timer of your chat, with your own patience). If you
+waited longer than your patience, say it in your message (for example: "I have been waiting for 5
+minutes!") and react as your personality would: complain, or leave the chat (end=true) if you are fed up.
+Never quote your patience as a number.
+"""
+
+# Second tool: the timer of the chat window (waits from the digital twin or the real clock)
+CLOCK_TOOL = "check_my_waiting_time"
+CLOCK_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": CLOCK_TOOL,
+        "description": (
+            "Look at the timer of your chat window: how long you waited in the queue and for the "
+            "advisor's answer, compared with your own patience."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}
+CLOCK_GATE = 0.5  # gating: offered once the wait reaches half the customer's patience
+MAX_CLOCK_CHECKS = 2
+CUSTOMER_TOOLS = {ORDER_PAGE_TOOL, CLOCK_TOOL}
+
 
 @dataclass
 class ClientTurn:
@@ -127,18 +154,29 @@ class ClientTurn:
             meta["tools"] = self.tool_calls
         if self.mismatch is not None:
             meta["mismatch"] = self.mismatch
+        if self.end:
+            meta["end"] = True  # the customer left (KPI: did it leave out of patience?)
         return meta
 
 
-def page_checks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Order pages the customer already opened in this chat (from the transcript)."""
+def tool_checks(messages: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
+    """Calls of one customer tool earlier in this chat (from the transcript)."""
     return [
         call
         for m in messages
         if m["speaker"] == "customer"
         for call in (m.get("meta") or {}).get("tools", [])
-        if call.get("name") == ORDER_PAGE_TOOL
+        if call.get("name") == name
     ]
+
+
+def page_checks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order pages the customer already opened in this chat."""
+    return tool_checks(messages, ORDER_PAGE_TOOL)
+
+
+def advisor_answers(messages: list[dict[str, Any]]) -> int:
+    return sum(m["speaker"] == "advisor" for m in messages)
 
 
 class ClientAgent:
@@ -167,9 +205,25 @@ class ClientAgent:
         messages: list[dict[str, Any]],
         customer_turns: int,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        clock: ChatClock | None = None,
     ) -> ClientTurn:
         """Answer the advisor's last message. ``on_event("tool", ...)`` reports each
-        tool call as it runs (live UI)."""
+        tool call as it runs (live UI); ``clock`` times the chat (waiting-time tool)."""
+        if clock is not None:
+            clock.answer_arrived()
+        turn = self._respond(profile, messages, customer_turns, on_event, clock)
+        if clock is not None:
+            clock.customer_wrote()
+        return turn
+
+    def _respond(
+        self,
+        profile: CustomerProfile,
+        messages: list[dict[str, Any]],
+        customer_turns: int,
+        on_event: Callable[[str, dict[str, Any]], None] | None,
+        clock: ChatClock | None,
+    ) -> ClientTurn:
         if customer_turns >= self.max_turns:
             return ClientTurn(self._pick(GOODBYES), True, self._survey(profile, messages), "rule")
         given = profile.order_id in " ".join(str(m["text"]) for m in messages if m["speaker"] == "customer")
@@ -183,7 +237,7 @@ class ClientAgent:
             return bank_turn
         if self.use_llm():
             try:
-                turn = self._llm_turn(profile, messages, on_event)
+                turn = self._llm_turn(profile, messages, on_event, clock)
                 if ADVISOR_VOICE.search(turn.text):
                     # Guardrail: a small model sometimes starts speaking as the advisor.
                     raise ValueError("role swap")
@@ -256,17 +310,42 @@ class ClientAgent:
             and len(page_checks(messages)) < MAX_PAGE_CHECKS
         )
 
+    def offers_clock(self, messages: list[dict[str, Any]], clock: ChatClock | None) -> bool:
+        """Gating: the timer is offered once the customer's waiting reaches half its
+        patience, at most ``MAX_CLOCK_CHECKS`` times per chat."""
+        return (
+            clock is not None
+            and bool(messages)
+            and messages[-1]["speaker"] == "advisor"
+            and clock.total_wait_seconds >= CLOCK_GATE * clock.patience_seconds
+            and len(tool_checks(messages, CLOCK_TOOL)) < MAX_CLOCK_CHECKS
+        )
+
+    def patience_ran_out(self, messages: list[dict[str, Any]], clock: ChatClock | None) -> bool:
+        """The wait just went past the customer's patience and it has not looked yet."""
+        return (
+            self.offers_clock(messages, clock)
+            and clock is not None
+            and clock.total_wait_seconds >= clock.patience_seconds
+            and not tool_checks(messages, CLOCK_TOOL)
+        )
+
     def _llm_turn(
         self,
         profile: CustomerProfile,
         messages: list[dict[str, Any]],
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        clock: ChatClock | None = None,
     ) -> ClientTurn:
-        """Reason -> (optional) act with the order page -> answer in JSON."""
+        """Reason -> (optional) act with its tools -> answer in JSON."""
         assert self.llm is not None
-        offered = self.offers_page(profile, messages)
+        offered = ([ORDER_PAGE_SCHEMA] if self.offers_page(profile, messages) else []) + (
+            [CLOCK_SCHEMA] if self.offers_clock(messages, clock) else []
+        )
+        names = [t["function"]["name"] for t in offered]
         seen = [c for c in page_checks(messages) if c.get("ok")]
-        note = PAGE_NOTE_OFFERED if offered else (PAGE_NOTE_SEEN if seen else "")
+        notes = [PAGE_NOTE_OFFERED if ORDER_PAGE_TOOL in names else (PAGE_NOTE_SEEN if seen else "")]
+        notes.append(CLOCK_NOTE_OFFERED if CLOCK_TOOL in names else "")
         chat: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -276,32 +355,41 @@ class ClientAgent:
                     order_id=profile.order_id,
                     persona=profile.persona,
                     tone=profile.tone,
-                    page_note=note,
+                    tool_notes="".join(notes),
                 ),
             }
         ]
         for message in messages:  # roles are swapped: the model plays the customer
-            if message["speaker"] == "customer":  # pages it opened before this message (its memory)
+            if message["speaker"] == "customer":  # tools it used before this message (its memory)
                 for call in (message.get("meta") or {}).get("tools", []):
-                    if call.get("name") == ORDER_PAGE_TOOL and call.get("ok"):
-                        chat.extend(self._page_exchange(call["result"]))
+                    if call.get("name") in CUSTOMER_TOOLS and call.get("ok"):
+                        chat.extend(self._tool_exchange(call["name"], call["result"]))
             role = "assistant" if message["speaker"] == "customer" else "user"
             chat.append({"role": role, "content": str(message["text"])})
 
         responses, calls = [], []
-        if offered:  # Reason: the LLM decides whether to open its page (tool_choice "auto")
+        if offered:  # Reason: the LLM decides which tools, if any, to use
+            # A tool call is required once, when the wait first goes past the customer's patience
+            # (a timer blinking red is hard to miss); the LLM still chooses which offered tool.
+            # Otherwise tool_choice is "auto": the LLM may answer without any tool.
+            choice = "required" if self.patience_ran_out(messages, clock) else None
             if on_event is not None:
-                on_event("offer", {"offered": [ORDER_PAGE_TOOL], "model": self.llm.resolve_model("client")})
-            first = self.llm.chat("client", chat, tools=[ORDER_PAGE_SCHEMA], agent="client", temperature=0.7)
+                model = self.llm.resolve_model("client")
+                on_event("offer", {"offered": names, "model": model, "tool_choice": choice})
+            first = self.llm.chat(
+                "client", chat, tools=offered, agent="client", temperature=0.7, tool_choice=choice
+            )
             responses.append(first)
-            if any(c["name"] == ORDER_PAGE_TOOL for c in first.tool_calls):
-                call = self._open_page(profile, first.tool_calls[0].get("arguments") or {})
+            for request in first.tool_calls:  # Act: each offered tool runs at most once per turn
+                if request["name"] not in names or any(c["name"] == request["name"] for c in calls):
+                    continue
+                call = self._run_tool(request["name"], profile, clock, request.get("arguments") or {})
                 calls.append(call)
                 if on_event is not None:
                     on_event("tool", {k: v for k, v in call.items() if k != "result"})
-                chat.extend(self._page_exchange(call["result"]))
+                chat.extend(self._tool_exchange(call["name"], call["result"]))
         if not responses or calls or not self._parses(responses[-1]):
-            # Answer (after reading the page, or when the first answer was not JSON)
+            # Answer (after reading the tool results, or when the first answer was not JSON)
             responses.append(self.llm.chat("client", chat, json_mode=True, agent="client", temperature=0.7))
         data = responses[-1].json()
         text = str(data.get("message", "")).strip()
@@ -314,8 +402,9 @@ class ClientAgent:
             if end and csat not in (None, "")
             else (self._survey(profile, messages + [{"speaker": "customer", "text": text}]) if end else None)
         )
+        page_now = any(c["name"] == ORDER_PAGE_TOOL and c["ok"] for c in calls)
         mismatch = data.get("mismatch")
-        mismatch = bool(mismatch) if (calls or seen) and isinstance(mismatch, bool) else None
+        mismatch = bool(mismatch) if (page_now or seen) and isinstance(mismatch, bool) else None
         return ClientTurn(
             text,
             end,
@@ -336,27 +425,34 @@ class ClientAgent:
             return False
 
     @staticmethod
-    def _page_exchange(page: dict[str, Any]) -> list[dict[str, Any]]:
+    def _tool_exchange(name: str, result: dict[str, Any]) -> list[dict[str, Any]]:
         """The tool call and its result, in the chat format of the LLM layer."""
-        call = {"function": {"name": ORDER_PAGE_TOOL, "arguments": {}}}
+        call = {"function": {"name": name, "arguments": {}}}
         return [
             {"role": "assistant", "content": "", "tool_calls": [call]},
-            {"role": "tool", "content": json.dumps(page), "tool_name": ORDER_PAGE_TOOL},
+            {"role": "tool", "content": json.dumps(result), "tool_name": name},
         ]
 
     @staticmethod
-    def _open_page(profile: CustomerProfile, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Run the tool. It always opens the customer's own order (arguments are ignored:
-        the customer cannot look at someone else's order)."""
+    def _run_tool(
+        name: str, profile: CustomerProfile, clock: ChatClock | None, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Run a customer tool. Neither takes arguments: the customer can only open its own
+        order page and its own chat timer (any argument the LLM invents is ignored)."""
         started = time.perf_counter()
-        page = my_order_page(profile.order_id, profile.contact_timestamp)
-        result = page if page is not None else {"error": "order not found"}
+        if name == ORDER_PAGE_TOOL:
+            page = my_order_page(profile.order_id, profile.contact_timestamp)
+            ok, result, summary = page is not None, page or {"error": "order not found"}, summarize_page(page)
+        else:
+            assert clock is not None  # only offered with a clock
+            result = clock.reading()
+            ok, summary = True, summarize_clock(result)
         return {
-            "name": ORDER_PAGE_TOOL,
+            "name": name,
             "arguments": dict(arguments),
-            "ok": page is not None,
+            "ok": ok,
             "result": result,
             "caller": "llm",
-            "summary": summarize_page(page),
+            "summary": summary,
             "latency_ms": round((time.perf_counter() - started) * 1000, 1),
         }

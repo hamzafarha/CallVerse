@@ -1,19 +1,33 @@
-"""Client agent tool: the customer's own "My orders" page (view_my_order_page).
+"""Client agent tools: the customer's own "My orders" page (view_my_order_page) and
+its chat timer (check_my_waiting_time).
 
 A scripted LLM plays the customer, so each test controls what the "LLM" chooses and
-checks what the code does around it: gating (when the page is offered), running the
-tool on the customer's own order only, the mismatch flag and the customer's memory of
-pages it opened earlier.
+checks what the code does around it: gating (when a tool is offered), running the
+tools on the customer's own data only, the mismatch flag, the waiting-time arithmetic,
+the KPIs and the customer's memory of tools it used earlier.
 """
 
 import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from callverse.agents.client.chat_clock import (
+    ChatClock,
+    persona_patience,
+    queue_wait_from_twin,
+    summarize_clock,
+)
 from callverse.agents.client.order_page import STATUS_LABEL, my_order_page, summarize_page
-from callverse.agents.client.simulator import MAX_PAGE_CHECKS, ORDER_PAGE_TOOL, ClientAgent, page_checks
+from callverse.agents.client.simulator import (
+    CLOCK_TOOL,
+    MAX_PAGE_CHECKS,
+    ORDER_PAGE_TOOL,
+    ClientAgent,
+    page_checks,
+)
 from callverse.llm import LLMResponse
 from tests.conftest import requires_data
 
@@ -34,6 +48,7 @@ class ScriptedCustomerLLM:
     script: list[Any] = field(default_factory=list)
     offered: list[list[str]] = field(default_factory=list)
     json_mode: list[bool] = field(default_factory=list)
+    choices: list[str | None] = field(default_factory=list)
     chats: list[list[dict[str, Any]]] = field(default_factory=list)
 
     def available(self) -> bool:
@@ -45,6 +60,7 @@ class ScriptedCustomerLLM:
     def chat(self, role: str, messages: list[dict[str, Any]], tools=None, **options: Any) -> LLMResponse:
         self.offered.append([t["function"]["name"] for t in tools or []])
         self.json_mode.append(bool(options.get("json_mode")))
+        self.choices.append(options.get("tool_choice"))
         self.chats.append(list(messages))
         step = self.script.pop(0)
         if isinstance(step, str):
@@ -150,3 +166,126 @@ def test_customer_remembers_its_page_and_stops_checking(profile) -> None:
     assert sum(m["role"] == "tool" for m in llm.chats[0]) == MAX_PAGE_CHECKS  # but it remembers them
     assert "already opened" in llm.chats[0][0]["content"]
     assert turn.mismatch is False and "tools" not in turn.meta()
+
+
+# ------------------------------------------------------------------ waiting time
+class FakeTime:
+    """A wall clock the test moves by hand."""
+
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_chat_clock_adds_up_all_the_waiting() -> None:
+    now = FakeTime()
+    clock = ChatClock(patience_seconds=180, queue_wait_seconds=120, now=now)
+    now.t += 10
+    clock.answer_arrived()  # first answer after 10 s
+    clock.customer_wrote()
+    now.t += 60
+    clock.answer_arrived()  # then the advisor took a minute
+    reading = clock.reading()
+    assert reading["waited_in_queue_seconds"] == 120 and reading["waited_for_last_answer_seconds"] == 60
+    assert reading["total_wait_seconds"] == 190 and reading["over_my_patience"]
+    assert "3 min 10 s in all" in reading["clock"]
+    assert summarize_clock(reading) == "waited 3 min 10 s in all, patience 3 min 00 s: over my patience"
+
+
+def test_patience_is_the_twins_persona_patience() -> None:
+    normal = persona_patience("normal")
+    assert persona_patience("impatient") == normal / 2 and persona_patience("patient") == normal * 2
+
+
+def test_twin_queue_wait_is_the_erlang_c_wait() -> None:
+    assert queue_wait_from_twin({"is_live": True, "expected_wait_seconds": 16.4}) == 16.4
+    # Centre closed: like in the twin (no abandonment while closed), it uses no patience
+    assert queue_wait_from_twin({"is_live": False, "expected_wait_seconds": None}) == 0.0
+
+
+def test_timer_is_not_offered_while_the_wait_is_short(profile) -> None:
+    now = FakeTime()
+    patience = persona_patience(profile.persona)
+    clock = ChatClock(patience, queue_wait_seconds=0.2 * patience, now=now)
+    llm = ScriptedCustomerLLM([answer("Okay, thank you.")])
+    messages = chat_until(profile, "Thank you for waiting, I am here to help.")
+    ClientAgent(llm, "llm").respond(profile, messages, 2, clock=clock)
+    assert llm.offered == [[]]
+    assert clock.last_customer_at == now.t and len(clock.answer_waits) == 1  # the clock still runs
+
+
+def test_customer_checks_its_timer_and_leaves_out_of_patience(profile) -> None:
+    now = FakeTime()
+    patience = persona_patience(profile.persona)
+    clock = ChatClock(patience, queue_wait_seconds=0.8 * patience, now=now)
+    now.t += 0.4 * patience  # and the advisor is slow to answer
+    events: list[tuple[str, dict]] = []
+    llm = ScriptedCustomerLLM([[(CLOCK_TOOL, {})], answer("I have waited far too long, goodbye.", end=True)])
+    messages = chat_until(profile, "Thank you for waiting, I am here to help.")
+    turn = ClientAgent(llm, "llm").respond(
+        profile, messages, 2, on_event=lambda s, d: events.append((s, d)), clock=clock
+    )
+    assert llm.offered == [[CLOCK_TOOL], []]
+    assert llm.choices[0] == "required"  # patience just ran out: it must look at the timer
+    assert CLOCK_TOOL in llm.chats[0][0]["content"]  # the system prompt explains the tool
+    [call] = turn.tool_calls
+    assert call["name"] == CLOCK_TOOL and call["ok"] and call["caller"] == "llm"
+    assert call["result"]["over_my_patience"] and call["result"]["total_wait_seconds"] == round(
+        1.2 * patience
+    )
+    assert turn.end and turn.meta()["end"] is True and turn.mismatch is None
+    assert [step for step, _ in events] == ["offer", "tool"] and events[0][1]["offered"] == [CLOCK_TOOL]
+    assert events[0][1]["tool_choice"] == "required"
+
+
+def test_timer_is_optional_before_patience_runs_out_and_required_only_once(profile) -> None:
+    now = FakeTime()
+    patience = persona_patience(profile.persona)
+    messages = chat_until(profile, "Thank you for waiting, I am here to help.")
+    # Between half and all of its patience: offered, the LLM may ignore it
+    clock = ChatClock(patience, queue_wait_seconds=0.6 * patience, now=now)
+    llm = ScriptedCustomerLLM([answer("Okay.")])
+    ClientAgent(llm, "llm").respond(profile, messages, 2, clock=clock)
+    assert llm.offered == [[CLOCK_TOOL]] and llm.choices == [None]
+    # Past its patience but it already looked once: offered again, not required
+    seen = {"name": CLOCK_TOOL, "ok": True, "result": {"over_my_patience": True}, "caller": "llm"}
+    looked = {"speaker": "customer", "text": "Still waiting!", "meta": {"mode": "llm", "tools": [seen]}}
+    clock = ChatClock(patience, queue_wait_seconds=2 * patience, now=now)
+    llm = ScriptedCustomerLLM([answer("Okay.")])
+    ClientAgent(llm, "llm").respond(profile, [*messages[:3], looked, messages[3]], 3, clock=clock)
+    assert llm.offered == [[CLOCK_TOOL]] and llm.choices == [None]
+
+
+def test_both_tools_can_be_offered_in_the_same_turn(profile) -> None:
+    patience = persona_patience(profile.persona)
+    clock = ChatClock(patience, queue_wait_seconds=patience, now=FakeTime())
+    llm = ScriptedCustomerLLM(
+        [
+            [(ORDER_PAGE_TOOL, {}), (CLOCK_TOOL, {}), (CLOCK_TOOL, {})],  # asks the timer twice
+            answer("Finally! But my page does not say that.", mismatch=True),
+        ]
+    )
+    messages = chat_until(profile, "Your order was delivered on 2 March 2017.")
+    turn = ClientAgent(llm, "llm").respond(profile, messages, 2, clock=clock)
+    assert llm.offered[0] == [ORDER_PAGE_TOOL, CLOCK_TOOL] and llm.choices[0] == "required"
+    assert [c["name"] for c in turn.tool_calls] == [ORDER_PAGE_TOOL, CLOCK_TOOL]  # each tool once per turn
+    assert sum(m["role"] == "tool" for m in llm.chats[1]) == 2 and turn.mismatch is True
+
+
+def test_kpis_count_timer_checks_and_customers_who_left_waiting(profile) -> None:
+    from callverse.orchestration.graph import kpi_row
+
+    timer = {"name": CLOCK_TOOL, "ok": True, "result": {"over_my_patience": True}, "caller": "llm"}
+    left = {
+        "speaker": "customer",
+        "text": "Too slow, bye.",
+        "meta": {"mode": "llm", "tools": [timer], "end": True},
+    }
+    messages = [*chat_until(profile, "Thank you for waiting."), left]
+    session = SimpleNamespace(profile=profile, memory=SimpleNamespace(handed_to=None, outcome=None))
+    card = {"judge": "rules", "resolved": False, "scores": {"compliance": 5}, "correct": False}
+    row = kpi_row(session, messages, {}, card, 1, {})
+    assert row["customer_wait_checks"] == 1 and row["customer_left_waiting"] is True
+    assert row["customer_page_checks"] == 0

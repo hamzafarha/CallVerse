@@ -590,6 +590,15 @@ def _display_name(customer_id: str) -> str:
     return f"{FIRST_NAMES[number % len(FIRST_NAMES)]} {chr(65 + (number // 7) % 26)}."
 
 
+def _seconds(value: Any) -> float | None:
+    """A duration sent by the UI (None when missing or not a positive number)."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if 0 <= seconds < 7 * 24 * 3600 else None
+
+
 def _customer_card(contact: pd.Series, profile: Any, with_details: bool = False) -> dict[str, Any]:
     from callverse.agents.advisor.tools import AdvisorTools
     from callverse.agents.client.order_page import order_timeline
@@ -783,7 +792,8 @@ async def ws_session(websocket: WebSocket) -> None:
     """A conversation where a human plays the customer or the advisor.
 
     First message: ``{"type": "start", "contact_id", "customer": "human"|"agent",
-    "advisor": "human"|"agent", "mode", "variant", "seed"}``. Then the UI sends
+    "advisor": "human"|"agent", "mode", "variant", "seed", "waited_seconds"}``
+    (``waited_seconds``: the advisor desk's queue time of the customer). Then the UI sends
     ``customer_message`` / ``advisor_message`` / ``suggest`` / ``autopilot`` / ``end``
     and receives ``ready``, ``message``, ``token``, ``stage``, ``routing``,
     ``suggestion``, ``review`` and ``done`` events.
@@ -818,6 +828,7 @@ async def ws_session(websocket: WebSocket) -> None:
             start.get("variant"),
             start.get("customer", "human"),
             start.get("advisor", "agent"),
+            _seconds(start.get("waited_seconds")),
         )
         advisor = session.session.advisor
         llm = advisor.use_llm()

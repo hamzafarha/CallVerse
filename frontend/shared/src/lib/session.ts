@@ -48,6 +48,7 @@ export interface StartOptions {
   mode?: "auto" | "llm" | "template";
   variant?: "rag_policy" | "rag" | "agentic";
   seed?: number;
+  waited_seconds?: number; // advisor desk: how long the customer already waited in the queue
 }
 
 const INITIAL: LiveState = {
