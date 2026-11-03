@@ -53,6 +53,7 @@ export default function DeskPage() {
   const session = useLiveSession();
   const { state } = session;
   const scroller = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
   const details = useApi<any>(selected ? `/api/portal/customers/${selected.contact_id}` : null);
   // Voice mode: the agents speak (the Client agent, and the Advisor agent on autopilot),
   // each with its own voice; what you type yourself is never read back.
@@ -69,6 +70,13 @@ export default function DeskPage() {
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
   }, [state.messages.length, state.streaming?.text, state.suggestion]);
+  // The reply box starts on one line and grows with the text (up to max-h-32)
+  useEffect(() => {
+    const box = composer.current;
+    if (!box) return;
+    box.style.height = "auto";
+    box.style.height = `${box.scrollHeight + 2}px`;
+  }, [text]);
   useEffect(() => {
     if (state.review && selected) {
       const seconds = state.startedAt ? (Date.now() - state.startedAt) / 1000 : 0;
@@ -225,33 +233,37 @@ export default function DeskPage() {
             </div>
           ) : (
             <>
-              <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3 sm:px-6">
+              {/* One line: the name block shrinks (truncated) before the controls wrap */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-4 py-2.5 sm:px-6">
                 <Avatar name={selected.name} size={36} />
-                <div className="mr-auto">
-                  <div className="font-semibold text-ink">{selected.name}</div>
-                  <div className="text-xs text-muted">
-                    {humanize(selected.intent)} · <span className="capitalize">{selected.persona}</span> customer · simulated by the Client agent
+                <div className="min-w-[150px] flex-1">
+                  <div className="truncate font-semibold text-ink">{selected.name}</div>
+                  <div className="truncate text-xs text-muted" title="simulated by the Client agent">
+                    {humanize(selected.intent)} · <span className="capitalize">{selected.persona}</span> customer · Client agent
                   </div>
                 </div>
-                <VoiceControls voice={voice} />
-                <Segmented
-                  id="pilot"
-                  size="sm"
-                  value={autopilot ? "agent" : "human"}
-                  onChange={(v) => toggleAutopilot(v === "agent")}
-                  options={[
-                    { value: "human", label: <><User size={12} /> You answer</> },
-                    { value: "agent", label: <><Bot size={12} /> Autopilot</> },
-                  ]}
-                />
-                <button className="btn btn-ghost py-1.5 text-xs" disabled={ended || session.busy || !state.messages.some((m) => m.speaker === "advisor")} onClick={() => session.end()}>
-                  <CheckCheck size={14} /> Wrap up
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <VoiceControls voice={voice} />
+                  <Segmented
+                    id="pilot"
+                    size="sm"
+                    value={autopilot ? "agent" : "human"}
+                    onChange={(v) => toggleAutopilot(v === "agent")}
+                    options={[
+                      { value: "human", label: <><User size={12} /> You answer</> },
+                      { value: "agent", label: <><Bot size={12} /> Autopilot</> },
+                    ]}
+                  />
+                  <button className="btn btn-ghost py-1.5 text-xs" disabled={ended || session.busy || !state.messages.some((m) => m.speaker === "advisor")} onClick={() => session.end()}>
+                    <CheckCheck size={14} /> Wrap up
+                  </button>
+                </div>
               </div>
               <AnimatePresence initial={false}>
                 {voice.enabled && (
                   <CallPanel
                     key="call"
+                    compact
                     voice={voice}
                     startedAt={state.startedAt}
                     left={
@@ -276,10 +288,10 @@ export default function DeskPage() {
                   />
                 )}
               </AnimatePresence>
-              <div className="border-b border-line bg-raised/40 px-4 py-3 sm:px-6">
-                <AgentPipeline active={state.activeAgent} visited={state.visited} stages={state.stages} done={!!state.review} />
+              <div className="border-b border-line bg-raised/40 px-4 py-2 sm:px-6">
+                <AgentPipeline compact active={state.activeAgent} visited={state.visited} stages={state.stages} done={!!state.review} />
               </div>
-              <div ref={scroller} className="scroll-fade flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-6">
+              <div ref={scroller} className="scroll-fade min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-6">
                 {state.messages.map((m, i) => {
                   const role = m.speaker === "advisor" ? "advisor" : "customer";
                   return (
@@ -299,36 +311,40 @@ export default function DeskPage() {
                 </AnimatePresence>
               </div>
               {!ended && !autopilot && (
-                <div className="border-t border-line bg-surface p-3 sm:p-4">
+                <div className="border-t border-line bg-surface px-3 py-2.5 sm:px-4">
                   <AnimatePresence>
                     {(state.suggestion || state.streaming?.kind === "draft") && (
                       <motion.div
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 10 }}
-                        className="ring-gradient mb-3 rounded-2xl bg-raised p-3"
+                        className="ring-gradient mb-2.5 rounded-2xl bg-raised px-3 py-2"
                       >
-                        <div className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-brand">
+                        {/* Buttons on the title line and a capped text height: the conversation keeps the room */}
+                        <div className="mb-1 flex min-h-[28px] items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-brand">
                           <Wand2 size={13} /> Copilot draft
                           {state.suggestion?.meta?.tools?.length ? <span className="font-normal normal-case tracking-normal text-muted">· {state.suggestion.meta.tools.length} tool calls</span> : null}
+                          {state.suggestion && (
+                            <div className="ml-auto flex gap-1.5 normal-case tracking-normal">
+                              <button className="btn btn-primary px-2.5 py-1 text-xs" onClick={() => sendAdvisor(state.suggestion!.text)}>
+                                <SendHorizonal size={12} /> Send draft
+                              </button>
+                              <button className="btn btn-ghost px-2.5 py-1 text-xs" onClick={() => setText(state.suggestion!.text)}>
+                                <Pencil size={12} /> Edit first
+                              </button>
+                            </div>
+                          )}
                         </div>
-                        <p className={clsx("text-sm text-ink", !state.suggestion && "caret")}>{state.suggestion?.text ?? state.streaming?.text}</p>
-                        {state.suggestion && (
-                          <div className="mt-2.5 flex gap-2">
-                            <button className="btn btn-primary py-1.5 text-xs" onClick={() => sendAdvisor(state.suggestion!.text)}>
-                              <SendHorizonal size={13} /> Send draft
-                            </button>
-                            <button className="btn btn-ghost py-1.5 text-xs" onClick={() => setText(state.suggestion!.text)}>
-                              <Pencil size={13} /> Edit first
-                            </button>
-                          </div>
-                        )}
+                        <p className={clsx("max-h-[4.5rem] overflow-y-auto pr-1 text-sm leading-snug text-ink", !state.suggestion && "caret")}>
+                          {state.suggestion?.text ?? state.streaming?.text}
+                        </p>
                       </motion.div>
                     )}
                   </AnimatePresence>
                   <div className="flex items-end gap-2">
                     <textarea
-                      rows={2}
+                      ref={composer}
+                      rows={1}
                       value={text}
                       onChange={(e) => setText(e.target.value)}
                       onKeyDown={(e) => {
@@ -338,9 +354,9 @@ export default function DeskPage() {
                         }
                       }}
                       placeholder="Type your reply, or use the copilot draft…"
-                      className="field resize-none"
+                      className="field max-h-32 min-h-[44px] resize-none"
                     />
-                    <button className="btn btn-primary h-[58px] px-4" disabled={session.busy || !text.trim()} onClick={() => sendAdvisor(text)}>
+                    <button className="btn btn-primary h-11 px-4" disabled={session.busy || !text.trim()} onClick={() => sendAdvisor(text)}>
                       <SendHorizonal size={17} />
                     </button>
                   </div>

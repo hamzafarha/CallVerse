@@ -1,5 +1,19 @@
 import { motion } from "framer-motion";
-import { AlertTriangle, AudioLines, Bot, CheckCircle2, FileSearch, ShieldCheck, Sparkles, Timer, Volume2, Wrench, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  AudioLines,
+  Bot,
+  CheckCircle2,
+  FileSearch,
+  Image as ImageIcon,
+  ReceiptText,
+  ShieldCheck,
+  Sparkles,
+  Timer,
+  Volume2,
+  Wrench,
+  XCircle,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import type { ChatMessage, StageEvent } from "../lib/session";
 import { Typewriter, TypingDots } from "./motion";
@@ -18,6 +32,7 @@ export const TOOL_LABEL: Record<string, string> = {
   check_draft_reply: "Fact check",
   view_my_order_page: "My order page", // the Client agent's tools
   check_my_waiting_time: "My waiting time",
+  send_evidence: "Send evidence",
 };
 
 /** Who decided to call a tool: the LLM itself, a fixed pipeline step, or a safety net. */
@@ -33,6 +48,7 @@ export function stageLabel(stage: StageEvent | undefined): string {
   if (stage.agent === "workforce") return "Workforce agent is routing the conversation…";
   if (stage.agent === "client") {
     if (stage.step !== "tool") return "Customer is typing…";
+    if (stage.name === "send_evidence") return "Customer is attaching a file…";
     return stage.name === "check_my_waiting_time" ? "Customer is looking at the clock…" : "Customer is reading their order page…";
   }
   if (stage.agent === "quality") return "Quality agent is reviewing the conversation…";
@@ -108,6 +124,8 @@ export function ChatBubble({
   const mismatch: boolean | undefined = message.meta?.mismatch;
   // Client agent: its chat timer showed it had waited longer than its patience
   const outOfPatience = tools.some((t) => t.name === "check_my_waiting_time" && t.result?.over_my_patience);
+  // Client agent: files attached with send_evidence (simulated photos, statement screenshot)
+  const attachments: any[] = message.meta?.attachments ?? [];
   return (
     <motion.div
       layout
@@ -130,6 +148,7 @@ export function ChatBubble({
         >
           {animate ? <Typewriter text={message.text} /> : message.text}
         </div>
+        {attachments.length > 0 && <Attachments files={attachments} />}
         {showMeta && (label || tools.length > 0 || sources.length > 0 || onListen || speaking || mismatch !== undefined || outOfPatience) && (
           <div className={clsx("mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted", mine && "justify-end")}>
             {onListen && (
@@ -181,6 +200,38 @@ export function ChatBubble({
         )}
       </div>
     </motion.div>
+  );
+}
+
+/** Files the customer attached: simulated photos and statement screenshots, described from the real order. */
+function Attachments({ files }: { files: any[] }) {
+  return (
+    <div className="mt-1.5 flex flex-col gap-1.5">
+      {files.map((file, i) => (
+        <motion.div
+          key={i}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 * i }}
+          className="flex max-w-sm items-start gap-2.5 rounded-xl border border-line bg-surface px-2.5 py-2 text-xs shadow-soft"
+          title="Simulated attachment: described from the customer's real order"
+        >
+          <div
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-brand"
+            style={{ background: "color-mix(in srgb, var(--brand) 12%, transparent)" }}
+          >
+            {file.kind === "payment_statement" ? <ReceiptText size={18} /> : <ImageIcon size={18} />}
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-baseline gap-x-1.5 font-medium text-ink">
+              {file.label}
+              <span className="font-mono text-[10px] font-normal text-muted">{file.file}</span>
+            </div>
+            <div className="text-ink2">{file.description}</div>
+          </div>
+        </motion.div>
+      ))}
+    </div>
   );
 }
 

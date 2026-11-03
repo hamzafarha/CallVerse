@@ -80,6 +80,11 @@ CLOSINGS = [
     "To sum up, {summary} Is there anything else I can help you with?",
     "So, {summary} Can I help you with anything else today?",
 ]
+# The customer attached photos or a statement screenshot (Client agent: send_evidence)
+EVIDENCE_THANKS = (
+    "Thank you, I have received your {files} and added them to your case, so it can go ahead. "
+    "Is there anything else I can help you with?"
+)
 SUPERVISOR_SUMMARY = " A supervisor will also contact you within 1 business day."
 SUPERVISOR_PROMISE = "A supervisor will contact you within 1 business day."
 GOODBYES = ["No, that's all. Bye!", "No, thank you.", "That's everything, thanks."]

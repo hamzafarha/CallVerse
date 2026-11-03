@@ -20,9 +20,17 @@ from callverse.agents.client.chat_clock import (
     queue_wait_from_twin,
     summarize_clock,
 )
+from callverse.agents.client.evidence import (
+    BOX_DAMAGE,
+    DAMAGE,
+    EVIDENCE_KINDS,
+    attachments_text,
+    make_evidence,
+)
 from callverse.agents.client.order_page import STATUS_LABEL, my_order_page, summarize_page
 from callverse.agents.client.simulator import (
     CLOCK_TOOL,
+    EVIDENCE_TOOL,
     MAX_PAGE_CHECKS,
     ORDER_PAGE_TOOL,
     ClientAgent,
@@ -34,6 +42,9 @@ from tests.conftest import requires_data
 pytestmark = requires_data
 
 TRACK_ORDER = "SC000014"  # track_order: "where is my order?"
+DAMAGED = "SC002632"  # damaged_delivery, delivered, paid by boleto
+WRONG_ITEM = "SC008360"  # wrong_item, delivered
+PAYMENT = "SC000004"  # payment_issue, not shipped yet
 CUSTOMER_FIELDS = {
     "order_id", "today", "status", "estimated_delivery", "delivered_on", "steps", "items",
     "amount_paid_brl", "payment",
@@ -47,6 +58,7 @@ class ScriptedCustomerLLM:
 
     script: list[Any] = field(default_factory=list)
     offered: list[list[str]] = field(default_factory=list)
+    schemas: list[list[dict[str, Any]]] = field(default_factory=list)
     json_mode: list[bool] = field(default_factory=list)
     choices: list[str | None] = field(default_factory=list)
     chats: list[list[dict[str, Any]]] = field(default_factory=list)
@@ -59,6 +71,7 @@ class ScriptedCustomerLLM:
 
     def chat(self, role: str, messages: list[dict[str, Any]], tools=None, **options: Any) -> LLMResponse:
         self.offered.append([t["function"]["name"] for t in tools or []])
+        self.schemas.append(list(tools or []))
         self.json_mode.append(bool(options.get("json_mode")))
         self.choices.append(options.get("tool_choice"))
         self.chats.append(list(messages))
@@ -288,4 +301,122 @@ def test_kpis_count_timer_checks_and_customers_who_left_waiting(profile) -> None
     card = {"judge": "rules", "resolved": False, "scores": {"compliance": 5}, "correct": False}
     row = kpi_row(session, messages, {}, card, 1, {})
     assert row["customer_wait_checks"] == 1 and row["customer_left_waiting"] is True
-    assert row["customer_page_checks"] == 0
+    assert row["customer_page_checks"] == 0 and row["customer_evidence_sent"] == 0
+
+
+# ------------------------------------------------------------------ evidence
+def customer(contact_id: str):
+    from callverse.agents.client.profiles import profile_by_contact_id
+    from callverse.data import loaders
+
+    return profile_by_contact_id(loaders.contacts(), contact_id)
+
+
+def enum_offered(llm: ScriptedCustomerLLM, call: int = 0) -> list[str]:
+    schema = next(t for t in llm.schemas[call] if t["function"]["name"] == EVIDENCE_TOOL)
+    return schema["function"]["parameters"]["properties"]["kinds"]["items"]["enum"]
+
+
+def test_evidence_matches_the_customers_real_order() -> None:
+    damaged = customer(DAMAGED)
+    photo = make_evidence("product_photo", damaged)
+    assert photo["label"] == EVIDENCE_KINDS["product_photo"] and photo["simulated"]
+    assert any(d in photo["description"] for d in DAMAGE)  # its real problem: a damaged item
+    assert any(d in make_evidence("packaging_photo", damaged)["description"] for d in BOX_DAMAGE)
+    assert damaged.order_id[:8] in make_evidence("shipping_label_photo", damaged)["description"]
+    assert make_evidence("payment_statement", damaged)["description"].startswith("boleto of R$ 94.31")
+    wrong = make_evidence("product_photo", customer(WRONG_ITEM))
+    assert "different product" in wrong["description"]
+    assert make_evidence("product_photo", damaged) == photo  # same customer, same file
+
+
+def test_evidence_that_cannot_exist_is_refused() -> None:
+    not_delivered = customer(TRACK_ORDER)
+    assert "not received" in make_evidence("product_photo", not_delivered)["error"]
+    assert "not been shipped" in make_evidence("shipping_label_photo", customer(PAYMENT))["error"]
+    assert "unknown kind" in make_evidence("selfie", not_delivered)["error"]
+
+
+def test_evidence_is_offered_only_when_the_advisor_asks_for_proof() -> None:
+    damaged = customer(DAMAGED)
+    llm = ScriptedCustomerLLM([answer("Okay, thank you.")])
+    ClientAgent(llm, "llm").respond(damaged, chat_until(damaged, "I am sorry about this."), 2)
+    assert llm.offered == [[]]
+
+
+def test_customer_sends_the_photos_it_was_asked_for() -> None:
+    damaged = customer(DAMAGED)
+    events: list[tuple[str, dict]] = []
+    # One call selects several files, like a phone's photo picker (the same file twice: sent once)
+    files = ["product_photo", "packaging_photo", "shipping_label_photo", "product_photo"]
+    llm = ScriptedCustomerLLM(
+        [
+            [(EVIDENCE_TOOL, {"kinds": files})],
+            answer("Here are the photos of the product, the box and the label."),
+        ]
+    )
+    ask = "Please reply with photos of the product, the packaging and the shipping label."
+    messages = chat_until(damaged, ask)
+    turn = ClientAgent(llm, "llm").respond(damaged, messages, 2, on_event=lambda s, d: events.append((s, d)))
+    assert llm.offered == [[EVIDENCE_TOOL], []] and enum_offered(llm) == list(EVIDENCE_KINDS)
+    assert [a["kind"] for a in turn.attachments] == files[:3]
+    assert turn.meta()["attachments"] == turn.attachments
+    assert sum(m["role"] == "tool" for m in llm.chats[1]) == 1  # it read what was attached
+    assert [step for step, _ in events] == ["offer", "tool"]
+    assert events[1][1]["summary"] == "sent 3 files (product, packaging, shipping label)"
+
+    # Next request: only the file not sent yet is offered; a file sent before is refused
+    sent = {"speaker": "customer", "text": turn.text, "meta": turn.meta()}
+    statement = "Thanks! Could you also send a screenshot of the statement line?"
+    messages += [sent, {"speaker": "advisor", "text": statement}]
+    kinds = ["product_photo", "payment_statement"]
+    llm = ScriptedCustomerLLM([[(EVIDENCE_TOOL, {"kinds": kinds})], answer("Here is the screenshot.")])
+    turn = ClientAgent(llm, "llm").respond(damaged, messages, 3)
+    assert enum_offered(llm) == ["payment_statement"]
+    [call] = turn.tool_calls
+    assert (
+        call["ok"] and call["result"]["refused"][0]["error"] == "you already sent your photo of the product"
+    )
+    assert [a["kind"] for a in turn.attachments] == ["payment_statement"]
+
+
+def test_a_file_that_cannot_exist_is_refused_in_the_tool_result() -> None:
+    not_delivered = customer(TRACK_ORDER)
+    llm = ScriptedCustomerLLM(
+        [[(EVIDENCE_TOOL, {"kinds": ["product_photo"]})], answer("I have not received it.")]
+    )
+    messages = chat_until(not_delivered, "Could you send a photo of the product?")
+    turn = ClientAgent(llm, "llm").respond(not_delivered, messages, 2)
+    [call] = turn.tool_calls
+    assert not call["ok"] and turn.attachments == [] and "attachments" not in turn.meta()
+    assert (
+        "not received"
+        in json.loads(next(m for m in llm.chats[1] if m["role"] == "tool")["content"])["refused"][0]["error"]
+    )  # the LLM read why, so it can tell the advisor
+
+
+def test_advisor_and_judge_read_the_attachments_and_the_template_thanks() -> None:
+    from callverse.orchestration.graph import advisor_message, kpi_row, make_session
+    from callverse.orchestration.runtime import AgentRuntime
+
+    damaged = customer(DAMAGED)
+    files = [make_evidence("product_photo", damaged), make_evidence("packaging_photo", damaged)]
+    sent = {"speaker": "customer", "text": "Here you are.", "meta": {"mode": "llm", "attachments": files}}
+    seen = attachments_text(sent)  # what the advisor's LLM and the judge read
+    assert seen.startswith("Here you are.\n[Attached photo of the product (IMG_")
+    assert files[1]["description"] in seen
+
+    session = make_session(damaged, mode="template", runtime=AgentRuntime(retriever_kind="keyword"))
+    messages = [
+        {"speaker": "customer", "text": damaged.opening_message},
+        {"speaker": "advisor", "text": "Could you give me your order number, please?"},
+        {"speaker": "customer", "text": f"Sure, it is {damaged.order_id}."},
+    ]
+    messages.append(advisor_message(session.advisor.reply(messages, session.memory, session.tools)))
+    messages.append(sent)
+    thanks = session.advisor.reply(messages, session.memory, session.tools)  # offline backup advisor
+    assert thanks.stage == "evidence"
+    assert "received your photo of the product and photo of the packaging" in thanks.text
+
+    card = {"judge": "rules", "resolved": True, "scores": {"compliance": 5}, "correct": True}
+    assert kpi_row(session, messages, {}, card, 4, {})["customer_evidence_sent"] == 2

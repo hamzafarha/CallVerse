@@ -73,7 +73,7 @@ export function TalkingAvatar({
             cy={-4}
             r={3.2}
             style={{ fill: "var(--text-muted)" }}
-            animate={reduced ? undefined : { cy: [-4, -9, -4], opacity: [0.35, 1, 0.35] }}
+            animate={reduced ? undefined : { y: [0, -5, 0], opacity: [0.35, 1, 0.35] }} // transform, not the cy attribute (no "cy undefined" on exit)
             transition={{ repeat: Infinity, duration: 0.9, delay: i * 0.15 }}
           />
         ))}

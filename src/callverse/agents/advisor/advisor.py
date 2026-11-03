@@ -37,11 +37,13 @@ from callverse.agents.advisor.prompts import (
     format_context,
 )
 from callverse.agents.advisor.tools import AdvisorTools, agentic_tool_schemas, tool_schemas
+from callverse.agents.client.evidence import attachments_text
 from callverse.data.conversations import (
     BANK_CODE_OK,
     BANK_CODE_UNKNOWN,
     CLOSINGS,
     ESCALATION_CHUNK,
+    EVIDENCE_THANKS,
     GREETINGS,
     SUPERVISOR_PROMISE,
     SUPERVISOR_REPLIES,
@@ -297,6 +299,17 @@ class AdvisorAgent:
                 [BANK_POLICY_CHUNK],
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
+        files = (messages[-1].get("meta") or {}).get("attachments") if messages else None
+        if files:  # the customer sent the photos or the screenshot that were asked for
+            labels = [str(f["label"]).lower() for f in files]
+            names = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+            return AdvisorReply(
+                EVIDENCE_THANKS.format(files=names),
+                "template",
+                "evidence",
+                ["advisor_playbook__s05"],
+                latency_ms=(time.perf_counter() - started) * 1000,
+            )
         return AdvisorReply(
             self._pick(CLOSINGS).format(summary=memory.summary),
             "template",
@@ -392,7 +405,7 @@ class AdvisorAgent:
                 chat.append({"role": "system", "content": POLICY_DECISION.format(**decision)})
         for message in messages:
             role = "user" if message["speaker"] == "customer" else "assistant"
-            chat.append({"role": role, "content": str(message["text"])})
+            chat.append({"role": role, "content": attachments_text(message)})  # text + attached files
 
         total_tokens, latency, model = 0, 0.0, None
         for round_number in range(self.max_tool_rounds + 1):
@@ -589,7 +602,7 @@ class AdvisorAgent:
             chat.append({"role": "system", "content": POLICY_DECISION.format(**memory.decision)})
         for message in messages:
             role = "user" if message["speaker"] == "customer" else "assistant"
-            chat.append({"role": role, "content": str(message["text"])})
+            chat.append({"role": role, "content": attachments_text(message)})  # text + attached files
         sources = [h.chunk.chunk_id for h in hits]
         last = next((str(m["text"]) for m in reversed(messages) if m["speaker"] == "customer"), "")
         decided_before, escalated_before = memory.decision is not None, memory.escalated

@@ -25,6 +25,7 @@ export function AgentPipeline({
   done = false,
   humanCustomer = false,
   vertical = false,
+  compact = false,
 }: {
   active: AgentName | null;
   visited: AgentName[];
@@ -32,6 +33,7 @@ export function AgentPipeline({
   done?: boolean;
   humanCustomer?: boolean;
   vertical?: boolean;
+  compact?: boolean; // one slim line (advisor desk), so the conversation keeps the room
 }) {
   const lastStart = stages.map((s) => s.agent === "advisor" && s.step === "start").lastIndexOf(true);
   const turn = lastStart >= 0 ? stages.slice(lastStart) : [];
@@ -45,6 +47,52 @@ export function AgentPipeline({
     if (active === id) return "active";
     return visited.includes(id) || done ? "done" : "idle";
   };
+  if (compact) {
+    return (
+      <div className="flex items-center overflow-x-auto">
+        {NODES.map((node, index) => {
+          const s = state(node.id);
+          const next = NODES[index + 1];
+          const Icon = node.icon;
+          return (
+            <Fragment key={node.id}>
+              <div
+                title={`${node.label}: ${node.sub}`}
+                className={clsx(
+                  "flex shrink-0 items-center gap-1.5 rounded-full border py-1 pl-1 pr-2.5 transition-colors",
+                  s === "active" ? "ring-gradient border-transparent bg-surface shadow-glow" : "border-line bg-surface",
+                  s === "idle" && "opacity-60",
+                )}
+              >
+                <span
+                  className={clsx("relative flex h-6 w-6 items-center justify-center rounded-full", s === "active" && "animate-pulse-ring")}
+                  style={{ background: s === "idle" ? "var(--surface-3)" : node.color, color: s === "idle" ? "var(--text-muted)" : "white", ["--ring-color" as any]: node.color }}
+                >
+                  <Icon size={13} />
+                  {s === "done" && (
+                    <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center rounded-full border border-[var(--surface-1)] bg-good text-white">
+                      <Check size={7} strokeWidth={4} />
+                    </span>
+                  )}
+                </span>
+                <span className="text-[12px] font-semibold text-ink">
+                  {node.id === "client" && humanCustomer ? "You" : node.label.replace(" agent", "").replace(" engine", "s")}
+                </span>
+                {node.id === "advisor" && (
+                  <span className="flex gap-1">
+                    <SubStep icon={ScanSearch} label="bge-m3" on={!!steps.retrieval} hot={active === "advisor" && !!steps.retrieval && !steps.generation} />
+                    <SubStep icon={Database} label={steps.tools.length ? `${steps.tools.length} tool${steps.tools.length > 1 ? "s" : ""}` : "tools"} on={steps.tools.length > 0} hot={false} />
+                    <SubStep icon={Sparkles} label="LLM" on={!!steps.generation} hot={active === "advisor" && !!steps.generation} />
+                  </span>
+                )}
+              </div>
+              {next && <Connector flowing={next && state(next.id) === "active"} lit={state(next.id) !== "idle"} vertical={false} slim />}
+            </Fragment>
+          );
+        })}
+      </div>
+    );
+  }
   return (
     <div className={clsx("flex flex-col", !vertical && "gap-2 md:flex-row md:items-stretch md:gap-0")}>
       {NODES.map((node, index) => {
@@ -116,9 +164,16 @@ function SubStep({ icon: Icon, label, on, hot }: { icon: LucideIcon; label: stri
   );
 }
 
-function Connector({ flowing, lit, vertical }: { flowing: boolean; lit: boolean; vertical: boolean }) {
+function Connector({ flowing, lit, vertical, slim = false }: { flowing: boolean; lit: boolean; vertical: boolean; slim?: boolean }) {
   const stroke = lit ? "var(--brand)" : "var(--baseline)";
   const dash = flowing ? { animation: "flow 0.6s linear infinite" } : undefined;
+  if (slim) {
+    return (
+      <svg className="h-3 w-5 shrink-0 overflow-visible" preserveAspectRatio="none" viewBox="0 0 20 12" aria-hidden>
+        <line x1="2" y1="6" x2="18" y2="6" stroke={stroke} strokeWidth="2" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" style={dash} />
+      </svg>
+    );
+  }
   return (
     <div className={clsx("relative flex items-center justify-center", vertical ? "h-5" : "h-5 md:h-auto md:w-8")}>
       <svg className="h-full w-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 32 20">

@@ -29,11 +29,13 @@ export function CallPanel({
   left,
   right,
   startedAt,
+  compact = false,
 }: {
   voice: Voice;
   left: CallParticipant;
   right: CallParticipant;
   startedAt: number | null;
+  compact?: boolean; // slim band (advisor desk), so the conversation keeps the room
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -49,22 +51,22 @@ export function CallPanel({
       exit={{ height: 0, opacity: 0 }}
       className="overflow-hidden border-b border-line bg-raised/40"
     >
-      <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6">
-        <Participant p={left} voice={voice} lookAt="right" />
-        <div className="flex shrink-0 flex-col items-center gap-1.5 text-[11px] text-muted">
+      <div className={clsx("flex items-center justify-between gap-3 px-4 sm:px-6", compact ? "py-1.5" : "py-3")}>
+        <Participant p={left} voice={voice} lookAt="right" compact={compact} />
+        <div className={clsx("flex shrink-0 items-center text-[11px] text-muted", compact ? "gap-2" : "flex-col gap-1.5")}>
           <span className="inline-flex items-center gap-1.5 font-semibold text-ink">
             <span className="live-dot" /> On call · <span className="tabular">{clock(seconds)}</span>
           </span>
           <Wave active={!!talker} />
-          <span className="max-w-[150px] truncate">{talker ? `${talker.name} is speaking` : "voice mode"}</span>
+          {!compact && <span className="max-w-[150px] truncate">{talker ? `${talker.name} is speaking` : "voice mode"}</span>}
         </div>
-        <Participant p={right} voice={voice} lookAt="left" />
+        <Participant p={right} voice={voice} lookAt="left" compact={compact} />
       </div>
     </motion.div>
   );
 }
 
-function Participant({ p, voice, lookAt }: { p: CallParticipant; voice: Voice; lookAt: "left" | "right" }) {
+function Participant({ p, voice, lookAt, compact = false }: { p: CallParticipant; voice: Voice; lookAt: "left" | "right"; compact?: boolean }) {
   const speaking = p.state === "speaking";
   const status = p.note ?? STATE_LABEL[p.state];
   return (
@@ -91,14 +93,16 @@ function Participant({ p, voice, lookAt }: { p: CallParticipant; voice: Voice; l
           word={voice.word}
           lipSync={voice.lipSync}
           lookAt={lookAt}
-          size={60}
+          size={compact ? 40 : 60}
           label={`${p.name}: ${status || "on the call"}`}
         />
       </div>
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold text-ink">{p.name}</div>
-        <div className="truncate text-[11px] text-muted">{p.subtitle}</div>
-        <div className={clsx("h-4 text-[11px] font-medium", speaking ? "text-brand" : "text-muted")}>{status}</div>
+        {!compact && <div className="truncate text-[11px] text-muted">{p.subtitle}</div>}
+        <div className={clsx("h-4 truncate text-[11px] font-medium", speaking ? "text-brand" : "text-muted")} title={compact ? p.subtitle : undefined}>
+          {compact ? status || p.subtitle : status}
+        </div>
       </div>
     </div>
   );

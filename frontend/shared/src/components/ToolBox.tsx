@@ -41,12 +41,14 @@ export const NEW_TOOLS = new Set([
   "check_draft_reply",
   "view_my_order_page",
   "check_my_waiting_time",
+  "send_evidence",
 ]);
 
 /** The Client agent's tools (Advisor desk: the customer is simulated). */
 const CUSTOMER_TOOLS = [
   { name: "view_my_order_page", what: "its own order page: offered when you state a status, date or amount" },
   { name: "check_my_waiting_time", what: "its chat timer vs its patience: offered once the wait gets long" },
+  { name: "send_evidence", what: "attaches photos or a statement screenshot: offered when you ask for proof" },
 ];
 
 const CALLER_ICON: Record<string, any> = { llm: Bot, code: Cog, safety_net: ShieldCheck };

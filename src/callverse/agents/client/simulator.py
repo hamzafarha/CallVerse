@@ -7,8 +7,9 @@ and fills a 1-5 satisfaction survey at the end (simulated CSAT).
 Tools: like a real customer, it can open its own "My orders" page
 (``view_my_order_page``) to check what the advisor says, and flag a mismatch; and
 look at its chat timer (``check_my_waiting_time``) when the wait gets long, to react
-like its persona (complain, leave). It only sees what a customer sees (information
-asymmetry): never the advisor's tools, tickets or decisions.
+like its persona (complain, leave); and attach photos or a statement screenshot
+(``send_evidence``) when the advisor asks for proof. It only sees what a customer sees
+(information asymmetry): never the advisor's tools, tickets or decisions.
 
 Without an LLM, a rule-based customer gives the same protocol (backup).
 """
@@ -23,6 +24,7 @@ from typing import Any
 import numpy as np
 
 from callverse.agents.client.chat_clock import ChatClock, summarize_clock
+from callverse.agents.client.evidence import EVIDENCE_KINDS, send_files, summarize_evidence
 from callverse.agents.client.order_page import my_order_page, summarize_page
 from callverse.agents.client.profiles import CustomerProfile
 from callverse.data.conversations import (
@@ -99,7 +101,7 @@ ORDER_PAGE_SCHEMA = {
 }
 # Gating: the page is offered only when the advisor just said something it can confirm
 CHECKABLE = re.compile(
-    r"deliver|ship|carrier|arriv|dispatch|transit|status|track|paid|payment|charge|amount|"
+    r"deliver|ship(?!ping label)|carrier|arriv|dispatch|transit|status|track|paid|payment|charge|amount|"
     r"cancel|refund|estimat|\b\d{4}-\d{2}-\d{2}\b|"
     r"\b\d{1,2} (?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
     re.I,
@@ -128,7 +130,51 @@ CLOCK_SCHEMA = {
 }
 CLOCK_GATE = 0.5  # gating: offered once the wait reaches half the customer's patience
 MAX_CLOCK_CHECKS = 2
-CUSTOMER_TOOLS = {ORDER_PAGE_TOOL, CLOCK_TOOL}
+
+EVIDENCE_NOTE_OFFERED = """The advisor asked you for proof. You can attach files to your message with the tool
+send_evidence: select in ONE call every file the advisor asked for (for example the product, the
+packaging and the label), like choosing several photos on your phone. Then say in your message only
+what was really attached. If a file was refused, tell the advisor why.
+"""
+
+# Third tool: attach a photo or a statement screenshot (content built from the real order)
+EVIDENCE_TOOL = "send_evidence"
+# Gating: offered when the advisor asks for photos, a screenshot or a receipt
+ASKS_FOR_EVIDENCE = re.compile(
+    r"\b(photos?|pictures?|images?|screenshots?|receipts?|proof|attach\w*|videos?)\b"
+    r"|shipping label|statement line",
+    re.I,
+)
+
+
+def evidence_schema(kinds: list[str]) -> dict[str, Any]:
+    """The tool, offering only the files not sent yet (the list shrinks as files go)."""
+    return {
+        "type": "function",
+        "function": {
+            "name": EVIDENCE_TOOL,
+            "description": (
+                "Attach photos or a screenshot from your phone to your next message. Select every "
+                "file you want to send in one call: product_photo (the product as you received it), "
+                "packaging_photo (the box), shipping_label_photo (the label on the parcel), "
+                "payment_statement (the line on your bank or card statement)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kinds": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": kinds},
+                        "description": "The files to attach",
+                    }
+                },
+                "required": ["kinds"],
+            },
+        },
+    }
+
+
+CUSTOMER_TOOLS = {ORDER_PAGE_TOOL, CLOCK_TOOL, EVIDENCE_TOOL}
 
 
 @dataclass
@@ -154,9 +200,18 @@ class ClientTurn:
             meta["tools"] = self.tool_calls
         if self.mismatch is not None:
             meta["mismatch"] = self.mismatch
+        if self.attachments:
+            meta["attachments"] = self.attachments
         if self.end:
             meta["end"] = True  # the customer left (KPI: did it leave out of patience?)
         return meta
+
+    @property
+    def attachments(self) -> list[dict[str, Any]]:
+        """Files sent with this message (by its send_evidence calls)."""
+        return [
+            f for c in self.tool_calls if c["name"] == EVIDENCE_TOOL for f in c["result"].get("attached", [])
+        ]
 
 
 def tool_checks(messages: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
@@ -173,6 +228,12 @@ def tool_checks(messages: list[dict[str, Any]], name: str) -> list[dict[str, Any
 def page_checks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Order pages the customer already opened in this chat."""
     return tool_checks(messages, ORDER_PAGE_TOOL)
+
+
+def sent_evidence(messages: list[dict[str, Any]]) -> set[str]:
+    """Kinds of files the customer already sent in this chat."""
+    calls = tool_checks(messages, EVIDENCE_TOOL)
+    return {f["kind"] for c in calls for f in (c.get("result") or {}).get("attached", [])}
 
 
 def advisor_answers(messages: list[dict[str, Any]]) -> int:
@@ -321,6 +382,15 @@ class ClientAgent:
             and len(tool_checks(messages, CLOCK_TOOL)) < MAX_CLOCK_CHECKS
         )
 
+    def offers_evidence(self, messages: list[dict[str, Any]]) -> list[str]:
+        """Gating: the kinds of files offered (empty: tool not offered). Only when the advisor
+        just asked for proof, and only files not sent yet."""
+        last = messages[-1] if messages else {}
+        if last.get("speaker") != "advisor" or not ASKS_FOR_EVIDENCE.search(str(last.get("text", ""))):
+            return []
+        sent = sent_evidence(messages)
+        return [kind for kind in EVIDENCE_KINDS if kind not in sent]
+
     def patience_ran_out(self, messages: list[dict[str, Any]], clock: ChatClock | None) -> bool:
         """The wait just went past the customer's patience and it has not looked yet."""
         return (
@@ -339,13 +409,17 @@ class ClientAgent:
     ) -> ClientTurn:
         """Reason -> (optional) act with its tools -> answer in JSON."""
         assert self.llm is not None
-        offered = ([ORDER_PAGE_SCHEMA] if self.offers_page(profile, messages) else []) + (
-            [CLOCK_SCHEMA] if self.offers_clock(messages, clock) else []
+        kinds = self.offers_evidence(messages)
+        offered = (
+            ([ORDER_PAGE_SCHEMA] if self.offers_page(profile, messages) else [])
+            + ([CLOCK_SCHEMA] if self.offers_clock(messages, clock) else [])
+            + ([evidence_schema(kinds)] if kinds else [])
         )
         names = [t["function"]["name"] for t in offered]
         seen = [c for c in page_checks(messages) if c.get("ok")]
         notes = [PAGE_NOTE_OFFERED if ORDER_PAGE_TOOL in names else (PAGE_NOTE_SEEN if seen else "")]
         notes.append(CLOCK_NOTE_OFFERED if CLOCK_TOOL in names else "")
+        notes.append(EVIDENCE_NOTE_OFFERED if EVIDENCE_TOOL in names else "")
         chat: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -380,10 +454,12 @@ class ClientAgent:
                 "client", chat, tools=offered, agent="client", temperature=0.7, tool_choice=choice
             )
             responses.append(first)
-            for request in first.tool_calls:  # Act: each offered tool runs at most once per turn
+            sent = sent_evidence(messages)  # grows as files go: each file is sent once
+            for request in first.tool_calls:  # Act: each tool runs at most once per turn
                 if request["name"] not in names or any(c["name"] == request["name"] for c in calls):
                     continue
-                call = self._run_tool(request["name"], profile, clock, request.get("arguments") or {})
+                arguments = dict(request.get("arguments") or {})
+                call = self._run_tool(request["name"], profile, clock, arguments, sent)
                 calls.append(call)
                 if on_event is not None:
                     on_event("tool", {k: v for k, v in call.items() if k != "result"})
@@ -435,14 +511,23 @@ class ClientAgent:
 
     @staticmethod
     def _run_tool(
-        name: str, profile: CustomerProfile, clock: ChatClock | None, arguments: dict[str, Any]
+        name: str,
+        profile: CustomerProfile,
+        clock: ChatClock | None,
+        arguments: dict[str, Any],
+        sent: set[str] | None = None,
     ) -> dict[str, Any]:
-        """Run a customer tool. Neither takes arguments: the customer can only open its own
-        order page and its own chat timer (any argument the LLM invents is ignored)."""
+        """Run a customer tool. The order page and the timer take no arguments: the customer
+        can only open its own (any argument the LLM invents is ignored). ``send_evidence``
+        takes the kind of file; the content always comes from the customer's real order."""
         started = time.perf_counter()
         if name == ORDER_PAGE_TOOL:
             page = my_order_page(profile.order_id, profile.contact_timestamp)
             ok, result, summary = page is not None, page or {"error": "order not found"}, summarize_page(page)
+        elif name == EVIDENCE_TOOL:
+            kinds = arguments.get("kinds", arguments.get("kind"))
+            result = send_files(kinds, profile, sent or set())
+            ok, summary = bool(result["attached"]), summarize_evidence(result)
         else:
             assert clock is not None  # only offered with a clock
             result = clock.reading()

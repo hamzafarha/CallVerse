@@ -25,6 +25,7 @@ from langgraph.graph import END, START, StateGraph
 from callverse.agents.advisor.advisor import AdvisorAgent, AdvisorMemory
 from callverse.agents.advisor.tools import AdvisorTools
 from callverse.agents.client.chat_clock import ChatClock, persona_patience, queue_wait_from_twin
+from callverse.agents.client.evidence import attachments_text
 from callverse.agents.client.profiles import CustomerProfile
 from callverse.agents.client.simulator import ClientAgent
 from callverse.agents.quality.reviewer import QualityReviewer
@@ -209,7 +210,8 @@ def review_conversation(
         "outcome": session.memory.outcome,
         "handed_to": session.memory.handed_to,
     }
-    transcript = [{"speaker": m["speaker"], "text": m["text"]} for m in messages]
+    # The judge reads the attachments too (photos or screenshot sent by the customer)
+    transcript = [{"speaker": m["speaker"], "text": attachments_text(m)} for m in messages]
     return reference, session.reviewer.review(transcript, reference, meta)
 
 
@@ -275,6 +277,8 @@ def kpi_row(
             meta.get("end") and any(_out_of_patience(t) for t in meta.get("tools", []))
             for meta in customer_meta
         ),
+        # ... and how many files (photos, statement screenshot) it attached as evidence
+        "customer_evidence_sent": sum(len(meta.get("attachments") or []) for meta in customer_meta),
         "expected_wait_seconds": routing.get("expected_wait_seconds"),
         "expected_handle_seconds": routing.get("expected_handle_seconds"),
         **{f"score_{k}": v for k, v in card["scores"].items()},
@@ -512,6 +516,9 @@ def conversation_kpis(frame: pd.DataFrame) -> dict[str, float]:
         ),
         "customer_left_waiting_rate": (
             mean("customer_left_waiting") if "customer_left_waiting" in frame else float("nan")
+        ),
+        "customer_evidence_sent_mean": (
+            mean("customer_evidence_sent") if "customer_evidence_sent" in frame else float("nan")
         ),
         "intent_accuracy": mean("intent_correct"),
         "mean_turns": mean("turns"),
