@@ -219,6 +219,7 @@ def kpi_row(
 ) -> dict[str, Any]:
     """BO2 indicators of one conversation."""
     tools = [t for m in messages if m["speaker"] == "advisor" for t in m.get("meta", {}).get("tools", [])]
+    customer_meta = [m.get("meta", {}) for m in messages if m["speaker"] == "customer"]
     customer_text = " ".join(m["text"] for m in messages if m["speaker"] == "customer").lower()
     handover = session.memory.handed_to or ("supervisor" if "supervisor" in customer_text else None)
     action_correct = None
@@ -250,6 +251,11 @@ def kpi_row(
             t["name"] == "check_draft_reply" and not (t.get("result") or {}).get("passed", True)
             for t in tools
         ),
+        # Client agent: how often the customer checked its order page, and caught a contradiction
+        "customer_page_checks": sum(
+            t.get("name") == "view_my_order_page" for meta in customer_meta for t in meta.get("tools", [])
+        ),
+        "customer_mismatches": sum(meta.get("mismatch") is True for meta in customer_meta),
         "expected_wait_seconds": routing.get("expected_wait_seconds"),
         "expected_handle_seconds": routing.get("expected_handle_seconds"),
         **{f"score_{k}": v for k, v in card["scores"].items()},
@@ -304,7 +310,7 @@ def build_graph(session: ConversationSession):
     def client_reply(state: ConversationState) -> dict[str, Any]:
         messages = state["messages"]
         turn = session.client.respond(session.profile, messages, state["customer_turns"])
-        message = {"speaker": "customer", "text": turn.text, "meta": {"mode": turn.mode}}
+        message = {"speaker": "customer", "text": turn.text, "meta": turn.meta()}
         return {
             "messages": [*messages, message],
             "customer_turns": state["customer_turns"] + 1,
@@ -316,6 +322,8 @@ def build_graph(session: ConversationSession):
                 "Customer replies" + (" and leaves" if turn.end else ""),
                 text=turn.text,
                 csat=turn.csat,
+                tools=[t["name"] for t in turn.tool_calls],
+                mismatch=turn.mismatch,
             ),
         }
 
@@ -472,6 +480,12 @@ def conversation_kpis(frame: pd.DataFrame) -> dict[str, float]:
         "llm_tool_calls_mean": mean("llm_tool_calls") if "llm_tool_calls" in frame else float("nan"),
         "safety_net_calls_mean": mean("safety_net_calls") if "safety_net_calls" in frame else float("nan"),
         "drafts_rejected_mean": mean("drafts_rejected") if "drafts_rejected" in frame else float("nan"),
+        "customer_page_checks_mean": (
+            mean("customer_page_checks") if "customer_page_checks" in frame else float("nan")
+        ),
+        "customer_mismatches_mean": (
+            mean("customer_mismatches") if "customer_mismatches" in frame else float("nan")
+        ),
         "intent_accuracy": mean("intent_correct"),
         "mean_turns": mean("turns"),
         "quality_overall": float(

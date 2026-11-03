@@ -19,6 +19,8 @@ def test_template_conversation_end_to_end():
     speakers = [m["speaker"] for m in state["messages"]]
     assert speakers[0] == "customer" and "advisor" in speakers
     assert state["kpis"]["tool_calls"] >= 1
+    # The rule-based customer (offline backup) never opens its order page
+    assert state["kpis"]["customer_page_checks"] == 0 and state["kpis"]["customer_mismatches"] == 0
     assert state["reference"]["outcome"]
     assert set(state["scorecard"]["scores"]) == {
         "compliance",

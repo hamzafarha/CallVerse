@@ -10,7 +10,16 @@ const ICON: Record<string, any> = { workforce: Headset, client: User, quality: S
 function describe(stage: StageEvent): { icon: any; title: string; detail?: string } | null {
   if (stage.agent === "workforce") return { icon: Headset, title: "Workforce agent routed the chat" };
   if (stage.agent === "quality") return { icon: ShieldCheck, title: "Quality agent reviewed the chat" };
-  if (stage.agent === "client") return { icon: User, title: "Client agent wrote as the customer" };
+  if (stage.agent === "client") {
+    if (stage.step === "offer") return null; // shown in the tools panel
+    if (stage.step === "tool")
+      return {
+        icon: User,
+        title: `Customer opened ${TOOL_LABEL[stage.name] ?? stage.name} ${stage.ok ? "✓" : "✗"} · ${CALLER_LABEL[stage.caller] ?? "chosen by the AI"}`,
+        detail: [stage.summary, `${num(stage.latency_ms, 0)} ms`].filter(Boolean).join(" · "),
+      };
+    return { icon: User, title: "Client agent answers as the customer" };
+  }
   if (stage.step === "retrieval")
     return {
       icon: ScanSearch,

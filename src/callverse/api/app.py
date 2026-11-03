@@ -590,34 +590,9 @@ def _display_name(customer_id: str) -> str:
     return f"{FIRST_NAMES[number % len(FIRST_NAMES)]} {chr(65 + (number // 7) % 26)}."
 
 
-def _timeline(facts: dict[str, Any], as_of: pd.Timestamp) -> list[dict[str, Any]]:
-    """Order journey at the contact date: done, current, upcoming or late steps."""
-
-    def stamp(key: str) -> pd.Timestamp | None:
-        value = facts.get(key)
-        return None if value is None or pd.isna(value) else pd.Timestamp(value)
-
-    steps = [
-        ("Order placed", stamp("order_purchase_timestamp"), None),
-        ("Payment approved", stamp("order_approved_at"), None),
-        ("Handed to the carrier", stamp("order_delivered_carrier_date"), stamp("latest_shipping_limit_date")),
-        ("Delivered", stamp("order_delivered_customer_date"), stamp("order_estimated_delivery_date")),
-    ]
-    rows, current_set = [], False
-    for label, done_at, due in steps:
-        done = done_at is not None and done_at <= as_of
-        late = not done and due is not None and as_of > due
-        state = "done" if done else ("late" if late else ("current" if not current_set else "upcoming"))
-        if not done:
-            current_set = True
-        rows.append({"label": label, "state": state, "at": done_at if done else None, "due": due})
-    if facts.get("order_status") == "canceled":
-        rows.append({"label": "Order canceled", "state": "late", "at": None, "due": None})
-    return rows
-
-
 def _customer_card(contact: pd.Series, profile: Any, with_details: bool = False) -> dict[str, Any]:
     from callverse.agents.advisor.tools import AdvisorTools
+    from callverse.agents.client.order_page import order_timeline
 
     as_of = pd.Timestamp(contact["contact_timestamp"])
     facts = AdvisorTools(as_of=as_of).order_facts(str(contact["order_id"]), str(contact["intent"])) or {}
@@ -647,7 +622,7 @@ def _customer_card(contact: pd.Series, profile: Any, with_details: bool = False)
         },
     }
     if with_details:
-        card["timeline"] = _timeline(facts, as_of)
+        card["timeline"] = order_timeline(facts, as_of)  # the same page the Client agent can open
         history = loaders.contacts()
         history = history[
             (history["customer_unique_id"] == contact["customer_unique_id"])

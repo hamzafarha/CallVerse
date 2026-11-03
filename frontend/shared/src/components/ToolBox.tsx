@@ -34,7 +34,7 @@ const TOOLBOX: { kind: string; tools: { name: string; what: string }[] }[] = [
 ];
 
 /** The four tools added for agentic tool calling. */
-export const NEW_TOOLS = new Set(["get_customer_history", "validate_bank_code", "escalate_to_human", "check_draft_reply"]);
+export const NEW_TOOLS = new Set(["get_customer_history", "validate_bank_code", "escalate_to_human", "check_draft_reply", "view_my_order_page"]);
 
 const CALLER_ICON: Record<string, any> = { llm: Bot, code: Cog, safety_net: ShieldCheck };
 const CALLER_SHORT: Record<string, string> = { llm: "AI", code: "pipeline", safety_net: "safety net" };
@@ -54,7 +54,17 @@ function modeHint(variant: string | undefined, offline: boolean): string {
 }
 
 /** Live view of the Advisor agent's tools: what is offered now, what was used, by whom. */
-export function ToolBox({ stages, variant, offline = false }: { stages: StageEvent[]; variant?: string; offline?: boolean }) {
+export function ToolBox({
+  stages,
+  variant,
+  offline = false,
+  customerTools = false,
+}: {
+  stages: StageEvent[];
+  variant?: string;
+  offline?: boolean;
+  customerTools?: boolean; // the customer is the Client agent (Advisor desk): show its tool too
+}) {
   const advisor = stages.filter((s) => s.agent === "advisor");
   let turnStart = -1;
   advisor.forEach((s, i) => {
@@ -110,6 +120,37 @@ export function ToolBox({ stages, variant, offline = false }: { stages: StageEve
           </div>
         ))}
       </div>
+      {customerTools && <CustomerTools stages={stages} offline={offline} />}
+    </div>
+  );
+}
+
+/** The Client agent's tool: it checks what the advisor says against its own order page. */
+function CustomerTools({ stages, offline }: { stages: StageEvent[]; offline: boolean }) {
+  const client = stages.filter((s) => s.agent === "client");
+  let turnStart = -1;
+  client.forEach((s, i) => {
+    if (s.step === "typing") turnStart = i;
+  });
+  const calls = client.filter((s) => s.step === "tool");
+  const usage: Usage | undefined = calls.length
+    ? {
+        counts: { llm: calls.length },
+        summary: calls[calls.length - 1].summary,
+        ok: calls.every((c) => c.ok),
+        thisTurn: client.slice(turnStart + 1).some((s) => s.step === "tool"),
+      }
+    : undefined;
+  const offered = client.slice(turnStart + 1).some((s) => s.step === "offer");
+  return (
+    <div className="mt-4 border-t border-line pt-3">
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted">Customer tools</div>
+      <p className="mb-2.5 text-[11px] leading-snug text-ink2">
+        {offline
+          ? "Offline backup: the simulated customer answers by rules and does not open its order page."
+          : "The simulated customer can check what you say against its own order page (only what a real customer sees). It is offered when you mention a status, a date or an amount."}
+      </p>
+      <ToolRow name="view_my_order_page" what="the customer's own order page" usage={usage} offered={offered} required={false} />
     </div>
   );
 }

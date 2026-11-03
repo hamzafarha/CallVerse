@@ -371,7 +371,9 @@ export default function DeskPage() {
           </div>
           <div className="flex-1 overflow-y-auto px-4 pb-6">
             {!selected && <EmptyState title="No customer selected" text="Accept a chat to see the customer's order and history." />}
-            {selected && tab === "tools" && <ToolBox stages={state.stages} variant={chatVariant} offline={state.ready ? !state.ready.llm : engine === "template"} />}
+            {selected && tab === "tools" && (
+              <ToolBox stages={state.stages} variant={chatVariant} offline={state.ready ? !state.ready.llm : engine === "template"} customerTools />
+            )}
             {selected && tab === "customer" && <Customer360 data={details.data} />}
             {selected && tab === "copilot" && (
               <div className="space-y-4">

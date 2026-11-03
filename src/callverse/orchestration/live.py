@@ -141,8 +141,13 @@ class LiveSession:
         """The Client agent answers the advisor (it may leave and rate the chat)."""
         self.emit("stage", {"agent": "client", "step": "typing"})
         turns = self._customer_turns()
-        turn = self.session.client.respond(self.profile, self.messages, turns)
-        self._add("customer", turn.text, {"mode": turn.mode})
+        turn = self.session.client.respond(
+            self.profile,
+            self.messages,
+            turns,
+            on_event=lambda step, data: self.emit("stage", {"agent": "client", "step": step, **data}),
+        )
+        self._add("customer", turn.text, turn.meta())
         if turn.end or turns + 1 > self.session.max_turns:
             self.finish(turn.csat)
         else:
