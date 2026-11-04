@@ -1,13 +1,14 @@
 /**
  * The "Behind the scenes" panel: a timeline of what each agent did during the chat (routing decision,
- * knowledge-base search, tool calls, LLM calls, the customer's tools, the review).
+ * knowledge-base search, the connection to the MCP server, tool calls, LLM calls, the customer's tools, the
+ * review).
  */
 import { AnimatePresence, motion } from "framer-motion";
 import { humanize, num } from "../lib/format";
 import type { LiveState, StageEvent } from "../lib/session";
 import { CALLER_LABEL, TOOL_LABEL } from "./chat";
 import { Bar } from "./motion";
-import { Bot, Cpu, Headset, ScanSearch, ShieldCheck, User, Wrench } from "lucide-react";
+import { Bot, Cpu, Headset, Plug, ScanSearch, ShieldCheck, User, Wrench } from "lucide-react";
 
 // Fallback icon per agent.
 const ICON: Record<string, any> = { workforce: Headset, client: User, quality: ShieldCheck };
@@ -39,13 +40,22 @@ function describe(stage: StageEvent): { icon: any; title: string; detail?: strin
         .map((h: any) => `${h.section} (${Number(h.score).toFixed(2)})`)
         .join(" · "),
     };
+  // The Advisor connected to the CallVerse MCP server and read its menu of tools (tools/list).
+  if (stage.step === "mcp")
+    return {
+      icon: Plug,
+      title: "Connected to the CallVerse MCP server",
+      detail: `tools/list: ${(stage.tools ?? []).length} tools · protocol ${stage.protocol ?? "?"} · ${num(stage.latency_ms, 0)} ms`,
+    };
   if (stage.step === "tool") {
     // A tool counts as failed if it raised an error, or (fact check) if the draft did not pass.
     const ok = stage.ok && stage.passed !== false;
     const who = stage.caller ? ` · ${CALLER_LABEL[stage.caller] ?? stage.caller}` : "";
+    // via "mcp": the call went through the MCP server (tools/call); "direct": a plain Python call.
+    const via = stage.via === "mcp" ? " · via MCP" : "";
     return {
       icon: stage.caller === "llm" ? Bot : stage.caller === "safety_net" ? ShieldCheck : Wrench,
-      title: `${TOOL_LABEL[stage.name] ?? stage.name} ${ok ? "✓" : "✗"}${who}`,
+      title: `${TOOL_LABEL[stage.name] ?? stage.name} ${ok ? "✓" : "✗"}${who}${via}`,
       detail: [stage.summary, `${num(stage.latency_ms, 0)} ms`].filter(Boolean).join(" · "),
     };
   }

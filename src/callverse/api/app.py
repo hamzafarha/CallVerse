@@ -12,19 +12,29 @@ Run with ``callverse serve`` (or ``uvicorn callverse.api.app:app``).
 # How to read this file: one Python function per URL. The decorator gives the HTTP method and the path:
 # @app.get("/api/forecast") answers GET requests on that path, and FastAPI turns the returned dictionary into
 # JSON. Sections: overview, data, forecast, twin, workforce, agents, quality, evaluation, MLOps, system
-# (LLMs), front office (portal, desk), help centre, and the live WebSocket at the end.
+# (LLMs), MCP, front office (portal, desk), help centre, and the live WebSocket at the end. The MCP server
+# itself answers at /mcp (see callverse/mcp/desk.py).
 import asyncio
 import json
 import threading
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from callverse.api.schemas import ConversationRequest, HumanLabel, TwinCompareRequest, TwinRunRequest
+from callverse.api.schemas import (
+    ConversationRequest,
+    HumanLabel,
+    NewCustomerRequest,
+    TwinCompareRequest,
+    TwinRunRequest,
+)
 from callverse.api.services import clean, read_eval, records, twin
 from callverse.config import (
     EVALUATION_DIR,
@@ -36,12 +46,39 @@ from callverse.config import (
 from callverse.data import loaders
 from callverse.evaluation.business_kpis import BO_KPIS, summarize_runs
 from callverse.evaluation.experiments import SIM_KPIS
+from callverse.mcp.desk import HttpEndpoint
 
 # Settings from configs/app.yaml (version, description, allowed browser origins).
 settings = load_yaml("app")
+
+
+@lru_cache(maxsize=1)
+def mcp_catalog() -> Any:
+    """The menu of the CallVerse MCP server for outside apps (callverse/mcp/desk.py), with the API's twin."""
+    from callverse.mcp.desk import CaseDesk, desk_catalog
+
+    return desk_catalog(CaseDesk(twin=twin))
+
+
+# MCP over HTTP at /mcp (Streamable HTTP): MCP clients on this PC (e.g. the MCP Inspector) connect to
+# http://127.0.0.1:8000/mcp while the API runs.
+MCP_HTTP = HttpEndpoint(lambda: mcp_catalog().server())
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """What runs for the whole life of the API: the MCP connection manager of /mcp."""
+    async with MCP_HTTP.running():
+        yield
+
+
 app = FastAPI(
-    title="CallVerse API", version=settings["app"]["version"], description=settings["app"]["description"]
+    title="CallVerse API",
+    version=settings["app"]["version"],
+    description=settings["app"]["description"],
+    lifespan=lifespan,
 )
+app.add_route("/mcp", MCP_HTTP, include_in_schema=False)
 # CORS: allow the two React apps (served on other ports, 5173 and 5174) to call this API from the browser.
 app.add_middleware(
     CORSMiddleware, allow_origins=settings["server"]["cors_origins"], allow_methods=["*"], allow_headers=["*"]
@@ -354,11 +391,11 @@ def agents_contacts(n: int = 25, seed: int = 0) -> list[dict[str, Any]]:
 
 
 def _profile(contact_id: str | None, seed: int):
-    """The customer profile of a given contact, or of a random one."""
-    from callverse.agents.client.profiles import profile_by_contact_id, sample_profiles
+    """The customer profile of a given contact (history or brand-new customer), or of a random one."""
+    from callverse.agents.client.profiles import find_profile, sample_profiles
 
     if contact_id:
-        return profile_by_contact_id(loaders.contacts(), contact_id, seed)
+        return find_profile(contact_id, seed)
     return sample_profiles(loaders.contacts(), 1, seed)[0]
 
 
@@ -596,6 +633,34 @@ def system_warmup() -> dict[str, Any]:
     return clean(get_runtime().status())
 
 
+# -------------------------------------------------------------------------- MCP
+@app.get("/api/mcp")
+async def mcp_overview(request: Request) -> dict[str, Any]:
+    """The CallVerse MCP server as a client sees it (tools, resources, prompts) and how to connect."""
+    from mcp import Client
+
+    from callverse.mcp.client import read_menu
+    from callverse.mcp.desk import connection_info
+    from callverse.orchestration.runtime import get_runtime
+
+    # Read the menu THROUGH the protocol, like any MCP client (an in-process connection to the same server).
+    catalog = mcp_catalog()
+    async with Client(catalog.server()) as client:
+        menu = await read_menu(client)
+    for tool in menu["tools"]:
+        tool["group"] = catalog.tools[tool["name"]].group if tool["name"] in catalog.tools else "advisor"
+    advisor = get_runtime().settings["advisor"]
+    return {
+        "server": {"name": "callverse", "instructions": catalog.instructions},
+        **menu,
+        "advisor": {
+            "tool_transport": advisor.get("tool_transport", "mcp"),
+            "variant": advisor.get("variant"),
+        },
+        "connect": connection_info(f"{str(request.base_url).rstrip('/')}/mcp"),
+    }
+
+
 # ----------------------------------------------------------------- front office
 # One demo customer per main problem type, on the portal's home page.
 DEMO_INTENTS = [
@@ -630,7 +695,10 @@ def _seconds(value: Any) -> float | None:
     return seconds if 0 <= seconds < 7 * 24 * 3600 else None
 
 
-def _customer_card(contact: pd.Series, profile: Any, with_details: bool = False) -> dict[str, Any]:
+def _customer_card(
+    contact: pd.Series, profile: Any, with_details: bool = False, new: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """A customer as the portal shows it. `new`: the record of a brand-new customer (its own name)."""
     from callverse.agents.advisor.tools import AdvisorTools
     from callverse.agents.client.order_page import order_timeline
 
@@ -639,7 +707,9 @@ def _customer_card(contact: pd.Series, profile: Any, with_details: bool = False)
     facts = AdvisorTools(as_of=as_of).order_facts(str(contact["order_id"]), str(contact["intent"])) or {}
     card = {
         "contact_id": contact["contact_id"],
-        "name": _display_name(str(contact["customer_unique_id"])),
+        "name": new["name"] if new else _display_name(str(contact["customer_unique_id"])),
+        "is_new": new is not None,
+        "order_source": new["order_source"] if new else "history",
         "city": str(facts.get("customer_city", "")).title(),
         "state": facts.get("customer_state"),
         "persona": profile.persona,
@@ -707,9 +777,139 @@ def portal_customer(contact_id: str, seed: int = 0) -> dict[str, Any]:
     contacts = loaders.contacts()
     match = contacts[contacts["contact_id"] == contact_id]
     if match.empty:
-        raise HTTPException(404, f"Unknown contact {contact_id}")
+        # Not in the history: a brand-new customer created on the portal?
+        card = _new_customer_card(contact_id, with_details=True)
+        if card is None:
+            raise HTTPException(404, f"Unknown contact {contact_id}")
+        return clean(card)
     profile = profile_by_contact_id(contacts, contact_id, seed)
     return clean(_customer_card(match.iloc[0], profile, with_details=True))
+
+
+# -------------------------------------------------------- brand-new customers
+# Friendly names of the 17 problems (intents) for the "new customer" form.
+PROBLEM_LABELS = {
+    "track_order": "Where is my order?",
+    "track_delivery": "I want to track my delivery",
+    "delivery_time": "When will my order arrive?",
+    "delivery_issue": "There is a problem with my delivery",
+    "cancel_order": "I want to cancel my order",
+    "request_refund": "I want a refund",
+    "refund_status": "Where is my refund?",
+    "product_issue": "The product does not work",
+    "wrong_item": "I received the wrong item",
+    "damaged_delivery": "My item arrived damaged",
+    "missing_item": "An item is missing from my order",
+    "return_product": "I want to return a product",
+    "return_product_online": "I want to return a product online",
+    "exchange_product": "I want to exchange a product",
+    "change_order": "I want to change my order",
+    "request_invoice": "I need my invoice",
+    "payment_issue": "There is a problem with my payment",
+}
+BR_STATES = [
+    "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA",
+    "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO",
+]  # fmt: skip
+
+
+def _new_customer_card(contact_id: str, with_details: bool = False) -> dict[str, Any] | None:
+    """The portal card of a brand-new customer, or None when the id is unknown."""
+    from callverse.agents.client.profiles import profile_from_record
+    from callverse.data.new_customers import get_new_customer
+
+    record = get_new_customer(contact_id)
+    if record is None:
+        return None
+    return _customer_card(pd.Series(record), profile_from_record(record), with_details, new=record)
+
+
+@app.get("/api/portal/new-customer-options")
+def new_customer_options() -> dict[str, Any]:
+    """Everything the "new customer" form offers: problems (with a real example message), categories,
+    payment types, states and the allowed dates (the history: the twin replays those days)."""
+    from callverse.data import new_customers
+
+    groups = new_customers.intent_groups()
+    first, last = new_customers.contact_date_range()
+    categories = loaders.orders_analytical()["primary_category_english"].dropna().value_counts().head(24)
+    return clean(
+        {
+            "problems": [
+                {
+                    "intent": intent,
+                    "label": label,
+                    "group": groups.get(intent),
+                    "example": new_customers.example_message(intent),
+                }
+                for intent, label in PROBLEM_LABELS.items()
+            ],
+            "categories": [c.replace("_", " ") for c in categories.index],
+            "payment_types": list(new_customers.PAYMENT_TYPES),
+            "states": BR_STATES,
+            "personas": list(new_customers.PERSONAS),
+            "dates": {"first": first.date().isoformat(), "last": last.date().isoformat()},
+        }
+    )
+
+
+@app.post("/api/portal/customers")
+def create_customer(request: NewCustomerRequest) -> dict[str, Any]:
+    """Create a brand-new customer, on a real order or on an order typed in the form."""
+    from callverse.data import new_customers
+
+    try:
+        if request.order_source == "real":
+            record = new_customers.create_with_real_order(
+                request.name, request.persona, request.intent, request.message
+            )
+        else:
+            if request.order is None:
+                raise ValueError("Invent the order first: its dates, value and status are missing.")
+            o = request.order
+            order = new_customers.InventedOrder(
+                category=o.category,
+                value_brl=o.value_brl,
+                items=o.items,
+                payment_type=o.payment_type,
+                city=o.city,
+                state=o.state,
+                purchased_at=pd.Timestamp(o.purchased_at),
+                estimated_delivery=pd.Timestamp(o.estimated_delivery),
+                progress=o.progress,
+                shipped_at=pd.Timestamp(o.shipped_at) if o.shipped_at else None,
+                delivered_at=pd.Timestamp(o.delivered_at) if o.delivered_at else None,
+            )
+            record = new_customers.create_with_invented_order(
+                request.name,
+                request.persona,
+                request.intent,
+                order,
+                pd.Timestamp(o.contact_at),
+                request.message,
+            )
+    except ValueError as error:  # a field that cannot be true: tell the form why
+        raise HTTPException(422, str(error)) from error
+    return clean(_new_customer_card(record["contact_id"], with_details=True))
+
+
+@app.get("/api/portal/new-customers")
+def list_new_customers() -> list[dict[str, Any]]:
+    """The brand-new customers created on the portal, newest first."""
+    from callverse.data.new_customers import list_new_customers as read_all
+
+    cards = [_new_customer_card(record["contact_id"]) for record in read_all()]
+    return clean([card for card in cards if card])
+
+
+@app.delete("/api/portal/new-customers/{contact_id}")
+def delete_new_customer(contact_id: str) -> dict[str, Any]:
+    """Remove a brand-new customer (and its invented order, if it had one)."""
+    from callverse.data.new_customers import delete_new_customer as remove
+
+    if not remove(contact_id):
+        raise HTTPException(404, f"Unknown new customer {contact_id}")
+    return {"deleted": contact_id}
 
 
 @app.get("/api/desk/queue")
@@ -825,6 +1025,87 @@ def kb_search(q: str, k: int = 5) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------ live conversation
+def _customer_name(profile: Any) -> str:
+    """The name shown for a customer: the one typed for a new customer, else the stable demo name."""
+    from callverse.data.new_customers import get_new_customer
+
+    record = get_new_customer(profile.contact_id)
+    return record["name"] if record else _display_name(profile.customer_unique_id)
+
+
+def _ready_payload(session: Any, profile: Any) -> dict[str, Any]:
+    """The "ready" event: who the customer is, which provider and model answer, who answers (autopilot)."""
+    advisor = session.session.advisor
+    llm = advisor.use_llm()
+    return {
+        "profile": profile.to_dict(),
+        "name": _customer_name(profile),
+        "llm": llm,
+        "model": advisor.llm.resolve_model("advisor") if llm and advisor.llm else None,
+        "provider": advisor.llm.backend() if llm and advisor.llm else "off",
+        "retriever": type(advisor.retriever).__name__,
+        "autopilot": session.advisor == "agent",
+        "channel": session.channel,
+    }
+
+
+async def _shared_call(websocket: WebSocket, start: dict[str, Any], deliver: Any) -> None:
+    """A phone call (orchestration/calls.py): the phone starts it as the customer; the desk joins as the
+    advisor. Every screen receives the same events; a screen that joins late first gets the story so far."""
+    from callverse.orchestration.calls import HUB
+
+    if start.get("type") == "join":
+        call = HUB.get(start.get("session_id"))
+        role = "advisor" if start.get("role") == "advisor" else "customer"
+        if call is None:
+            deliver({"type": "error", "message": "This call has ended or does not exist any more."})
+            return
+    else:
+        seed = int(start.get("seed", 0))
+        profile = _profile(start.get("contact_id"), seed)
+        call = await asyncio.to_thread(
+            HUB.open, profile, _customer_name(profile), start.get("mode", "auto"), seed, start.get("variant")
+        )
+        role = "customer"
+        call.emit("ready", {**clean(_ready_payload(call.live, profile)), "session_id": call.id})
+    token = call.subscribe(deliver)
+    if role == "customer":
+        call.customer_connected = True
+    try:
+        while not call.live.finished:
+            message = await websocket.receive_json()
+            try:
+                await asyncio.to_thread(call.handle, message, role)
+            except ValueError as error:  # a message this side may not send now: tell this screen only
+                deliver({"type": "error", "message": str(error)})
+    finally:
+        call.unsubscribe(token)
+        if role == "customer":
+            call.customer_connected = False
+
+
+@app.get("/api/phone/calls")
+def phone_calls() -> list[dict[str, Any]]:
+    """The phone calls for the advisor desk: ringing, talking, or ended in the last 30 minutes."""
+    from callverse.orchestration.calls import HUB
+
+    return clean(HUB.calls())
+
+
+@app.get("/api/phone/info")
+def phone_info() -> dict[str, Any]:
+    """The link to open on a phone (same Wi-Fi), and whether the HTTPS certificate exists."""
+    from callverse.api.phone_setup import certificate_ready, lan_addresses, phone_links
+
+    addresses = lan_addresses()
+    return {
+        "addresses": addresses,
+        "links": phone_links(addresses),
+        "certificate": certificate_ready(),
+        "setup": ["callverse phone-cert", "cd frontend && npm run dev:phone"],
+    }
+
+
 @app.websocket("/ws/session")
 async def ws_session(websocket: WebSocket) -> None:
     """A conversation where a human plays the customer or the advisor.
@@ -854,10 +1135,18 @@ async def ws_session(websocket: WebSocket) -> None:
             except (WebSocketDisconnect, RuntimeError):
                 return
 
+    def deliver(event: dict[str, Any]) -> None:
+        """Same as emit(), for an event that is already complete (phone calls share their events)."""
+        loop.call_soon_threadsafe(outbox.put_nowait, clean(event))
+
     sending = asyncio.create_task(sender())
     try:
         # 1) The first message configures the session (who plays which side, LLM mode, advisor variant).
         start = await websocket.receive_json()
+        # A phone call, or a screen joining one (the desk, or a phone that reconnects): shared conversation.
+        if start.get("type") == "join" or start.get("channel") == "phone":
+            await _shared_call(websocket, start, deliver)
+            return
         seed = int(start.get("seed", 0))
         profile = _profile(start.get("contact_id"), seed)
         # asyncio.to_thread: run the slow agent code in a worker thread, so the server stays responsive.
@@ -872,19 +1161,8 @@ async def ws_session(websocket: WebSocket) -> None:
             start.get("advisor", "agent"),
             _seconds(start.get("waited_seconds")),
         )
-        advisor = session.session.advisor
-        llm = advisor.use_llm()
         # 2) Tell the browser which provider and model answer.
-        emit(
-            "ready",
-            {
-                "profile": profile.to_dict(),
-                "llm": llm,
-                "model": advisor.llm.resolve_model("advisor") if llm and advisor.llm else None,
-                "provider": advisor.llm.backend() if llm and advisor.llm else "off",
-                "retriever": type(advisor.retriever).__name__,
-            },
-        )
+        emit("ready", _ready_payload(session, profile))
         # 3) The Client agent opens (when it plays the customer); then each browser message is handled until
         # the chat ends.
         await asyncio.to_thread(session.begin)

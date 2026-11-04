@@ -6,14 +6,26 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { AudioLines, ChevronDown, Square, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { SPEECH_LANGUAGES, type SpeechInput } from "../lib/speech";
 import type { Voice, VoiceRole } from "../lib/voice";
 import { clsx } from "./ui";
 
 // Labels of the two voices in the menu.
 const ROLE_LABEL: Record<VoiceRole, string> = { advisor: "Advisor agent voice", customer: "Customer voice" };
 
-/** Voice mode switch, a Stop button while an agent speaks, and a menu to pick the voices. */
-export function VoiceControls({ voice, roles = ["advisor", "customer"] }: { voice: Voice; roles?: VoiceRole[] }) {
+/** Voice mode switch, a Stop button while an agent speaks, and a menu to pick the voices. With `speech`, the
+ * menu also holds the microphone settings (speech to text); `handsFree` offers the hands-free option. */
+export function VoiceControls({
+  voice,
+  roles = ["advisor", "customer"],
+  speech,
+  handsFree = false,
+}: {
+  voice: Voice;
+  roles?: VoiceRole[];
+  speech?: SpeechInput;
+  handsFree?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
@@ -128,6 +140,40 @@ export function VoiceControls({ voice, roles = ["advisor", "customer"] }: { voic
             >
               <Volume2 size={13} /> Test the {roles[0] === "advisor" ? "advisor" : "customer"} voice
             </button>
+            {/* Microphone settings (speech to text): language, auto-send, hands-free. */}
+            {speech && (
+              <div className="space-y-2 border-t border-line pt-3">
+                <div className="font-semibold text-ink">Speech to text (microphone)</div>
+                {speech.unavailable ? (
+                  <p className="text-muted">{speech.unavailable}</p>
+                ) : (
+                  <>
+                    <label className="block">
+                      <span className="label">I speak</span>
+                      <select className="field mt-1 py-1.5 text-xs" value={speech.lang} onChange={(e) => speech.setLang(e.target.value)}>
+                        {SPEECH_LANGUAGES.map((l) => (
+                          <option key={l.value} value={l.value}>
+                            {l.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-2 text-ink2">
+                      <input type="checkbox" className="accent-[var(--brand)]" checked={speech.autoSend} onChange={(e) => speech.setAutoSend(e.target.checked)} />
+                      Send when I stop talking
+                    </label>
+                    {handsFree && (
+                      <label className="flex items-center gap-2 text-ink2">
+                        <input type="checkbox" className="accent-[var(--brand)]" checked={speech.handsFree} onChange={(e) => speech.setHandsFree(e.target.checked)} />
+                        Hands-free: listen again after each answer
+                      </label>
+                    )}
+                    {speech.lang.startsWith("fr") && <p className="text-muted">The agents still answer in English.</p>}
+                    <p className="text-muted">Chrome and Edge send the audio to their speech service; nothing is stored by CallVerse.</p>
+                  </>
+                )}
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

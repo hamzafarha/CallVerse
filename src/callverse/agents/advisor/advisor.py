@@ -25,6 +25,10 @@ fact-checked before it is sent).
 # - _llm_reply(): the "rag" and "rag_policy" variants.
 # - _agentic_reply(): the ReAct loop with gating, required tool calls, safety nets and the fact check
 #   (reflection).
+# - toolbox(): how the LLM's tools are reached. With tool_transport "mcp" (configs/agents.yaml) the Advisor
+#   discovers them and calls them through the CallVerse MCP server (callverse/mcp/); with "direct" it calls
+#   the Python methods. Pipeline steps (rules engine, safety nets, fact check) are fixed code: they stay
+#   direct calls.
 import re
 import time
 from collections.abc import Callable
@@ -45,7 +49,7 @@ from callverse.agents.advisor.prompts import (
     SAFETY_NET_NOTE,
     format_context,
 )
-from callverse.agents.advisor.tools import AdvisorTools, agentic_tool_schemas, tool_schemas
+from callverse.agents.advisor.tools import AdvisorTools, DirectToolbox, agentic_tool_names, tool_names
 from callverse.agents.client.evidence import attachments_text
 from callverse.data.conversations import (
     BANK_CODE_OK,
@@ -160,9 +164,11 @@ class AdvisorAgent:
         no_answer_score: float | None = None,
         seed: int = 0,
         variant: str = "rag_policy",
+        tool_transport: str = "mcp",
     ) -> None:
         # retriever: the knowledge-base search (bge-m3 or TF-IDF); classifier: predicts the intent; top_k: how
-        # many policy sections to read; max_tool_rounds: the limit of the ReAct loop.
+        # many policy sections to read; max_tool_rounds: the limit of the ReAct loop; tool_transport: "mcp"
+        # (the LLM's tools come from the CallVerse MCP server) or "direct" (plain Python calls).
         self.retriever = retriever
         self.classifier = classifier
         self.llm = llm
@@ -174,6 +180,21 @@ class AdvisorAgent:
         if variant not in VARIANTS:
             raise ValueError(f"Unknown advisor variant '{variant}' ({', '.join(VARIANTS)}).")
         self.variant = variant
+        if tool_transport not in ("mcp", "direct"):
+            raise ValueError(f"Unknown tool transport '{tool_transport}' (mcp, direct).")
+        self.tool_transport = tool_transport
+
+    def toolbox(
+        self, tools: AdvisorTools, on_event: Callable[[str, dict[str, Any]], None] | None = None
+    ) -> Any:
+        """The toolbox of this turn: McpToolbox (through the MCP server) or DirectToolbox."""
+        if self.tool_transport == "mcp":
+            try:
+                from callverse.mcp.client import McpToolbox
+            except ImportError:  # the `mcp` package is not installed: plain calls still work
+                return DirectToolbox(tools)
+            return McpToolbox(tools, on_event)
+        return DirectToolbox(tools)
 
     def use_llm(self) -> bool:
         """True when the LLM should be used (template mode, or no LLM -> rules only)."""
@@ -205,14 +226,19 @@ class AdvisorAgent:
                     "arguments": call.arguments,
                     "ok": call.ok,
                     "caller": call.caller,
+                    "via": call.via,
                     "summary": call.summary,
                     "latency_ms": round(call.latency_ms, 1),
                     **({"passed": call.result["passed"]} if "passed" in call.result else {}),
                 },
             )
+        # The toolbox connects to the MCP server on first use (only when the LLM needs its tools) and
+        # disconnects at the end of the turn.
+        toolbox = self.toolbox(tools, on_event)
         try:
-            return self._reply(messages, memory, tools, on_token, on_event)
+            return self._reply(messages, memory, tools, toolbox, on_token, on_event)
         finally:
+            toolbox.close()
             tools.listener = previous
 
     def _reply(
@@ -220,6 +246,7 @@ class AdvisorAgent:
         messages: list[dict[str, Any]],
         memory: AdvisorMemory,
         tools: AdvisorTools,
+        toolbox: Any,
         on_token: Callable[[str], None] | None,
         on_event: Callable[[str, dict[str, Any]], None] | None,
     ) -> AdvisorReply:
@@ -236,9 +263,9 @@ class AdvisorAgent:
         if self.use_llm():
             try:
                 if self.variant == "agentic":
-                    reply = self._agentic_reply(messages, memory, tools, on_token, on_event)
+                    reply = self._agentic_reply(messages, memory, tools, toolbox, on_token, on_event)
                 else:
-                    reply = self._llm_reply(messages, memory, tools, on_token, on_event)
+                    reply = self._llm_reply(messages, memory, tools, toolbox, on_token, on_event)
             except LLMUnavailableError:
                 reply = self._template_reply(messages, memory, tools)
                 reply.mode = "template_fallback"
@@ -252,6 +279,7 @@ class AdvisorAgent:
                 "ok": c.ok,
                 "result": c.result,
                 "caller": c.caller,
+                "via": c.via,
                 "summary": c.summary,
                 "latency_ms": round(c.latency_ms, 1),
             }
@@ -415,6 +443,7 @@ class AdvisorAgent:
         messages: list[dict[str, Any]],
         memory: AdvisorMemory,
         tools: AdvisorTools,
+        toolbox: Any,
         on_token: Callable[[str], None] | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> AdvisorReply:
@@ -435,20 +464,21 @@ class AdvisorAgent:
         chat: list[dict[str, Any]] = [{"role": "system", "content": system}]
         # Tool gating: order tools exist only once the customer gave an order number,
         # so a small model cannot call them with invented ids.
-        offered = tool_schemas(self.variant)
+        names = tool_names(self.variant)
         if memory.order_id:
             chat.append({"role": "system", "content": f"The customer's order number is {memory.order_id}."})
         else:
-            offered = [t for t in offered if t["function"]["name"] == "search_knowledge_base"]
+            names = [name for name in names if name == "search_knowledge_base"]
             chat.append({"role": "system", "content": NO_ORDER_YET})
         if self.variant == "rag_policy":
             # Hybrid: the rules engine decides (deterministic pipeline steps), the LLM writes.
-            allowed = {"search_knowledge_base", "open_ticket"}
-            offered = [t for t in offered if t["function"]["name"] in allowed]
+            names = [name for name in names if name in {"search_knowledge_base", "open_ticket"}]
             decision = self._policy_decision(memory, tools)
             if decision:
                 sources.append(decision["policy_section"])
                 chat.append({"role": "system", "content": POLICY_DECISION.format(**decision)})
+        # The descriptions of the allowed tools, from the toolbox (the MCP server's tools/list, or Python).
+        offered = toolbox.schemas(names)
         for message in messages:
             role = "user" if message["speaker"] == "customer" else "assistant"
             chat.append({"role": role, "content": attachments_text(message)})  # text + attached files
@@ -486,9 +516,10 @@ class AdvisorAgent:
                     ],
                 }
             )
-            # Run each requested tool and remember what it changes (sources, ticket team, decision).
+            # Run each requested tool (through the toolbox) and remember what it changes (sources, ticket
+            # team, decision).
             for call in response.tool_calls:
-                result = tools.execute(call["name"], dict(call["arguments"]))
+                result = toolbox.execute(call["name"], dict(call["arguments"]))
                 if call["name"] == "search_knowledge_base":
                     sources += [r["chunk_id"] for r in eval_json(result).get("results", [])]
                 if call["name"] == "open_ticket":
@@ -629,6 +660,7 @@ class AdvisorAgent:
         messages: list[dict[str, Any]],
         memory: AdvisorMemory,
         tools: AdvisorTools,
+        toolbox: Any,
         on_token: Callable[[str], None] | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> AdvisorReply:
@@ -690,9 +722,11 @@ class AdvisorAgent:
         text, round_number = "", 0
         for round_number in range(self.max_tool_rounds + 1):
             # GATING: the tools offered depend on the stage: verify (no order number), investigate (order not
-            # opened or not decided yet) or follow_up.
+            # opened or not decided yet) or follow_up. Their descriptions come from the toolbox (the MCP
+            # server's tools/list with the "mcp" transport).
             stage = self._stage(memory)
-            offered = agentic_tool_schemas(stage, memory.intent_group, self._paid_by_boleto(tools))
+            names = agentic_tool_names(stage, memory.intent_group, self._paid_by_boleto(tools))
+            offered = toolbox.schemas(names)
             names = [t["function"]["name"] for t in offered]
             # A tool call is required when the playbook demands an action: open the order before
             # answering (investigate), or escalate (first round). The LLM still chooses which
@@ -712,7 +746,8 @@ class AdvisorAgent:
                     }
                 )
                 for call in response.tool_calls:
-                    result = tools.execute(call["name"], dict(call["arguments"]))
+                    # tools/call through the MCP server (or a Python call with the "direct" transport).
+                    result = toolbox.execute(call["name"], dict(call["arguments"]))
                     self._remember(call["name"], dict(call["arguments"]), result, memory, sources)
                     chat.append({"role": "tool", "content": result, "tool_name": call["name"]})
                 # FORCED STEP: once the order is open, the rules engine decides (code, not the LLM).

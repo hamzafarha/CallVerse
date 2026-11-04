@@ -7,6 +7,8 @@ import ChatPage from "./pages/Chat";
 import DeskPage from "./pages/Desk";
 import HelpPage from "./pages/Help";
 import HomePage from "./pages/Home";
+import NewCustomerPage from "./pages/NewCustomer";
+import PhonePage from "./pages/Phone";
 
 /**
  * The page routes of the front office. Each URL path shows one page inside the Shell (header + footer).
@@ -31,10 +33,14 @@ export default function App() {
                 <Route path="/help" element={<HelpPage />} />
                 <Route path="/help/:articleId" element={<HelpPage />} />
                 <Route path="/account" element={<AccountPage />} />
+                {/* A fixed path wins over :contactId, so /account/new is the "create a customer" form. */}
+                <Route path="/account/new" element={<NewCustomerPage />} />
                 <Route path="/account/:contactId" element={<AccountPage />} />
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/chat/:contactId" element={<ChatPage />} />
                 <Route path="/desk" element={<DeskPage />} />
+                {/* The customer's phone: a full-screen call page (open it on a phone, see vite.config.ts). */}
+                <Route path="/phone" element={<PhonePage />} />
                 <Route path="*" element={<HomePage />} />
               </Routes>
             </ErrorBoundary>

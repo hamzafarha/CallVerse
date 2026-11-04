@@ -2,6 +2,7 @@
 
 # Pydantic checks every request body: a wrong type or an out-of-range value returns an HTTP 422 error
 # automatically, before our code runs.
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -50,3 +51,32 @@ class HumanLabel(BaseModel):
     sentiment: int = Field(ge=1, le=5)
     resolution: int = Field(ge=1, le=5)
     comment: str = Field("", max_length=500)
+
+
+class InventedOrderRequest(BaseModel):
+    """An order typed by the visitor (option "invent my order" of a new customer)."""
+
+    category: str = Field(min_length=1, max_length=60)
+    value_brl: float = Field(gt=0, le=20000)
+    items: int = Field(1, ge=1, le=20)
+    payment_type: Literal["credit_card", "boleto", "debit_card", "voucher"] = "credit_card"
+    city: str = Field("sao paulo", min_length=1, max_length=60)
+    state: str = Field("SP", min_length=2, max_length=2)
+    purchased_at: date
+    estimated_delivery: date
+    # How far the order got: not shipped yet, on the way, delivered, or canceled.
+    progress: Literal["processing", "shipped", "delivered", "canceled"]
+    shipped_at: date | None = None
+    delivered_at: date | None = None
+    contact_at: date  # the day the customer writes to us
+
+
+class NewCustomerRequest(BaseModel):
+    """A brand-new customer: a name, a persona, a problem, and a real or an invented order."""
+
+    name: str = Field(min_length=1, max_length=40)
+    persona: Literal["impatient", "normal", "patient"] = "normal"
+    intent: str = Field(min_length=1, max_length=40)
+    message: str | None = Field(None, max_length=500)
+    order_source: Literal["real", "invented"] = "real"
+    order: InventedOrderRequest | None = None  # required when order_source is "invented"

@@ -11,7 +11,7 @@ impatient.
 # which order, which problem, the first message, and a persona (impatient / normal / patient).
 # sample_profiles() picks random contacts of the history; profile_by_contact_id() picks one.
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -157,3 +157,26 @@ def profile_by_contact_id(contacts: pd.DataFrame, contact_id: str, seed: int = 0
     if row.empty:
         raise KeyError(f"No contact {contact_id}")
     return build_profile(row.iloc[0], np.random.default_rng(seed), bool(repeat[row.index[0]]))
+
+
+def profile_from_record(record: dict[str, Any]) -> CustomerProfile:
+    """Profile of a brand-new customer (data/new_customers.py): the persona is the one the visitor chose."""
+    personas, _ = persona_settings()
+    contact = pd.Series(record)
+    profile = build_profile(contact, np.random.default_rng(0), False)
+    persona = str(record.get("persona") or profile.persona)
+    return replace(profile, persona=persona, tone=str(personas[persona]["tone"]))
+
+
+def find_profile(contact_id: str, seed: int = 0, contacts: pd.DataFrame | None = None) -> CustomerProfile:
+    """Profile of a contact of the history, or of a brand-new customer (contact ids NC...)."""
+    from callverse.data import loaders
+    from callverse.data.new_customers import get_new_customer
+
+    try:
+        return profile_by_contact_id(loaders.contacts() if contacts is None else contacts, contact_id, seed)
+    except KeyError:
+        record = get_new_customer(contact_id)
+        if record is None:
+            raise
+        return profile_from_record(record)

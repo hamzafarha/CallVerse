@@ -21,6 +21,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { CustomerCard } from "../components/CustomerCard";
 import { HelpSearch } from "../components/HelpSearch";
 import { HeroChatDemo } from "../components/HeroChatDemo";
+import { NewCustomerTile } from "../components/NewCustomerTile";
 import { useCustomer } from "../customer";
 
 // The four problem families (intent groups), each linked to its help article.
@@ -42,6 +43,7 @@ const STEPS = [
 export default function HomePage() {
   // Data from the backend: demo customers and knowledge-base articles (loaded when the page opens).
   const customers = useApi<any[]>("/api/portal/customers");
+  const created = useApi<any[]>("/api/portal/new-customers"); // customers created on the portal
   const articles = useApi<any[]>("/api/kb/articles");
   const { setCustomer } = useCustomer();
   const navigate = useNavigate();
@@ -134,8 +136,10 @@ export default function HomePage() {
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {/* One card per demo customer: a click signs in as that customer and opens their order page. Grey
              placeholders while loading. */}
+          {/* First: create a brand-new customer, then the ones already created, then the demo customers. */}
+          <NewCustomerTile />
           {customers.data
-            ? customers.data.map((c, i) => (
+            ? [...(created.data ?? []).slice(0, 3), ...customers.data].map((c, i) => (
                 <CustomerCard
                   key={c.contact_id}
                   index={i}

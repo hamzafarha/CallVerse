@@ -125,6 +125,10 @@ advisor:
   # variant agentic: the LLM chooses its tools (at most 5 offered per stage), the rules
   #   engine still decides, safety nets call what the LLM forgot, every draft is fact-checked.
   variant: rag_policy
+  # How the LLM's tools are reached: mcp = the Advisor discovers them (tools/list) and calls them
+  # (tools/call) through the CallVerse MCP server (src/callverse/mcp/); direct = plain Python calls.
+  # The results are the same; mcp is the standard way any AI app can reach the same tools.
+  tool_transport: mcp
   # max_tool_rounds: how many times the LLM may call tools before it must answer. retrieval_top_k:
   # knowledge-base sections given to the LLM.
   max_tool_rounds: 4

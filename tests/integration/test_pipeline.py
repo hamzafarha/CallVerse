@@ -86,12 +86,15 @@ def test_live_session_human_customer(keyword_runtime):
     events: list[str] = []
     session = LiveSession(profile, lambda kind, data: events.append(kind), mode="template")
     session.begin()
-    session.handle({"type": "customer_message", "text": "Where is my order?"})
+    session.handle({"type": "customer_message", "text": "Where is my order?", "via": "voice"})
     session.handle({"type": "customer_message", "text": f"It is {profile.order_id}"})
     session.handle({"type": "end", "csat": 5})
     assert session.finished
     assert {"routing", "message", "review", "done"} <= set(events)
     assert [m["speaker"] for m in session.messages][:2] == ["customer", "advisor"]
+    # A spoken message (speech to text) is tagged; a typed one is not.
+    customer = [m for m in session.messages if m["speaker"] == "customer"]
+    assert customer[0]["meta"].get("input") == "voice" and "input" not in customer[1]["meta"]
 
 
 @requires_data
@@ -204,3 +207,102 @@ def test_llm_conversation_with_local_models():
     runtime = AgentRuntime(retriever_kind="keyword", llm=llm)
     state = run_conversation(sample_profiles(loaders.contacts(), 1, seed=9)[0], mode="llm", runtime=runtime)
     assert state["kpis"]["advisor_mode"] in {"llm", "template_fallback"}
+
+
+@requires_data
+def test_new_customer_form_options_and_refusals():
+    """The new-customer form gets its options, and an impossible request is refused without writing."""
+    from callverse.api.app import app
+
+    client = TestClient(app)
+    options = client.get("/api/portal/new-customer-options").json()
+    assert len(options["problems"]) == 17 and options["dates"]["first"] < options["dates"]["last"]
+    assert all(p["example"] for p in options["problems"]) and "credit_card" in options["payment_types"]
+    missing_order = {"name": "Ali", "intent": "track_order", "order_source": "invented"}
+    assert client.post("/api/portal/customers", json=missing_order).status_code == 422
+    assert client.delete("/api/portal/new-customers/NC999999").status_code == 404
+
+
+@requires_data
+def test_phone_call_is_shared_by_the_phone_and_the_desk(keyword_runtime):
+    """A phone call: the phone (customer) and the desk (advisor) follow the same conversation, the desk can
+    take over from the AI, and the Quality agent grades the call at the end."""
+    from callverse.agents.client.profiles import profile_by_contact_id
+    from callverse.data import loaders
+    from callverse.orchestration.calls import CallHub
+
+    contacts = loaders.contacts()
+    contact = contacts[contacts["intent"] == "track_order"].iloc[0]
+    profile = profile_by_contact_id(contacts, contact["contact_id"], 0)
+    hub = CallHub()
+    call = hub.open(profile, "Amira", mode="template")
+    phone: list[dict] = []
+    desk: list[dict] = []
+    call.subscribe(phone.append)
+    call.handle({"type": "customer_message", "text": "Where is my order?", "via": "voice"}, "customer")
+    assert hub.calls()[0]["status"] == "talking" and hub.calls()[0]["autopilot"]
+    call.subscribe(desk.append)  # joins late: first receives the story so far
+    assert [e["type"] for e in desk] == [e["type"] for e in phone]
+    with pytest.raises(ValueError):  # the AI answers until the desk takes over
+        call.handle({"type": "advisor_message", "text": "Hello"}, "advisor")
+    with pytest.raises(ValueError):  # the phone cannot speak for the advisor
+        call.handle({"type": "advisor_message", "text": "Hello"}, "customer")
+    call.handle({"type": "autopilot", "on": False}, "advisor")
+    call.handle({"type": "customer_message", "text": f"It is {profile.order_id}"}, "customer")
+    assert any(e["type"] == "suggestion" for e in desk)  # the copilot drafts for the human advisor
+    call.handle({"type": "advisor_message", "text": "Thanks, I am checking your parcel now."}, "advisor")
+    call.handle({"type": "end", "csat": 4}, "customer")
+    assert call.live.finished
+    assert any(e["type"] == "review" for e in phone) and any(e["type"] == "review" for e in desk)
+    customer = [m for m in call.live.messages if m["speaker"] == "customer"]
+    assert customer[0]["meta"]["channel"] == "phone" and customer[0]["meta"]["input"] == "voice"
+    assert hub.calls()[0]["status"] == "ended" and hub.calls()[0]["quality"] is not None
+
+
+@requires_data
+def test_phone_websocket_start_and_desk_join():
+    """Over the WebSocket: the phone starts a call, the desk joins it by id and sees it in the call list."""
+    from callverse.api.app import app
+    from callverse.data import loaders
+
+    client = TestClient(app)
+    contact_id = loaders.contacts().iloc[0]["contact_id"]
+    with client.websocket_connect("/ws/session") as phone:
+        phone.send_json({"type": "start", "channel": "phone", "contact_id": contact_id, "mode": "template"})
+        ready = phone.receive_json()
+        assert ready["type"] == "ready" and ready["session_id"].startswith("PH-") and ready["autopilot"]
+        with client.websocket_connect("/ws/session") as desk:
+            desk.send_json({"type": "join", "session_id": ready["session_id"], "role": "advisor"})
+            assert desk.receive_json()["session_id"] == ready["session_id"]
+        assert any(c["id"] == ready["session_id"] for c in client.get("/api/phone/calls").json())
+    assert client.get("/api/phone/info").json()["links"][0].startswith("https://")
+
+
+@requires_data
+def test_mcp_server_is_listed_by_the_api_and_answers_over_http():
+    """GET /api/mcp reads the menu through MCP; /mcp speaks MCP over HTTP while the API runs (lifespan)."""
+    from callverse.api.app import app
+
+    with TestClient(app) as client:  # `with` runs the lifespan, which starts the /mcp connection manager
+        menu = client.get("/api/mcp").json()
+        assert {"lookup_order", "open_case", "simulate_week"} <= {t["name"] for t in menu["tools"]}
+        assert {t["group"] for t in menu["tools"]} == {"advisor", "case", "twin"}
+        assert menu["advisor"]["tool_transport"] in {"mcp", "direct"}
+        assert menu["connect"]["claude_desktop_config"]["mcpServers"]["callverse"]["args"] == ["mcp"]
+        # The first message of a classic MCP client (JSON-RPC "initialize"), sent over Streamable HTTP.
+        hello = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1"},
+            },
+        }
+        headers = {"Accept": "application/json, text/event-stream", "Host": "127.0.0.1:8000"}
+        answer = client.post("/mcp", json=hello, headers=headers)
+        assert answer.status_code == 200 and '"tools"' in answer.text
+        # A request from another site's web page is refused (DNS-rebinding protection).
+        assert client.post("/mcp", json=hello, headers={**headers, "Host": "evil.example"}).status_code >= 400
+    assert TestClient(app).post("/mcp", json=hello).status_code == 503  # API not started: no MCP endpoint

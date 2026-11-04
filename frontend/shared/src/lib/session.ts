@@ -28,7 +28,16 @@ export interface StageEvent {
 
 export interface LiveState {
   status: "idle" | "connecting" | "running" | "done" | "error";
-  ready: { profile: any; llm: boolean; model?: string | null; provider?: string; retriever?: string } | null;
+  ready: {
+    profile: any;
+    llm: boolean;
+    model?: string | null;
+    provider?: string;
+    retriever?: string;
+    name?: string; // the customer's display name
+    session_id?: string; // phone calls: the id other screens use to join (orchestration/calls.py)
+    channel?: "web" | "phone";
+  } | null;
   messages: ChatMessage[];
   streaming: { kind: string; text: string } | null;
   stages: StageEvent[];
@@ -40,9 +49,12 @@ export interface LiveState {
   review: { scorecard: any; reference: any; kpis: any } | null;
   error: string | null;
   startedAt: number | null;
+  autopilot: boolean | null; // true: the AI advisor answers; false: the human advisor answers (desk)
+  ended: boolean; // the server closed the chat (a socket that only dropped leaves this false)
 }
 
 export interface StartOptions {
+  channel?: "web" | "phone"; // "phone": a call the advisor desk can join (orchestration/calls.py)
   contact_id?: string | null;
   customer: "human" | "agent";
   advisor: "human" | "agent";
@@ -67,6 +79,8 @@ const INITIAL: LiveState = {
   review: null,
   error: null,
   startedAt: null,
+  autopilot: null,
+  ended: false,
 };
 
 /**
@@ -77,7 +91,9 @@ function reduce(state: LiveState, event: any): LiveState {
   const now = Date.now();
   switch (event.type) {
     case "ready":
-      return { ...state, status: "running", ready: event };
+      return { ...state, status: "running", ready: event, autopilot: event.autopilot ?? state.autopilot };
+    case "autopilot": // the desk took over the call, or gave it back to the AI
+      return { ...state, autopilot: event.on };
     case "message": {
       const message = event.message as ChatMessage;
       return {
@@ -118,7 +134,7 @@ function reduce(state: LiveState, event: any): LiveState {
     case "review":
       return { ...state, review: event, activeAgent: null };
     case "done":
-      return { ...state, status: "done", activeAgent: null, streaming: null };
+      return { ...state, status: "done", ended: true, activeAgent: null, streaming: null };
     case "error":
       return { ...state, error: event.message, activeAgent: null, streaming: null };
     default:
@@ -140,14 +156,14 @@ export function useLiveSession() {
   }, []);
   useEffect(() => close, [close]);
 
-  const start = useCallback(
-    (options: StartOptions) => {
-      // Close any previous chat, then open a new WebSocket and send the "start" message.
+  // Close any previous chat, then open a new WebSocket and send its first message.
+  const open = useCallback(
+    (first: Record<string, unknown>) => {
       close();
       setState({ ...INITIAL, status: "connecting", startedAt: Date.now() });
       const ws = new WebSocket(wsUrl("/ws/session"));
       socket.current = ws;
-      ws.onopen = () => ws.send(JSON.stringify({ type: "start", mode: "auto", seed: 0, ...options }));
+      ws.onopen = () => ws.send(JSON.stringify(first));
       ws.onmessage = (message) => setState((s) => reduce(s, JSON.parse(message.data)));
       ws.onerror = () =>
         setState((s) => ({ ...s, status: "error", error: "Connection lost: is `callverse serve` running?" }));
@@ -155,6 +171,13 @@ export function useLiveSession() {
         setState((s) => (s.status === "done" || s.status === "error" ? s : { ...s, status: "done" }));
     },
     [close],
+  );
+  // A new chat ("start"), or a screen joining a phone call already running ("join"; the server first replays
+  // everything said so far, so the screen catches up).
+  const start = useCallback((options: StartOptions) => open({ type: "start", mode: "auto", seed: 0, ...options }), [open]);
+  const join = useCallback(
+    (sessionId: string, role: "customer" | "advisor") => open({ type: "join", session_id: sessionId, role }),
+    [open],
   );
 
   const send = useCallback((payload: Record<string, unknown>) => {
@@ -167,12 +190,14 @@ export function useLiveSession() {
     state,
     busy,
     start,
+    join,
     reset: () => {
       close();
       setState(INITIAL);
     },
-    sendCustomer: (text: string) => send({ type: "customer_message", text }),
-    sendAdvisor: (text: string) => send({ type: "advisor_message", text }),
+    // via "voice": the words came from the microphone (speech to text); the server tags the message.
+    sendCustomer: (text: string, via: "text" | "voice" = "text") => send({ type: "customer_message", text, via }),
+    sendAdvisor: (text: string, via: "text" | "voice" = "text") => send({ type: "advisor_message", text, via }),
     suggest: () => send({ type: "suggest" }),
     autopilot: (on: boolean) => send({ type: "autopilot", on }),
     end: (csat?: number) => send({ type: "end", csat }),

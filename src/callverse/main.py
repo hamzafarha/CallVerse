@@ -2,6 +2,7 @@
 
 callverse all              # data -> forecast -> RL -> evaluation (end to end)
 callverse serve            # FastAPI backend for the React control room
+callverse mcp              # the CallVerse MCP server over stdio (Claude Desktop, MCP Inspector)
 callverse --help           # every command
 """
 
@@ -392,6 +393,73 @@ def serve(
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     # uvicorn is the web server that runs the FastAPI app (REST + WebSocket) on http://127.0.0.1:8000.
     uvicorn.run("callverse.api.app:app", host=host, port=port, reload=reload)
+
+
+@app.command("phone-cert")
+def phone_cert() -> None:
+    """Make the HTTPS certificate that lets a phone on the same Wi-Fi use its microphone on the site."""
+    from callverse.api.phone_setup import lan_addresses, make_certificate, phone_links
+
+    stage("Phone line (HTTPS certificate)")
+    addresses = lan_addresses()
+    cert, key = make_certificate(addresses)
+    say(f"  Certificate for localhost and {', '.join(addresses) or 'no network address found'}")
+    say(f"  Written to {cert.parent} (git ignores this folder: the key is never committed)")
+    say("  Next: keep `callverse serve` running, run `npm run dev:phone` in frontend/,")
+    say("  then open on the phone:")
+    for link in phone_links(addresses):
+        say(f"    {link}")
+    say("  The phone warns that the connection is not private the first time: accept it once.")
+    say("  Same Wi-Fi needed. If the phone cannot reach the PC, turn on the phone's hotspot,")
+    say("  connect the PC to it,")
+    say("  and run this command again (the address changes).")
+
+
+# -------------------------------------------------------------------------- MCP
+@app.command("mcp")
+def mcp_server() -> None:
+    """Run the CallVerse MCP server over stdio (Claude Desktop, the MCP Inspector, any MCP client)."""
+    # Nothing is printed here: with stdio, the program's output IS the protocol (JSON-RPC messages).
+    from callverse.mcp.desk import run_stdio
+
+    run_stdio()
+
+
+@app.command("mcp-check")
+def mcp_check(contact_id: str = typer.Option("SC000014", help="The contact to open as a test case.")) -> None:
+    """Connect to `callverse mcp` like an outside app: read the menu, open a case, look up its order."""
+    import anyio
+    from mcp import Client, StdioServerParameters
+
+    from callverse.mcp.client import read_menu
+    from callverse.mcp.desk import connection_info, stdio_command
+
+    async def check() -> None:
+        # Start `callverse mcp` as a child program and talk MCP through its input and output (stdio).
+        server = StdioServerParameters(command=stdio_command(), args=["mcp"])
+        started = time.perf_counter()
+        async with Client(server) as client:
+            menu = await read_menu(client)
+            seconds = time.perf_counter() - started
+            stage(f"Connected over stdio in {seconds:.1f} s (protocol {menu['protocol']})")
+            say(f"  {len(menu['tools'])} tools: {', '.join(t['name'] for t in menu['tools'])}")
+            say(f"  {len(menu['resources'])} resources, e.g. {menu['resources'][0]['uri']}")
+            say(f"  {len(menu['prompts'])} prompts: {', '.join(p['name'] for p in menu['prompts'])}")
+            stage(f"tools/call open_case {contact_id}")
+            case = (await client.call_tool("open_case", {"contact_id": contact_id})).structured_content or {}
+            if "error" in case:
+                say(f"  {case['error']}")
+                return
+            say(f"  Customer ({case['contact_time']}): {case['customer_message']}")
+            stage("tools/call lookup_order")
+            order = await client.call_tool("lookup_order", {"order_id": case["order_id"]})
+            say(f"  {json.dumps(order.structured_content)[:300]}")
+
+    anyio.run(check)
+    stage("Use it from Claude Desktop (Settings > Developer > Edit Config)")
+    say(json.dumps(connection_info()["claude_desktop_config"], indent=2))
+    say("  Or try every tool by hand in the MCP Inspector:")
+    say(f"  {connection_info()['inspector']}")
 
 
 @app.command("all")

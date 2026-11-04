@@ -37,6 +37,11 @@ Emit = Callable[[str, dict[str, Any]], None]
 SIDES = {"customer": ("human", "agent"), "advisor": ("human", "agent")}
 
 
+def _input_meta(via: str) -> dict[str, str]:
+    """{"input": "voice"} for a message that was spoken (speech to text in the browser), else nothing."""
+    return {"input": "voice"} if via == "voice" else {}
+
+
 class LiveSession:
     """One conversation driven step by step; every step reports through ``emit``."""
 
@@ -50,6 +55,7 @@ class LiveSession:
         customer: str = "human",
         advisor: str = "agent",
         waited_seconds: float | None = None,
+        channel: str = "web",
     ) -> None:
         if customer not in SIDES["customer"] or advisor not in SIDES["advisor"]:
             raise ValueError("customer and advisor must be 'human' or 'agent'")
@@ -66,6 +72,8 @@ class LiveSession:
         self.finished = False
         # Advisor desk: how long the customer already waited in your queue (else: the twin's)
         self.waited_seconds = waited_seconds
+        # "phone": the customer talks from a phone (orchestration/calls.py); "web": the browser chat
+        self.channel = channel
 
     # ---------------------------------------------------------------- helpers
     @property
@@ -143,7 +151,7 @@ class LiveSession:
             self.draft = advisor_message(self._run_advisor("draft"))
         self.emit("suggestion", {"message": self.draft, "advisor": advisor_state(self.session)})
 
-    def human_advisor(self, text: str) -> None:
+    def human_advisor(self, text: str, via: str = "text") -> None:
         # A human advisor sent a message: record whether it sent the copilot draft as is, edited it, or wrote
         # its own (for the "human + AI" analysis).
         draft = self.draft or {"text": "", "meta": {}}
@@ -153,15 +161,19 @@ class LiveSession:
             "copilot_edited": bool(draft["text"]) and text.strip() != draft["text"].strip(),
             "sources": draft["meta"].get("sources", []),
             "tools": draft["meta"].get("tools", []),
+            **_input_meta(via),
         }
         self._add("advisor", text.strip(), meta)
         self.draft = None
         if self.customer == "agent":
             self.customer_turn()
 
-    def human_customer(self, text: str) -> None:
-        """A human customer wrote (customer portal)."""
-        self._add("customer", text.strip(), {"mode": "human"})
+    def human_customer(self, text: str, via: str = "text") -> None:
+        """A human customer wrote, or spoke (customer portal)."""
+        meta = {"mode": "human", **_input_meta(via)}
+        if self.channel == "phone":
+            meta["channel"] = "phone"
+        self._add("customer", text.strip(), meta)
         self._after_customer()
 
     def customer_turn(self) -> None:
@@ -185,6 +197,8 @@ class LiveSession:
     def set_autopilot(self, on: bool) -> None:
         """Switch autopilot on or off in the middle of a chat."""
         self.advisor = "agent" if on else "human"
+        # Every screen of the chat learns who answers now (the phone desk shows "AI" or "you").
+        self.emit("autopilot", {"on": on})
         waiting = self.messages and self.messages[-1]["speaker"] == "customer"
         if on and waiting and not self.finished:
             if self.draft is not None:  # the copilot already answered this turn: send it
@@ -216,7 +230,7 @@ class LiveSession:
             "scorecard": scorecard,
             "kpis": kpis,
             "csat": self.csat,
-            "live": {"customer": self.customer, "advisor": self.advisor},
+            "live": {"customer": self.customer, "advisor": self.advisor, "channel": self.channel},
             "events": [],
         }
         # Own folder: live chats must not mix with the evaluation batches (per-variant metrics).
@@ -230,12 +244,13 @@ class LiveSession:
         # The message types the browser can send.
         kind = message.get("type")
         text = str(message.get("text", "")).strip()
+        via = str(message.get("via", "text"))  # "voice": the words came from the microphone (speech to text)
         if self.finished:
             self.emit("error", {"message": "The conversation is over."})
         elif kind == "customer_message" and self.customer == "human" and text:
-            self.human_customer(text)
+            self.human_customer(text, via)
         elif kind == "advisor_message" and self.advisor == "human" and text:
-            self.human_advisor(text)
+            self.human_advisor(text, via)
         elif kind == "suggest" and self.advisor == "human":
             self.suggest()
         elif kind == "autopilot":

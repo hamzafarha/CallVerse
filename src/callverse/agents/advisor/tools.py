@@ -18,8 +18,11 @@ actions (open a ticket, escalate to a human) and a reflection check of every dra
 #   records its call with _record().
 # - execute(): runs a tool the LLM asked for (by name, with its JSON arguments).
 # - The JSON schemas at the bottom describe each tool to the LLM (name, description, parameters). The LLM
-#   reads these descriptions to decide which tool to call.
+#   reads these descriptions to decide which tool to call. The CallVerse MCP server (callverse/mcp/server.py)
+#   publishes these same descriptions.
 # - agentic_tool_names(): gating, i.e. which tools the agentic advisor sees at each stage.
+# - DirectToolbox: the LLM's tools called as plain Python. The other toolbox, McpToolbox
+#   (callverse/mcp/client.py), reaches the same tools through the MCP server.
 import json
 import re
 import sqlite3
@@ -67,6 +70,7 @@ class ToolCall:
     result: dict[str, Any]
     latency_ms: float
     caller: str = "code"  # "llm" (the model chose it), "code" (pipeline step) or "safety_net"
+    via: str = "direct"  # "mcp" (through the CallVerse MCP server) or "direct" (a plain Python call)
 
     @property
     def summary(self) -> str:
@@ -128,6 +132,7 @@ class AdvisorTools:
     banks: BankDirectory | None = field(default=None, repr=False, compare=False)
     escalation: dict[str, Any] | None = None
     current_caller: str = field(default="code", init=False, repr=False, compare=False)
+    current_via: str = field(default="direct", init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         # Investigation thresholds from configs/data.yaml (how late before the carrier must investigate).
@@ -179,10 +184,16 @@ class AdvisorTools:
     def _record(
         self, name: str, arguments: dict[str, Any], started: float, ok: bool, result: dict[str, Any]
     ) -> dict[str, Any]:
-        # Every tool ends here: the call is stored with its result, its duration and who called it, and the
-        # live UI is notified (listener).
+        # Every tool ends here: the call is stored with its result, its duration, who called it and how (MCP
+        # or direct), and the live UI is notified (listener).
         call = ToolCall(
-            name, arguments, ok, result, (time.perf_counter() - started) * 1000, self.current_caller
+            name,
+            arguments,
+            ok,
+            result,
+            (time.perf_counter() - started) * 1000,
+            self.current_caller,
+            self.current_via,
         )
         self.calls.append(call)
         if self.listener is not None:
@@ -565,9 +576,16 @@ class AdvisorTools:
         return self._record("recommend_resolution", arguments, started, True, result)
 
     # ---------------------------------------------------------- LLM interface
-    def execute(self, name: str, arguments: dict[str, Any]) -> str:
+    def execute(self, name: str, arguments: dict[str, Any], via: str = "direct") -> str:
         """Run a tool requested by the LLM; returns JSON for the tool message."""
-        # The tools the LLM may call, by name. check_draft_reply is not in this list: only code runs it.
+        # The result goes back to the LLM as JSON text (a "tool" message).
+        return json.dumps(self.call(name, arguments, via), default=str)
+
+    def call(self, name: str, arguments: dict[str, Any], via: str = "direct") -> dict[str, Any]:
+        """Run a tool requested by an LLM and return its result. ``via``: "direct" (a Python call) or "mcp"
+        (the request came through the CallVerse MCP server)."""
+        # The tools an LLM may call, by name (LLM_TOOL_NAMES). check_draft_reply is not one: only code
+        # runs it.
         functions = {
             "lookup_order": self.lookup_order,
             "get_ticket_history": self.get_ticket_history,
@@ -580,21 +598,20 @@ class AdvisorTools:
             "search_knowledge_base": self.search_knowledge_base,
         }
         started = time.perf_counter()
-        # Everything run here is labelled caller="llm" (the model chose it).
-        with self.called_by("llm"):
-            if name not in functions:
-                result = self._record(name, arguments, started, False, {"error": f"unknown tool {name}"})
-            else:
+        # Everything run here is labelled caller="llm" (the model chose it), with the route it took.
+        previous_via, self.current_via = self.current_via, via
+        try:
+            with self.called_by("llm"):
+                if name not in functions:
+                    return self._record(name, arguments, started, False, {"error": f"unknown tool {name}"})
                 try:
                     # **arguments passes the LLM's JSON arguments as Python keyword arguments; a wrong
                     # argument name raises TypeError, caught below.
-                    result = functions[name](**arguments)
+                    return functions[name](**arguments)
                 except TypeError as error:
-                    result = self._record(
-                        name, arguments, started, False, {"error": f"bad arguments: {error}"}
-                    )
-        # The result goes back to the LLM as JSON text (a "tool" message).
-        return json.dumps(result, default=str)
+                    return self._record(name, arguments, started, False, {"error": f"bad arguments: {error}"})
+        finally:
+            self.current_via = previous_via
 
     def success_rate(self) -> float | None:
         """Share of tool calls that worked (None if no call)."""
@@ -744,3 +761,38 @@ def agentic_tool_schemas(
 def tool_schemas(variant: str = "rag_policy") -> list[dict[str, Any]]:
     """Tools offered to the LLM: ``rag`` (pure agentic RAG) or ``rag_policy`` (+ rules engine)."""
     return TOOL_SCHEMAS + ([POLICY_TOOL] if variant == "rag_policy" else [])
+
+
+def tool_names(variant: str = "rag_policy") -> list[str]:
+    """Names of the tools of ``tool_schemas`` (same order)."""
+    return [schema["function"]["name"] for schema in tool_schemas(variant)]
+
+
+# Every tool an LLM may call (the ones AdvisorTools.call accepts), in a fixed order. The CallVerse MCP server
+# publishes exactly these.
+LLM_TOOL_NAMES = list(SCHEMAS_BY_NAME)
+
+
+class DirectToolbox:
+    """The LLM's tools as plain Python calls: the "direct" transport.
+
+    The Advisor uses a toolbox for two things: the descriptions of the tools it offers the LLM
+    (``schemas``) and running the tool the LLM chose (``execute``). McpToolbox (callverse/mcp/client.py)
+    offers the same two methods but goes through the CallVerse MCP server.
+    """
+
+    transport = "direct"
+
+    def __init__(self, tools: AdvisorTools) -> None:
+        self.tools = tools
+
+    def schemas(self, names: Iterable[str]) -> list[dict[str, Any]]:
+        """The descriptions of these tools, in the order given."""
+        return [SCHEMAS_BY_NAME[name] for name in names]
+
+    def execute(self, name: str, arguments: dict[str, Any]) -> str:
+        """Run the tool the LLM chose; returns its result as JSON text."""
+        return self.tools.execute(name, arguments)
+
+    def close(self) -> None:
+        """Nothing to close (no connection)."""

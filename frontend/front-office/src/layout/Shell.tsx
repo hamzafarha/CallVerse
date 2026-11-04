@@ -83,6 +83,17 @@ export default function Shell({ children }: { children: ReactNode }) {
     </NavLink>
   );
 
+  // The phone page is a full-screen call app: no header, no footer.
+  if (location.pathname.startsWith("/phone")) {
+    return (
+      <div className="min-h-[100dvh]">
+        <Aurora intensity={dark ? 0.6 : 0.5} />
+        <Toaster position="top-center" theme={theme} richColors />
+        {children}
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen flex-col">
       {/* Animated background, toast messages (sonner) and the command palette. */}

@@ -11,6 +11,7 @@
   "scripts": {
     "dev:front": "npm run dev -w @callverse/front-office",
     "dev:back": "npm run dev -w @callverse/back-office",
+    "dev:phone": "npm run dev:phone -w @callverse/front-office",
     "build": "npm run build -w @callverse/front-office && npm run build -w @callverse/back-office",
     "typecheck": "npm run typecheck -w @callverse/front-office && npm run typecheck -w @callverse/back-office"
   }

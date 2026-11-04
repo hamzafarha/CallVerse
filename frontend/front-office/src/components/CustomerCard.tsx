@@ -47,6 +47,12 @@ export function CustomerCard({ customer, onSelect, index = 0 }: { customer: any;
             </span>
           )}
           <span className="chip py-0.5 text-[11px] capitalize">{customer.order.category || "order"}</span>
+          {/* Created on the portal (not picked from the history), on a real or an invented order. */}
+          {customer.is_new && (
+            <span className="chip py-0.5 text-[11px] text-brand" title={customer.order_source === "invented" ? "Order invented on the portal" : "Real order in this situation"}>
+              new · {customer.order_source === "invented" ? "invented order" : "real order"}
+            </span>
+          )}
         </div>
         <div className="mt-4 flex items-center gap-1 text-xs font-semibold text-brand opacity-70 transition-opacity group-hover:opacity-100">
           Continue as {customer.name.split(" ")[0]} <ArrowRight size={13} className="transition-transform group-hover:translate-x-1" />

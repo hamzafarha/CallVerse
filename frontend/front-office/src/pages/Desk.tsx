@@ -17,6 +17,8 @@ import {
   EmptyState,
   GROUP_COLOR,
   GROUP_LABEL,
+  ListeningHint,
+  MicButton,
   ORDER_STATUS,
   PERSONA_COLOR,
   QualityScore,
@@ -34,12 +36,14 @@ import {
   useApi,
   useAutoSpeak,
   useLiveSession,
+  useSpeechInput,
   useVoice,
 } from "@callverse/shared";
 import { Bot, CheckCheck, Clock, Headset, Inbox, Pencil, RefreshCw, SendHorizonal, Sparkles, User, Wand2, Wrench } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { OrderTimeline } from "../components/OrderTimeline";
+import { PhoneCalls } from "../components/PhoneCalls";
 
 // Tabs of the right panel, and the advisor variants.
 type Tab = "tools" | "customer" | "copilot" | "quality";
@@ -73,6 +77,16 @@ export default function DeskPage() {
   useAutoSpeak(state.messages, voice, (m) =>
     m.meta?.mode === "human" ? null : m.speaker === "advisor" ? { role: "advisor" } : { role: "customer", persona: selected?.persona },
   );
+  // Speech to text: you can answer the customer by talking. A finished sentence is sent at once, or put in
+  // the reply box (option off, or an agent still working) so you can edit it first.
+  const [spokenDraft, setSpokenDraft] = useState(false);
+  const speech = useSpeechInput((said) => {
+    if (speech.autoSend && !session.busy) sendAdvisor(said, "voice");
+    else {
+      setText(said);
+      setSpokenDraft(true);
+    }
+  });
 
   // Restart the wait clocks when a new queue arrives; tick every second.
   useEffect(() => setLoadedAt(Date.now()), [queue.data]);
@@ -102,6 +116,18 @@ export default function DeskPage() {
   useEffect(() => {
     if (state.error) toast.error(state.error);
   }, [state.error]);
+  // Microphone problems as a small notification; talking stops the voice that is playing.
+  useEffect(() => {
+    if (speech.error) {
+      toast.error(speech.error, { id: "speech" });
+      speech.clearError();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speech.error]);
+  useEffect(() => {
+    if (speech.listening) voice.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speech.listening]);
 
   // Customers still waiting: not handled yet and not the one in the chat.
   const waiting = useMemo(
@@ -128,13 +154,38 @@ export default function DeskPage() {
       waited_seconds: Math.round(elapsed(item)), // the Client agent's chat timer starts from here
     });
   };
+  // Watch a phone call (page /phone on a customer's phone): the desk joins the call as the advisor side and
+  // first receives everything said so far. The AI keeps answering until you choose "You answer".
+  const watchCall = (call: any) => {
+    voice.stop();
+    speech.cancel();
+    setSelected({
+      contact_id: call.contact_id,
+      name: call.name,
+      persona: call.persona,
+      intent: call.intent,
+      intent_group: call.intent_group,
+      phone: true,
+      call_id: call.id,
+    });
+    setTab("tools");
+    setText("");
+    setChatVariant((call.variant as Variant) ?? "agentic");
+    setAutopilot(call.autopilot);
+    session.join(call.id, "advisor");
+  };
   // Send your own reply (typed, edited, or the copilot draft as it is).
-  const sendAdvisor = (message: string) => {
+  const sendAdvisor = (message: string, via: "text" | "voice" = "text") => {
     if (!message.trim()) return;
     voice.stop(); // like on a call: answering interrupts the customer
-    session.sendAdvisor(message.trim());
+    session.sendAdvisor(message.trim(), via);
     setText("");
+    setSpokenDraft(false);
   };
+  // A phone call says who answers (the AI, or the human who took over): keep the switch in step with it.
+  useEffect(() => {
+    if (selected?.phone && state.autopilot !== null) setAutopilot(state.autopilot);
+  }, [state.autopilot, selected?.phone]);
   // Autopilot can be switched on or off in the middle of a chat.
   const toggleAutopilot = (on: boolean) => {
     setAutopilot(on);
@@ -145,7 +196,13 @@ export default function DeskPage() {
   // Call band faces: the advisor side is the Advisor agent on autopilot, otherwise you
   const advisorWorking = session.busy && state.activeAgent === "advisor";
   const advisorFace: AvatarState =
-    voice.speakingRole === "advisor" ? "speaking" : advisorWorking ? "thinking" : !autopilot && text.trim() ? "typing" : "listening";
+    voice.speakingRole === "advisor" || (!autopilot && speech.listening)
+      ? "speaking"
+      : advisorWorking
+        ? "thinking"
+        : !autopilot && text.trim()
+          ? "typing"
+          : "listening";
   const customerFace: AvatarState =
     voice.speakingRole === "customer" ? "speaking" : session.busy && state.activeAgent === "client" ? "typing" : "listening";
   // Averages over the chats handled so far.
@@ -189,6 +246,8 @@ export default function DeskPage() {
       <div className="grid min-h-0 flex-1 lg:grid-cols-[300px_1fr_380px]">
         {/* ------------------------------------------------------------ queue */}
         <aside className="hidden min-h-0 flex-col border-r border-line lg:flex">
+          {/* Live calls from customers' phones, above the chat queue. */}
+          <PhoneCalls activeId={selected?.call_id} onWatch={watchCall} />
           <div className="flex items-center justify-between px-4 py-3">
             <div className="text-sm font-semibold text-ink">Queue</div>
             <span className="chip py-0.5 text-[11px]">{waiting.length} waiting</span>
@@ -265,14 +324,15 @@ export default function DeskPage() {
                 <Avatar name={selected.name} size={36} />
                 <div className="min-w-[150px] flex-1">
                   <div className="truncate font-semibold text-ink">{selected.name}</div>
-                  <div className="truncate text-xs text-muted" title="simulated by the Client agent">
-                    {humanize(selected.intent)} · <span className="capitalize">{selected.persona}</span> customer · Client agent
+                  <div className="truncate text-xs text-muted" title={selected.phone ? "a real person on their phone" : "simulated by the Client agent"}>
+                    {humanize(selected.intent)} · <span className="capitalize">{selected.persona}</span> customer ·{" "}
+                    {selected.phone ? "on the phone" : "Client agent"}
                   </div>
                 </div>
                 {/* Voice mode, who answers (you or autopilot), and Wrap up (ends the chat and starts the
                    review). */}
                 <div className="flex shrink-0 items-center gap-2">
-                  <VoiceControls voice={voice} />
+                  <VoiceControls voice={voice} speech={speech} />
                   <Segmented
                     id="pilot"
                     size="sm"
@@ -312,7 +372,7 @@ export default function DeskPage() {
                     right={{
                       kind: "person",
                       name: selected.name,
-                      subtitle: `${selected.persona} customer · Client agent`,
+                      subtitle: selected.phone ? "on the phone" : `${selected.persona} customer · Client agent`,
                       persona: selected.persona,
                       state: customerFace,
                     }}
@@ -384,21 +444,32 @@ export default function DeskPage() {
                     <textarea
                       ref={composer}
                       rows={1}
-                      value={text}
-                      onChange={(e) => setText(e.target.value)}
+                      value={speech.listening ? speech.interim : text}
+                      readOnly={speech.listening}
+                      onChange={(e) => {
+                        setText(e.target.value);
+                        if (!e.target.value.trim()) setSpokenDraft(false);
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
-                          if (!session.busy) sendAdvisor(text);
+                          if (!session.busy) sendAdvisor(text, spokenDraft ? "voice" : "text");
                         }
                       }}
-                      placeholder="Type your reply, or use the copilot draft…"
+                      placeholder={speech.listening ? "Listening… speak your reply" : "Type your reply, use the copilot draft, or press the microphone…"}
                       className="field max-h-32 min-h-[44px] resize-none"
                     />
-                    <button className="btn btn-primary h-11 px-4" disabled={session.busy || !text.trim()} onClick={() => sendAdvisor(text)}>
+                    {/* Answer by talking (speech to text). */}
+                    <MicButton speech={speech} disabled={ended} className="h-11 w-11" />
+                    <button
+                      className="btn btn-primary h-11 px-4"
+                      disabled={session.busy || !text.trim() || speech.listening}
+                      onClick={() => sendAdvisor(text, spokenDraft ? "voice" : "text")}
+                    >
                       <SendHorizonal size={17} />
                     </button>
                   </div>
+                  <ListeningHint speech={speech} />
                 </div>
               )}
               {/* After the end: go straight to the next customer. */}
@@ -437,7 +508,7 @@ export default function DeskPage() {
             {!selected && <EmptyState title="No customer selected" text="Accept a chat to see the customer's order and history." />}
             {/* Tools tab: the advisor's tools and the Client agent's tools. */}
             {selected && tab === "tools" && (
-              <ToolBox stages={state.stages} variant={chatVariant} offline={state.ready ? !state.ready.llm : engine === "template"} customerTools />
+              <ToolBox stages={state.stages} variant={chatVariant} offline={state.ready ? !state.ready.llm : engine === "template"} customerTools={!selected.phone} />
             )}
             {selected && tab === "customer" && <Customer360 data={details.data} />}
             {/* Copilot tab: the policy state (intent, order verified, rules-engine action, handover), the

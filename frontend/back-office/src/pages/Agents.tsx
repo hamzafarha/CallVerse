@@ -1,7 +1,7 @@
 /**
  * Agent theater (DSO2): one real customer contact runs through the twin with no human. The Client agent plays
  * the customer, the Workforce agent routes, the Advisor agent answers and the Quality agent grades. Every
- * step is shown live (pipeline, conversation, trace, scorecard).
+ * step is shown live (pipeline, conversation, trace, scorecard). At the bottom: the CallVerse MCP server.
  */
 import {
   ActivityRow,
@@ -27,6 +27,7 @@ import {
 } from "@callverse/shared";
 import { Bot, Cpu, Play, RotateCcw, Square, Timer } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { McpServer } from "../components/McpServer";
 
 export default function AgentsPage() {
   // LLM status, and a list of 30 historical contacts to choose from.
@@ -208,6 +209,9 @@ export default function AgentsPage() {
           </AnimatePresence>
         </div>
       </div>
+
+      {/* The CallVerse MCP server: the menu the Advisor agent reads, and how outside apps connect. */}
+      <McpServer />
     </div>
   );
 }

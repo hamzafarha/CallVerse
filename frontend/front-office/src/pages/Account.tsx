@@ -21,6 +21,7 @@ import { useEffect } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { CustomerCard } from "../components/CustomerCard";
+import { NewCustomerTile } from "../components/NewCustomerTile";
 import { OrderTimeline } from "../components/OrderTimeline";
 import { useCustomer } from "../customer";
 
@@ -39,14 +40,18 @@ export default function AccountPage() {
  */
 function Picker() {
   const customers = useApi<any[]>("/api/portal/customers");
+  const created = useApi<any[]>("/api/portal/new-customers"); // customers created on the portal
   const { setCustomer } = useCustomer();
   const navigate = useNavigate();
   return (
     <div>
       <h1 className="font-display text-4xl font-semibold text-ink">Sign in as a demo customer</h1>
-      <p className="mt-2 max-w-2xl text-ink2">No password: pick one of the real (anonymised) customers of the twin.</p>
+      <p className="mt-2 max-w-2xl text-ink2">
+        No password: create your own customer, or pick one of the real (anonymised) customers of the twin.
+      </p>
       <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {(customers.data ?? []).map((c, i) => (
+        <NewCustomerTile />
+        {[...(created.data ?? []), ...(customers.data ?? [])].map((c, i) => (
           <CustomerCard
             key={c.contact_id}
             index={i}
@@ -68,6 +73,7 @@ function Picker() {
 function Account({ contactId }: { contactId: string }) {
   const { data, error } = useApi<any>(`/api/portal/customers/${contactId}`);
   const { customer, setCustomer } = useCustomer();
+  const navigate = useNavigate();
   // Opening a link /account/<id> directly also signs in as that customer.
   useEffect(() => {
     if (data && customer?.contact_id !== data.contact_id) setCustomer({ contact_id: data.contact_id, name: data.name });
@@ -89,6 +95,15 @@ function Account({ contactId }: { contactId: string }) {
     navigator.clipboard?.writeText(order.order_id);
     toast.success("Order number copied");
   };
+  // Delete a customer created on the portal (an invented order goes with it), then back to the picker.
+  const remove = async () => {
+    if (!window.confirm(`Delete ${data.name}? This cannot be undone.`)) return;
+    const response = await fetch(`/api/portal/new-customers/${data.contact_id}`, { method: "DELETE" });
+    if (!response.ok) return toast.error("Could not delete this customer.");
+    setCustomer(null);
+    toast.success(`${data.name} deleted`);
+    navigate("/account");
+  };
 
   return (
     <div className="space-y-6">
@@ -102,6 +117,17 @@ function Account({ contactId }: { contactId: string }) {
               <span className="h-1.5 w-1.5 rounded-full" style={{ background: PERSONA_COLOR[data.persona] }} /> demo persona: {data.persona}
             </span>
             {data.is_repeat_contact && <span className="chip py-0.5 text-[11px]">repeat contact</span>}
+            {/* A customer created on the portal: its order is real (picked) or invented; it can be removed. */}
+            {data.is_new && (
+              <>
+                <span className="chip py-0.5 text-[11px] text-brand">
+                  new customer · {data.order_source === "invented" ? "invented order" : "real order"} · {data.contact_id}
+                </span>
+                <button className="text-[11px] font-medium text-muted underline-offset-2 hover:text-bad hover:underline" onClick={remove}>
+                  delete this customer
+                </button>
+              </>
+            )}
           </div>
         </div>
         {/* Twin clock: the page shows the order as it was on the day of the contact (history replay). */}

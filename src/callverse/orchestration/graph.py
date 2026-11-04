@@ -102,6 +102,8 @@ def make_session(
             float(settings["advisor"]["knowledge_base"]["no_answer_score"]),
             seed,
             variant or settings["advisor"].get("variant", "rag_policy"),
+            # "mcp": the LLM's tools come from the CallVerse MCP server (callverse/mcp/); "direct": Python.
+            settings["advisor"].get("tool_transport", "mcp"),
         ),
         reviewer=QualityReviewer(llm, {"template": "rules", "llm": "llm"}.get(mode, "auto")),
         tools=AdvisorTools(as_of=profile.contact_timestamp, retriever=retriever),

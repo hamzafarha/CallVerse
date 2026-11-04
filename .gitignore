@@ -74,3 +74,6 @@ frontend/node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
 .claude/
+
+# Local HTTPS certificate for the phone demo (callverse phone-cert): the private key must never be committed
+frontend/certs/

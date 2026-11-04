@@ -12,7 +12,10 @@ import {
   AnimatePresence,
   CallPanel,
   ChatBubble,
+  ListeningHint,
+  MicButton,
   QualityScore,
+  SPEECH_LANGUAGES,
   type AvatarState,
   Segmented,
   StreamingBubble,
@@ -24,6 +27,7 @@ import {
   useApi,
   useAutoSpeak,
   useLiveSession,
+  useSpeechInput,
   useVoice,
 } from "@callverse/shared";
 import { Cpu, Eye, EyeOff, RefreshCw, SendHorizonal, Sparkles, X } from "lucide-react";
@@ -63,6 +67,16 @@ function Chat({ contactId }: { contactId: string }) {
   // Voice mode: you are the customer, so only the Advisor agent's replies are read aloud
   const voice = useVoice();
   useAutoSpeak(state.messages, voice, (m) => (m.speaker === "advisor" && m.meta?.mode !== "human" ? { role: "advisor" } : null));
+  // Speech to text: you talk instead of typing. A finished sentence is sent at once ("send when I stop
+  // talking"), or put in the text box when that option is off or the advisor is still answering.
+  const [spokenDraft, setSpokenDraft] = useState(false); // the text box holds words from the microphone
+  const speech = useSpeechInput((said) => {
+    if (speech.autoSend && !session.busy && state.status === "running") send(said, "voice");
+    else {
+      setText(said);
+      setSpokenDraft(true);
+    }
+  });
 
   // Start a new chat session when the page opens or a setting changes; close it when leaving the page.
   useEffect(() => {
@@ -85,6 +99,19 @@ function Chat({ contactId }: { contactId: string }) {
   useEffect(() => {
     if (state.error) toast.error(state.error);
   }, [state.error]);
+  // Microphone problems (blocked, nothing heard, no internet) as a small notification.
+  useEffect(() => {
+    if (speech.error) {
+      toast.error(speech.error, { id: "speech" });
+      speech.clearError();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speech.error]);
+  // Like on a phone: when you start talking, the advisor's voice stops.
+  useEffect(() => {
+    if (speech.listening) voice.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speech.listening]);
   // Keep the newest message in view.
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
@@ -96,15 +123,39 @@ function Chat({ contactId }: { contactId: string }) {
   const busy = session.busy;
   // Call band faces: the Advisor agent thinks while it works; you are "typing" while you write
   const advisorFace: AvatarState = voice.speakingRole === "advisor" ? "speaking" : busy ? "thinking" : "listening";
-  const customerFace: AvatarState = text.trim() ? "typing" : voice.speakingRole === "advisor" ? "listening" : "idle";
+  const customerFace: AvatarState = speech.listening
+    ? "speaking"
+    : text.trim()
+      ? "typing"
+      : voice.speakingRole === "advisor"
+        ? "listening"
+        : "idle";
   // Send is allowed only while the chat runs, no agent is busy and the text is not empty.
-  const canSend = !busy && !ended && state.status === "running" && text.trim().length > 0;
-  const send = (message: string) => {
+  const canSend = !busy && !ended && state.status === "running" && text.trim().length > 0 && !speech.listening;
+  const send = (message: string, via: "text" | "voice" = "text") => {
     if (!message.trim() || busy || ended) return;
     voice.stop(); // like on a call: talking over the advisor interrupts it
-    session.sendCustomer(message.trim());
+    session.sendCustomer(message.trim(), via);
     setText("");
+    setSpokenDraft(false);
   };
+  // Hands-free (a phone-call feel): once the advisor has answered and finished speaking, the microphone
+  // opens by itself. It never listens while the advisor's voice plays, so it does not hear itself.
+  const heardUpTo = useRef(-2);
+  useEffect(() => {
+    if (!speech.handsFree || speech.unavailable || speech.listening || busy || ended || state.status !== "running") return;
+    if (voice.speaking !== null || text.trim()) return;
+    const last = state.messages.length - 1;
+    const turn = last < 0 ? -1 : state.messages[last].speaker === "advisor" ? last : null;
+    if (turn === null || heardUpTo.current === turn) return;
+    const timer = window.setTimeout(() => {
+      heardUpTo.current = turn;
+      speech.start();
+    }, 900);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speech.handsFree, speech.listening, busy, ended, state.status, state.messages.length, voice.speaking, text]);
+  const speechLanguage = SPEECH_LANGUAGES.find((l) => l.value === speech.lang)?.label;
   // The latest stage event: what an agent is doing right now.
   const currentStage = state.stages[state.stages.length - 1];
   // Quick replies above the text box: the customer's real first message, the order number, a supervisor
@@ -137,7 +188,7 @@ function Chat({ contactId }: { contactId: string }) {
           </div>
           {/* Voice mode (only the advisor speaks: you are the customer), the engine switch, and the button
              that shows or hides the right panel. */}
-          <VoiceControls voice={voice} roles={["advisor"]} />
+          <VoiceControls voice={voice} roles={["advisor"]} speech={speech} handsFree />
           <Segmented
             id="engine"
             size="sm"
@@ -225,20 +276,27 @@ function Chat({ contactId }: { contactId: string }) {
             </div>
             <div className="flex items-end gap-2">
               {/* Enter sends; Shift+Enter makes a new line. */}
+              {/* While the microphone listens, the box shows the words heard so far. */}
               <textarea
                 rows={1}
-                value={text}
-                onChange={(e) => setText(e.target.value)}
+                value={speech.listening ? speech.interim : text}
+                readOnly={speech.listening}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  if (!e.target.value.trim()) setSpokenDraft(false);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    if (canSend) send(text);
+                    if (canSend) send(text, spokenDraft ? "voice" : "text");
                   }
                 }}
-                placeholder={busy ? "The advisor is answering…" : "Write your message…"}
+                placeholder={speech.listening ? "Listening… speak now" : busy ? "The advisor is answering…" : "Write your message, or press the microphone…"}
                 className="field max-h-32 min-h-[46px] resize-none py-3"
               />
-              <motion.button whileTap={{ scale: 0.92 }} className="btn btn-primary h-[46px] px-4" disabled={!canSend} onClick={() => send(text)} aria-label="Send">
+              {/* Speak instead of typing (speech to text). */}
+              <MicButton speech={speech} disabled={ended || state.status !== "running"} />
+              <motion.button whileTap={{ scale: 0.92 }} className="btn btn-primary h-[46px] px-4" disabled={!canSend} onClick={() => send(text, spokenDraft ? "voice" : "text")} aria-label="Send">
                 <SendHorizonal size={17} />
               </motion.button>
               {/* "End chat" opens the rating window; the chat closes after the rating (or Skip). */}
@@ -246,6 +304,7 @@ function Chat({ contactId }: { contactId: string }) {
                 <X size={15} /> End chat
               </button>
             </div>
+            <ListeningHint speech={speech} language={speechLanguage} />
           </div>
         )}
       </div>

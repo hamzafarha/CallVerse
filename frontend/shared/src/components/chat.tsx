@@ -11,8 +11,10 @@ import {
   CheckCircle2,
   FileSearch,
   Image as ImageIcon,
+  Mic,
   ReceiptText,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   Timer,
   Volume2,
@@ -147,6 +149,10 @@ export function ChatBubble({
   const outOfPatience = tools.some((t) => t.name === "check_my_waiting_time" && t.result?.over_my_patience);
   // Client agent: files attached with send_evidence (simulated photos, statement screenshot)
   const attachments: any[] = message.meta?.attachments ?? [];
+  // Said out loud: the microphone turned it into text (speech to text)
+  const spoken = message.meta?.input === "voice";
+  // Sent from the customer's phone (page /phone, a call the desk can join)
+  const phone = message.meta?.channel === "phone";
   return (
     <motion.div
       layout
@@ -174,8 +180,18 @@ export function ChatBubble({
         {attachments.length > 0 && <Attachments files={attachments} />}
         {/* The meta line: listen button, who wrote it, tool chips, Client agent warnings, number of
            sources. */}
-        {showMeta && (label || tools.length > 0 || sources.length > 0 || onListen || speaking || mismatch !== undefined || outOfPatience) && (
+        {showMeta && (label || tools.length > 0 || sources.length > 0 || onListen || speaking || mismatch !== undefined || outOfPatience || spoken || phone) && (
           <div className={clsx("mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted", mine && "justify-end")}>
+            {phone && (
+              <span className="inline-flex items-center gap-1" title="Sent from the customer's phone">
+                <Smartphone size={11} /> phone
+              </span>
+            )}
+            {spoken && (
+              <span className="inline-flex items-center gap-1" title="Said out loud, turned into text by speech recognition">
+                <Mic size={11} /> spoken
+              </span>
+            )}
             {onListen && (
               <button
                 type="button"

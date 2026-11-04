@@ -30,6 +30,8 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "matplotlib>=3.8",
+    # Model Context Protocol: the CallVerse MCP server and the Advisor's MCP client (src/callverse/mcp/)
+    "mcp>=2.3,<3",
 ]
 
 # Extra groups, installed on demand, e.g. pip install -e ".[all]".
@@ -149,6 +151,20 @@ name = "Agents layer allowed imports"
 type = "forbidden"
 source_modules = ["callverse.agents"]
 forbidden_modules = [
+    "callverse.twin",
+    "callverse.orchestration",
+    "callverse.evaluation",
+    "callverse.api",
+]
+
+# The Advisor imports the MCP server and client (callverse/mcp/server.py, client.py), so they stay at the
+# agents' level; only desk.py (the server for outside apps) may reach the twin.
+[[tool.importlinter.contracts]]
+name = "MCP link of the agents stays at the agents level"
+type = "forbidden"
+source_modules = ["callverse.mcp.server", "callverse.mcp.client"]
+forbidden_modules = [
+    "callverse.mcp.desk",
     "callverse.twin",
     "callverse.orchestration",
     "callverse.evaluation",

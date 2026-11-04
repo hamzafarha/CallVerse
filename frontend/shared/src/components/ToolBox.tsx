@@ -1,10 +1,11 @@
 /**
  * The tools panel (Advisor desk and Live chat): every tool of the Advisor agent, grouped by kind and updated
  * live. Dashed border = offered to the LLM right now; blue = used in this turn; small counters = calls per
- * caller (AI, pipeline step, safety net). On the desk it also shows the Client agent's tools.
+ * caller (AI, pipeline step, safety net); "MCP" badge = called through the CallVerse MCP server. On the desk
+ * it also shows the Client agent's tools.
  */
 import { motion } from "framer-motion";
-import { Bot, Cog, ShieldCheck, XCircle } from "lucide-react";
+import { Bot, Cog, Plug, ShieldCheck, XCircle } from "lucide-react";
 import type { StageEvent } from "../lib/session";
 import { CALLER_LABEL, TOOL_LABEL } from "./chat";
 import { clsx } from "./ui";
@@ -66,6 +67,7 @@ const CALLER_SHORT: Record<string, string> = { llm: "AI", code: "pipeline", safe
  */
 interface Usage {
   counts: Record<string, number>; // by caller: llm, code, safety_net
+  mcp?: number; // calls that went through the MCP server (tools/call)
   summary?: string;
   ok: boolean;
   thisTurn: boolean;
@@ -106,6 +108,7 @@ export function ToolBox({
     const entry = (usage[s.name] ??= { counts: {}, ok: true, thisTurn: false });
     const caller = s.caller ?? "code";
     entry.counts[caller] = (entry.counts[caller] ?? 0) + 1;
+    if (s.via === "mcp") entry.mcp = (entry.mcp ?? 0) + 1;
     entry.summary = s.summary;
     entry.ok = !!s.ok && s.passed !== false;
     if (i > turnStart) entry.thisTurn = true;
@@ -125,6 +128,8 @@ export function ToolBox({
   // Totals for the sentence under the title.
   const used = Object.values(usage).reduce((n, u) => n + Object.values(u.counts).reduce((a, b) => a + b, 0), 0);
   const byAi = Object.values(usage).reduce((n, u) => n + (u.counts.llm ?? 0), 0);
+  const viaMcp = Object.values(usage).reduce((n, u) => n + (u.mcp ?? 0), 0);
+  const mcpNote = viaMcp ? ` ${viaMcp} went through the MCP server.` : "";
 
   return (
     <div>
@@ -137,10 +142,14 @@ export function ToolBox({
               <Icon size={10} className={caller === "llm" ? "text-brand" : undefined} /> {CALLER_SHORT[caller]}
             </span>
           ))}
+          <span className="inline-flex items-center gap-0.5" title="Called through the CallVerse MCP server (tools/call)">
+            <Plug size={10} className="text-brand" /> MCP
+          </span>
         </div>
       </div>
       <p className="mb-2.5 text-[11px] leading-snug text-ink2">
-        {modeHint(variant, offline)} <span className="text-muted">{used ? `${used} call(s) so far, ${byAi} chosen by the AI.` : "No tool used yet."}</span>
+        {modeHint(variant, offline)}{" "}
+        <span className="text-muted">{used ? `${used} call(s) so far, ${byAi} chosen by the AI.${mcpNote}` : "No tool used yet."}</span>
       </p>
       <div className="space-y-2.5">
         {TOOLBOX.map((group) => (
@@ -226,6 +235,12 @@ function ToolRow({ name, what, usage, offered, required }: { name: string; what:
         )}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[10px] text-muted">
           {offered && <span className="font-semibold text-brand">{required ? "must choose" : "offered"}</span>}
+          {/* The AI's call went through the CallVerse MCP server (discovered with tools/list, run with tools/call). */}
+          {!!usage?.mcp && (
+            <span className="inline-flex items-center gap-0.5 font-semibold text-brand" title={`${usage.mcp} call(s) through the CallVerse MCP server`}>
+              <Plug size={10} /> MCP
+            </span>
+          )}
           {usage &&
             Object.entries(usage.counts).map(([caller, count]) => {
               const Icon = CALLER_ICON[caller] ?? Cog;
