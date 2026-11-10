@@ -100,8 +100,13 @@ class DigitalTwin:
         days = pd.date_range(spec.week_start, periods=spec.days)
         forecast = self.forecast_counts(spec)
         # Prepared: the planner knows the scenario (extra volume, longer chats, absences). Unprepared: it
-        # plans from the normal forecast (the "business as usual" manager).
-        if prepared:
+        # plans from the normal forecast (the "business as usual" manager). For a real historical week
+        # (reference_week set) the unprepared manager copies the staffing of a normal reference week.
+        if not prepared and spec.reference_week is not None:
+            reference_days = pd.date_range(spec.reference_week, periods=spec.days)
+            reference = weekly_forecast(spec.reference_week, days=spec.days + self.drain_days)
+            need = hourly_requirements(reference, reference_days, self.settings, self.hour_shares)
+        elif prepared:
             need = hourly_requirements(
                 forecast,
                 days,
@@ -124,6 +129,7 @@ class DigitalTwin:
             tuple(sorted(spec.multipliers.items())),
             spec.absence_rate,
             spec.handle_time_multiplier,
+            spec.reference_week,
             kind,
             prepared,
         )
@@ -317,6 +323,14 @@ class DigitalTwin:
             """Times relative to midnight of that day (None when missing)."""
             return [None if pd.isna(v) else round(float(v) - start, 1) for v in rows[column]]
 
+        # The day's cost, with the twin's cost settings: paid duty hours (overtime at the overtime rate) plus
+        # the customers who hung up (lost customers).
+        costs = self.settings.costs
+        agent_hours = sum(sum(a["duty"] or []) for a in agents)
+        rate = {False: costs.regular_hourly, True: costs.regular_hourly * costs.overtime_multiplier}
+        labour = sum(sum(a["duty"] or []) * rate[bool(a["overtime"])] for a in agents)
+        lost = float(live_rows["abandoned"].sum()) * costs.abandonment_cost
+
         return {
             "scenario": spec.name,
             "label": spec.label,
@@ -328,6 +342,12 @@ class DigitalTwin:
             "seed": seed,
             "opening_hours": [sim.open_hour, sim.close_hour],
             "threshold_seconds": threshold,
+            "prepared": prepared,
+            "costs": {
+                "regular_hourly_eur": costs.regular_hourly,
+                "overtime_multiplier": costs.overtime_multiplier,
+                "abandonment_cost_eur": costs.abandonment_cost,
+            },
             "agents": agents,
             "contacts": {
                 "id": rows["contact_id"].astype(str).tolist(),
@@ -348,6 +368,10 @@ class DigitalTwin:
                 "abandoned": int(live_rows["abandoned"].sum()),
                 "service_level": float((answered["wait"] <= threshold).sum() / max(len(live_rows), 1)),
                 "mean_wait_seconds": float(live_rows["wait"].fillna(0).mean()) if len(live_rows) else 0.0,
+                "agent_hours": int(agent_hours),
+                "labour_cost_eur": round(labour, 2),
+                "lost_customer_cost_eur": round(lost, 2),
+                "cost_eur": round(labour + lost, 2),
             },
         }
 
@@ -392,6 +416,7 @@ class DigitalTwin:
                     "multipliers": s.multipliers,
                     "absence_rate": s.absence_rate,
                     "handle_time_multiplier": s.handle_time_multiplier,
+                    "reference_week": str(s.reference_week.date()) if s.reference_week is not None else None,
                 }
                 for n, s in self.scenarios.items()
             },

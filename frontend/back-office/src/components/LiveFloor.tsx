@@ -1,6 +1,6 @@
 import { GROUPS, GROUP_LABEL, Segmented, clsx, motion, num, pct, useCssVars, useDocumentTheme } from "@callverse/shared";
 import { FastForward, Mail, Pause, Play, RotateCcw, Zap } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Area, AreaChart, ReferenceLine, ResponsiveContainer, YAxis } from "recharts";
 
 /** Animated replay of one simulated day of the digital twin.
@@ -15,11 +15,13 @@ import { Area, AreaChart, ReferenceLine, ResponsiveContainer, YAxis } from "rech
  * overtime, hours on duty) and every contact (arrival, start, end or hang-up time, agent). Contacts come as
  * columns (one array per field) to keep the JSON small.
  */
-interface Floor {
+export interface Floor {
   date: string;
   label: string;
   opening_hours: [number, number];
   threshold_seconds: number;
+  // Wages and the cost of a lost customer (configs/simulation.yaml), for the "cost so far" counter.
+  costs?: { regular_hourly_eur: number; overtime_multiplier: number; abandonment_cost_eur: number };
   agents: { agent_id: number; primary_group: string; overtime: boolean; on_call: boolean; duty: boolean[] | null }[];
   contacts: {
     id: string[];
@@ -33,7 +35,119 @@ interface Floor {
     agent: (number | null)[];
     live: boolean[];
   };
-  summary: { contacts: number; backlog: number; answered: number; abandoned: number; service_level: number; mean_wait_seconds: number };
+  summary: {
+    contacts: number;
+    backlog: number;
+    answered: number;
+    abandoned: number;
+    service_level: number;
+    mean_wait_seconds: number;
+    agent_hours?: number;
+    cost_eur?: number;
+  };
+}
+
+/**
+ * The twin clock that plays a day: the simulated time (a ref, read by the drawing loops), play/pause and the
+ * speed. One clock can drive several floors at once (the side-by-side view), so they stay in step.
+ */
+export interface FloorClock {
+  time: MutableRefObject<number>;
+  t: number; // the time, refreshed a few times a second (for the slider and the clock tile)
+  playing: boolean;
+  setPlaying: (playing: boolean) => void;
+  speed: string;
+  setSpeed: (speed: string) => void;
+  seek: (t: number) => void;
+  restart: () => void;
+  open: number;
+  close: number;
+}
+
+/** A twin clock running from the opening hour; `enabled = false` leaves it stopped (another clock leads). */
+export function useFloorClock(open: number, close: number, enabled = true): FloorClock {
+  const time = useRef(open * 3600);
+  const [t, setT] = useState(open * 3600);
+  const [playing, setPlaying] = useState(true);
+  const [speed, setSpeed] = useState("300");
+  const playingRef = useRef(playing);
+  const speedRef = useRef(Number(speed));
+  playingRef.current = playing;
+  speedRef.current = Number(speed);
+  // One animation frame per screen refresh: simulated time += real seconds x speed.
+  useEffect(() => {
+    if (!enabled) return;
+    let frame = 0;
+    let last = performance.now();
+    let lastUi = 0;
+    const tick = (now: number) => {
+      // Real seconds since the last frame (at most 0.5 s, so a slow screen keeps the speed but a tab left in
+      // the background does not jump ahead).
+      const dt = Math.min(0.5, (now - last) / 1000);
+      last = now;
+      if (playingRef.current) time.current = Math.min((close + 1.5) * 3600, time.current + dt * speedRef.current);
+      if (now - lastUi > 150) {
+        lastUi = now;
+        setT(time.current);
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [enabled, close]);
+  const seek = (value: number) => {
+    time.current = value;
+    setT(value);
+  };
+  const restart = () => {
+    seek(open * 3600);
+    setPlaying(true);
+  };
+  return { time, t, playing, setPlaying, speed, setSpeed, seek, restart, open, close };
+}
+
+/** Queue length every 2 simulated minutes (the mini chart, and where the peak is). */
+export function waitingSeries(floor: Floor): { t: number; waiting: number }[] {
+  const [open, close] = floor.opening_hours;
+  const c = floor.contacts;
+  const points = [];
+  for (let t = open * 3600; t <= close * 3600 + 3600; t += 120) {
+    let waiting = 0;
+    for (let i = 0; i < c.id.length; i++) {
+      if (c.live && !c.live[i]) continue;
+      const leave = c.start[i] ?? c.abandon_at[i] ?? Infinity;
+      if (c.arrival[i] <= t && t < leave) waiting++;
+    }
+    points.push({ t, waiting });
+  }
+  return points;
+}
+
+/** Busiest 30 minutes = most customer-minutes of waiting (a sustained queue, not a one-off blip). */
+export function busiestHalfHour(series: { t: number; waiting: number }[]): { t: number; load: number } {
+  const window = 15; // 15 samples of 2 minutes
+  let best = { t: series[0]?.t ?? 0, load: -1 };
+  for (let i = 0; i + window <= series.length; i++) {
+    const load = series.slice(i, i + window).reduce((sum, p) => sum + p.waiting, 0);
+    if (load > best.load) best = { t: series[i].t, load };
+  }
+  return best;
+}
+
+/** Wages paid so far today (hours on duty up to `T`, overtime at its rate) + customers lost so far. */
+export function costSoFar(floor: Floor, T: number, abandoned: number): number | null {
+  if (!floor.costs) return null;
+  const { regular_hourly_eur: rate, overtime_multiplier: ot, abandonment_cost_eur: lost } = floor.costs;
+  let wages = 0;
+  for (const agent of floor.agents) {
+    if (!agent.duty) continue;
+    let hours = 0;
+    agent.duty.forEach((on, hour) => {
+      if (on) hours += Math.max(0, Math.min(1, (T - hour * 3600) / 3600));
+    });
+    wages += hours * rate * (agent.overtime ? ot : 1);
+  }
+  return wages + abandoned * lost;
 }
 
 // Playback speeds: simulated seconds per real second (300 = 5 simulated minutes per second).
@@ -52,7 +166,7 @@ const VARS = ["--series-1", "--series-2", "--series-3", "--series-4", "--surface
 /**
  * Seconds since midnight -> "HH:MM".
  */
-function hhmm(seconds: number): string {
+export function hhmm(seconds: number): string {
   const h = Math.floor(seconds / 3600) % 24;
   const m = Math.floor((seconds % 3600) / 60);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
@@ -60,25 +174,23 @@ function hhmm(seconds: number): string {
 
 /**
  * The live floor: KPIs on top, the animated canvas, the playback controls, and a mini chart of the queue
- * length over the day.
+ * length over the day. With `clock` it follows a shared clock (side-by-side view); `compact` keeps only a title,
+ * four KPIs and the canvas (the side-by-side view draws the controls and the legend once for both).
  */
-export function LiveFloor({ floor }: { floor: Floor }) {
+export function LiveFloor({ floor, clock, compact = false, title }: { floor: Floor; clock?: FloorClock; compact?: boolean; title?: ReactNode }) {
   const theme = useDocumentTheme();
   const canvas = useRef<HTMLCanvasElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const colors = useCssVars(VARS, theme);
   const [open, close] = floor.opening_hours;
-  const [playing, setPlaying] = useState(true);
-  const [speed, setSpeed] = useState("300");
+  // Its own clock, unless a shared one is given (then its own stays stopped).
+  const own = useFloorClock(open, close, !clock);
+  const k = clock ?? own;
   // Numbers shown above the canvas, refreshed about 8 times a second (not on every frame).
-  const [view, setView] = useState({ t: open * 3600, waiting: 0, serving: 0, answered: 0, abandoned: 0, sl: 1, onDuty: 0, backlog: 0 });
-  // The simulated time and the settings live in refs: the drawing loop reads them without making React re-
-  // render on every frame.
-  const time = useRef(open * 3600);
-  const playingRef = useRef(playing);
-  const speedRef = useRef(Number(speed));
-  playingRef.current = playing;
-  speedRef.current = Number(speed);
+  const [view, setView] = useState({ t: open * 3600, waiting: 0, serving: 0, answered: 0, abandoned: 0, sl: 1, onDuty: 0, backlog: 0, cost: null as number | null });
+  // The speed lives in a ref: the drawing loop reads it without making React re-render on every frame.
+  const speedRef = useRef(Number(k.speed));
+  speedRef.current = Number(k.speed);
 
   // live = false marks overnight messages (the backlog): they never wait in the live queue.
   const c = useMemo(() => ({ ...floor.contacts, live: floor.contacts.live ?? floor.contacts.id.map(() => true) }), [floor]);
@@ -86,34 +198,15 @@ export function LiveFloor({ floor }: { floor: Floor }) {
   // Contacts sorted by arrival time, and agent id -> desk position.
   const order = useMemo(() => Array.from({ length: n }, (_, i) => i).sort((a, b) => c.arrival[a] - c.arrival[b]), [c, n]);
   const agentIndex = useMemo(() => new Map(floor.agents.map((a, i) => [a.agent_id, i])), [floor.agents]);
-  // Queue length every 2 simulated minutes, for the mini chart under the canvas.
-  const series = useMemo(() => {
-    const points = [];
-    for (let t = open * 3600; t <= close * 3600 + 3600; t += 120) {
-      let waiting = 0;
-      for (let i = 0; i < n; i++) {
-        if (!c.live[i]) continue;
-        const leave = c.start[i] ?? c.abandon_at[i] ?? Infinity;
-        if (c.arrival[i] <= t && t < leave) waiting++;
-      }
-      points.push({ t, waiting });
-    }
-    return points;
-  }, [c, n, open, close]);
-  // Busiest 30 minutes = most customer-minutes of waiting (a sustained queue, not a one-off blip)
-  const peak = useMemo(() => {
-    const window = 15; // 15 samples of 2 minutes
-    let best = { t: open * 3600, load: -1 };
-    for (let i = 0; i + window <= series.length; i++) {
-      const load = series.slice(i, i + window).reduce((sum, p) => sum + p.waiting, 0);
-      if (load > best.load) best = { t: series[i].t, load };
-    }
-    return best;
-  }, [series, open]);
+  // Queue length every 2 simulated minutes (mini chart), and the busiest half hour.
+  const series = useMemo(() => waitingSeries(floor), [floor]);
+  const peak = useMemo(() => busiestHalfHour(series), [series]);
 
+  // A new day starts again at the opening hour (a shared clock is restarted by its owner).
   useEffect(() => {
-    time.current = open * 3600;
-  }, [floor, open]);
+    if (!clock) own.restart();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [floor]);
 
   // The drawing loop: one canvas frame per screen refresh (requestAnimationFrame).
   useEffect(() => {
@@ -148,13 +241,10 @@ export function LiveFloor({ floor }: { floor: Floor }) {
     let frame = 0;
 
     const draw = (now: number) => {
-      // Advance the simulated time: real seconds since the last frame x speed.
+      // The clock (this floor's own, or the shared one) advances the time; dt only smooths the movements.
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      if (playingRef.current) {
-        time.current = Math.min((close + 1.5) * 3600, time.current + dt * speedRef.current);
-      }
-      const T = time.current;
+      const T = k.time.current;
       const travel = TRAVEL * speedRef.current;
       const fade = FADE * speedRef.current;
       const hour = Math.floor(T / 3600);
@@ -321,7 +411,7 @@ export function LiveFloor({ floor }: { floor: Floor }) {
       if (now - lastUi > 120) {
         lastUi = now;
         const onDuty = agents.filter((a) => (a.duty ? a.duty[Math.min(23, hour)] : false)).length;
-        setView({ t: T, waiting: waiting.length, serving: busy.size, answered, abandoned, sl: due ? inTime / due : 1, onDuty, backlog });
+        setView({ t: T, waiting: waiting.length, serving: busy.size, answered, abandoned, sl: due ? inTime / due : 1, onDuty, backlog, cost: costSoFar(floor, T, abandoned) });
       }
       frame = requestAnimationFrame(draw);
     };
@@ -331,54 +421,46 @@ export function LiveFloor({ floor }: { floor: Floor }) {
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [floor, colors, order, agentIndex, c, open, close]);
+  }, [floor, colors, order, agentIndex, c, open, close, k.time]);
 
-  // Restart the day from the opening hour.
-  const restart = () => {
-    time.current = open * 3600;
-    setPlaying(true);
-  };
+  const cost = view.cost === null ? "–" : `€${num(view.cost, 0)}`;
+  const onTime = <Kpi label={`On time (${floor.threshold_seconds}s)`} value={pct(view.sl, 0)} accent={view.sl < 0.8 ? "var(--critical)" : "var(--good-text)"} />;
+  const hungUp = <Kpi label="Hung up" value={num(view.abandoned, 0)} accent={view.abandoned ? "var(--critical)" : undefined} />;
+  // Side-by-side view: a title, four KPIs and the canvas (the controls and the legend are drawn once, outside).
+  if (compact) {
+    return (
+      <div className="space-y-3">
+        {title}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Kpi label="Waiting now" value={num(view.waiting, 0)} accent={view.waiting > 10 ? "var(--critical)" : undefined} />
+          {hungUp}
+          {onTime}
+          <Kpi label="Cost so far" value={cost} />
+        </div>
+        <div ref={box} className="relative overflow-hidden rounded-2xl border border-line bg-surface">
+          <canvas ref={canvas} className="block" />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
         {/* Twin clock and live KPIs (the service level turns red under 80%). */}
         <Clock t={view.t} />
         <Kpi label="Waiting now" value={num(view.waiting, 0)} accent={view.waiting > 10 ? "var(--critical)" : undefined} />
         <Kpi label="Busy agents" value={`${view.serving} / ${view.onDuty}`} />
         <Kpi label="Backlog left" value={num(view.backlog, 0)} />
         <Kpi label="Answered" value={num(view.answered, 0)} />
-        <Kpi label="Hung up" value={num(view.abandoned, 0)} accent={view.abandoned ? "var(--critical)" : undefined} />
-        <Kpi label={`Service level (${floor.threshold_seconds}s)`} value={pct(view.sl, 0)} accent={view.sl < 0.8 ? "var(--critical)" : "var(--good-text)"} />
+        {hungUp}
+        {onTime}
+        <Kpi label="Cost so far" value={cost} />
       </div>
       {/* The canvas where the floor is drawn. */}
       <div ref={box} className="relative overflow-hidden rounded-2xl border border-line bg-surface">
         <canvas ref={canvas} className="block" />
       </div>
-      {/* Controls: play/pause, restart, jump to the busiest half hour, speed, and a time slider. */}
-      <div className="flex flex-wrap items-center gap-3">
-        <motion.button whileTap={{ scale: 0.9 }} className="btn btn-primary btn-icon h-10 w-10" onClick={() => setPlaying(!playing)} aria-label={playing ? "Pause" : "Play"}>
-          {playing ? <Pause size={16} /> : <Play size={16} />}
-        </motion.button>
-        <button className="btn btn-ghost btn-icon h-10 w-10" onClick={restart} aria-label="Restart">
-          <RotateCcw size={15} />
-        </button>
-        <button className="btn btn-soft h-10" onClick={() => (time.current = peak.t)}>
-          <Zap size={14} /> Jump to the peak ({hhmm(peak.t)})
-        </button>
-        <Segmented id="floor-speed" size="sm" value={speed} onChange={setSpeed} options={SPEEDS.map((s) => ({ value: s.value, label: s.label }))} />
-        <div className="flex min-w-[200px] flex-1 items-center gap-3">
-          <FastForward size={14} className="text-muted" />
-          <input
-            type="range"
-            min={open * 3600}
-            max={(close + 1.5) * 3600}
-            step={60}
-            value={view.t}
-            onChange={(e) => (time.current = Number(e.target.value))}
-            className="w-full"
-          />
-        </div>
-      </div>
+      <FloorControls clock={k} peakT={peak.t} />
       {/* Mini chart of the queue length over the day (the vertical line = now), and the color legend. */}
       <div className="grid gap-4 md:grid-cols-[1fr_auto]">
         <div className="h-20 rounded-2xl border border-line bg-surface px-2 pt-2">
@@ -396,21 +478,59 @@ export function LiveFloor({ floor }: { floor: Floor }) {
             </AreaChart>
           </ResponsiveContainer>
         </div>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink2 md:max-w-[340px]">
-          {GROUPS.map((g, i) => (
-            <span key={g} className="inline-flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: `var(--series-${i + 1})` }} /> {GROUP_LABEL[g]}
-            </span>
-          ))}
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full border-2" style={{ borderColor: "var(--critical)" }} /> waiting &gt; {floor.threshold_seconds}s
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--critical)" }} /> hung up
-          </span>
-          <span className="inline-flex items-center gap-1.5"><Mail size={13} /> overnight backlog being worked on</span>
-        </div>
+        <FloorLegend threshold={floor.threshold_seconds} className="md:max-w-[340px]" />
       </div>
+    </div>
+  );
+}
+
+/** Play/pause, restart, jump to the busiest half hour, speed, and a time slider, for one clock. */
+export function FloorControls({ clock, peakT }: { clock: FloorClock; peakT: number }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <motion.button whileTap={{ scale: 0.9 }} className="btn btn-primary btn-icon h-10 w-10" onClick={() => clock.setPlaying(!clock.playing)} aria-label={clock.playing ? "Pause" : "Play"}>
+        {clock.playing ? <Pause size={16} /> : <Play size={16} />}
+      </motion.button>
+      <button className="btn btn-ghost btn-icon h-10 w-10" onClick={clock.restart} aria-label="Restart">
+        <RotateCcw size={15} />
+      </button>
+      <button className="btn btn-soft h-10" onClick={() => clock.seek(peakT)}>
+        <Zap size={14} /> Jump to the peak ({hhmm(peakT)})
+      </button>
+      <Segmented id="floor-speed" size="sm" value={clock.speed} onChange={clock.setSpeed} options={SPEEDS.map((s) => ({ value: s.value, label: s.label }))} />
+      <div className="flex min-w-[200px] flex-1 items-center gap-3">
+        <FastForward size={14} className="text-muted" />
+        <input
+          type="range"
+          min={clock.open * 3600}
+          max={(clock.close + 1.5) * 3600}
+          step={60}
+          value={clock.t}
+          onChange={(e) => clock.seek(Number(e.target.value))}
+          className="w-full"
+          aria-label="Time of day"
+        />
+      </div>
+    </div>
+  );
+}
+
+/** What the colours and marks of the floor mean. */
+export function FloorLegend({ threshold, className }: { threshold: number; className?: string }) {
+  return (
+    <div className={clsx("flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink2", className)}>
+      {GROUPS.map((g, i) => (
+        <span key={g} className="inline-flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full" style={{ background: `var(--series-${i + 1})` }} /> {GROUP_LABEL[g]}
+        </span>
+      ))}
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-2.5 w-2.5 rounded-full border-2" style={{ borderColor: "var(--critical)" }} /> waiting &gt; {threshold}s
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--critical)" }} /> hung up
+      </span>
+      <span className="inline-flex items-center gap-1.5"><Mail size={13} /> overnight backlog being worked on</span>
     </div>
   );
 }

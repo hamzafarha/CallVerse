@@ -18,9 +18,12 @@ from callverse.evaluation.forecast_metrics import forecast_summary
 
 
 def _read(name: str) -> pd.DataFrame:
-    """Read a saved evaluation table (empty when the file is missing)."""
+    """Read a saved evaluation table (empty when the file is missing or has nothing in it)."""
     path = EVALUATION_DIR / name
-    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+    try:
+        return pd.read_csv(path) if path.exists() else pd.DataFrame()
+    except pd.errors.EmptyDataError:  # a file written from an empty table: no rows, no columns
+        return pd.DataFrame()
 
 
 def component_metrics() -> pd.DataFrame:
@@ -273,7 +276,7 @@ def scorecard() -> list[dict[str, Any]]:
             )
             + (f"; twin fidelity {'passed' if fidelity_ok else 'failed'}")
             + (
-                f"; EUR {saved:,.0f} net saved over 3 peak weeks by testing first"
+                f"; EUR {saved:,.0f} net saved over {len(savings)} peak weeks by testing first"
                 if saved is not None
                 else ""
             ),

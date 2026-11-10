@@ -253,8 +253,10 @@ def build_index(chunks: list[Chunk], embedder: Embedder) -> Any:
 
 def docs_fingerprint(docs_dir: str | Path) -> dict[str, str]:
     """SHA-256 of every document, to detect an index older than its documents."""
+    # Line endings are normalised first: git on Windows (core.autocrlf) turns "\n" into "\r\n" at checkout,
+    # which changes the bytes but not the text, and must not make the index look out of date.
     return {
-        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        path.name: hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
         for path in sorted(Path(docs_dir).glob("*.md"))
     }
 

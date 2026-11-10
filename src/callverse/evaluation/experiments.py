@@ -143,7 +143,14 @@ def routing_experiment(
 def preparedness_experiment(
     twin: DigitalTwin,
     seeds: int = 10,
-    scenarios: tuple[str, ...] = ("promo_spike", "delivery_delays", "staff_shortage"),
+    # The three what-if peaks, and the real busiest support week after Black Friday 2017 (no multiplier:
+    # unprepared = staffing copied from a normal week).
+    scenarios: tuple[str, ...] = (
+        "promo_spike",
+        "delivery_delays",
+        "staff_shortage",
+        "black_friday_aftermath_2017",
+    ),
     plan: str = "cpsat",
     log: Callable[[str], None] | None = None,
 ) -> dict[str, pd.DataFrame]:
@@ -359,6 +366,10 @@ def save_tables(prefix: str, tables: dict[str, pd.DataFrame]) -> None:
     """Write every table of an experiment to artifacts/evaluations/."""
     ensure_dirs()
     for name, table in tables.items():
+        # A step that could not run this time (e.g. no embedding model for faithfulness) returns an empty
+        # table: keep the last results instead of erasing them.
+        if table.empty:
+            continue
         table.to_csv(EVALUATION_DIR / f"{prefix}_{name}.csv", index=False)
 
 
@@ -370,6 +381,8 @@ def merge_tables(prefix: str, tables: dict[str, pd.DataFrame], key: str) -> None
     """
     ensure_dirs()
     for name, table in tables.items():
+        if table.empty:  # nothing new: keep what is saved
+            continue
         path = EVALUATION_DIR / f"{prefix}_{name}.csv"
         if path.exists() and key in table:
             old = pd.read_csv(path)

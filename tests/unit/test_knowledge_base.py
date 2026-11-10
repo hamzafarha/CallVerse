@@ -174,3 +174,17 @@ def test_saved_index_round_trip_and_staleness_check(tmp_path: Path) -> None:
     (docs_dir / "doc.md").write_text(DOC + "\n## New section\n\nText.\n", "utf-8")
     with pytest.raises(ValueError, match="Rebuild"):
         KnowledgeRetriever.from_config(config, WordHashEmbedder())
+
+
+def test_fingerprint_ignores_windows_line_endings(tmp_path) -> None:
+    """git on Windows may check the documents out with "\r\n": same text, so the index stays valid."""
+    from callverse.agents.advisor.indexing import docs_fingerprint
+
+    unix, windows = tmp_path / "unix", tmp_path / "windows"
+    unix.mkdir()
+    windows.mkdir()
+    (unix / "policy.md").write_bytes(b"# Policy\n\nRefunds take 5 days.\n")
+    (windows / "policy.md").write_bytes(b"# Policy\r\n\r\nRefunds take 5 days.\r\n")
+    assert docs_fingerprint(unix) == docs_fingerprint(windows)
+    (windows / "policy.md").write_bytes(b"# Policy\r\n\r\nRefunds take 7 days.\r\n")
+    assert docs_fingerprint(unix) != docs_fingerprint(windows)  # a real change is still caught

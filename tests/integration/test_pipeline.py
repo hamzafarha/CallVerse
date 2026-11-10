@@ -306,3 +306,16 @@ def test_mcp_server_is_listed_by_the_api_and_answers_over_http():
         # A request from another site's web page is refused (DNS-rebinding protection).
         assert client.post("/mcp", json=hello, headers={**headers, "Host": "evil.example"}).status_code >= 400
     assert TestClient(app).post("/mcp", json=hello).status_code == 503  # API not started: no MCP endpoint
+
+
+@requires_data
+def test_historical_week_unprepared_copies_a_normal_week():
+    """A real week replayed: "unprepared" staffs like the normal reference week, "prepared" from the forecast
+    of the week, so on the December peak the copied staffing plans fewer agents."""
+    from callverse.twin.digital_twin import DigitalTwin
+
+    twin = DigitalTwin()
+    peak = twin.scenario("black_friday_aftermath_2017")
+    assert peak.reference_week is not None and peak.reference_week.dayofweek == peak.week_start.dayofweek
+    assert twin.requirement(peak, prepared=False).sum() < twin.requirement(peak, prepared=True).sum()
+    assert twin.describe()["scenarios"]["black_friday_aftermath_2017"]["reference_week"] == "2017-11-06"

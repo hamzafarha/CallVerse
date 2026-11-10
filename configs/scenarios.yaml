@@ -48,10 +48,27 @@ scenarios:
     absence_rate: 0.20
     handle_time_multiplier: 1.0
 
+  # Real historical weeks: replayed as they happened (no multiplier). "Unprepared" = a business-as-usual
+  # manager who copies the staffing of reference_week, a normal week before Black Friday; "prepared" =
+  # the plan built from the LightGBM forecast of the week itself.
   black_friday_2017:
     label: Black Friday 2017 (historical)
-    description: The real Black Friday week of the history, no change applied.
+    description: >
+      The real Black Friday week: orders peak (3,008, about 2.4x a normal November week), but customer
+      service stays calm, because people contact us after they buy. The support wave comes 1-4 weeks later.
     week_start: 2017-11-20
+    reference_week: 2017-11-06
+    multipliers: {wismo: 1.0, cancel_refund: 1.0, post_delivery: 1.0, order_admin: 1.0}
+    absence_rate: 0.0
+    handle_time_multiplier: 1.0
+
+  black_friday_aftermath_2017:
+    label: Black Friday aftermath (historical)
+    description: >
+      The real busiest support week after Black Friday (18 Dec 2017): late parcels and problems on
+      arrival, 266 contacts in the history, about 3x a normal November week. No multiplier: real data only.
+    week_start: 2017-12-18
+    reference_week: 2017-11-06
     multipliers: {wismo: 1.0, cancel_refund: 1.0, post_delivery: 1.0, order_admin: 1.0}
     absence_rate: 0.0
     handle_time_multiplier: 1.0
