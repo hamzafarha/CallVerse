@@ -23,6 +23,7 @@ from collections.abc import Callable
 from typing import Any
 
 from callverse.agents.client.profiles import CustomerProfile
+from callverse.orchestration.centre import CENTRE
 from callverse.orchestration.live import LiveSession
 
 Send = Callable[[dict[str, Any]], None]
@@ -33,6 +34,7 @@ ALLOWED = {
 }
 KEEP_ENDED_SECONDS = 30 * 60  # an ended call stays in the desk list for 30 minutes
 KEEP_IDLE_SECONDS = 2 * 3600  # a call with no activity for 2 hours is forgotten
+PHONE_GRACE_SECONDS = 120  # a phone that hung up mid-call leaves the contact centre page after 2 minutes
 
 
 class SharedCall:
@@ -59,6 +61,8 @@ class SharedCall:
         self._next_token = 0
         self._lock = threading.RLock()  # protects the event log and the subscriber list
         self._work = threading.Lock()  # one message handled at a time
+        # The contact centre page (/ws/centre) follows the call too.
+        self.feed = CENTRE.open("phone", name)
         self.live = LiveSession(profile, self.emit, mode, seed, variant, "human", "agent", channel="phone")
 
     # ------------------------------------------------------------ events
@@ -74,6 +78,13 @@ class SharedCall:
             subscribers = list(self._subscribers.values())
         for send in subscribers:
             send(event)
+        self.feed.emit(kind, data)
+
+    def close_if_abandoned(self) -> None:
+        """The phone hung up (or lost its connection) and did not come back: the customer leaves the centre
+        page. The call itself stays in the desk's list."""
+        if not self.live.finished and not self.customer_connected:
+            self.feed.close()
 
     def subscribe(self, send: Send) -> int:
         """Attach a screen: it first receives everything said so far, then the live events."""

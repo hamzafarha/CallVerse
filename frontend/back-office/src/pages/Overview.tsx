@@ -122,9 +122,6 @@ export default function OverviewPage() {
               <h2 className="text-2xl font-semibold text-ink">Business objectives → data-science objectives</h2>
               <p className="mt-1 text-sm text-muted">Verdicts apply the switch rules of the DSO document (`callverse evaluate`).</p>
             </div>
-            <Link to="/evaluation" className="btn btn-ghost hidden sm:inline-flex">
-              Full scorecard <ArrowRight size={14} />
-            </Link>
           </div>
         </Reveal>
         <div className="grid gap-4 md:grid-cols-2">

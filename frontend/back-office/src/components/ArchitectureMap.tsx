@@ -15,14 +15,14 @@ interface Layer {
   lines: string[];
   color: string;
   icon: LucideIcon;
-  to: string;
+  to?: string; // the page the box opens (none: the box is not a link)
 }
 
 const LAYERS: Layer[] = [
   { id: "data", title: "Data layer", lines: ["Olist orders · Bitext intents", "contacts · tickets · chats", "SQLite · bge-m3 KB"], color: "var(--layer-data)", icon: Database, to: "/data" },
   { id: "forecast", title: "Forecast", lines: ["LightGBM per intent", "vs naive · SARIMA · Prophet", "rolling backtest"], color: "var(--layer-sim)", icon: TrendingUp, to: "/forecast" },
   { id: "twin", title: "Digital twin", lines: ["SimPy contact centre", "4 agents · LangGraph", "PPO · CP-SAT · RAG · judge"], color: "var(--layer-agents)", icon: Activity, to: "/twin" },
-  { id: "eval", title: "Evaluation", lines: ["scenarios × seeds", "95% CIs · KPI engine", "BO → DSO scorecard"], color: "var(--layer-eval)", icon: FlaskConical, to: "/evaluation" },
+  { id: "eval", title: "Evaluation", lines: ["scenarios × seeds", "95% CIs · KPI engine", "BO → DSO scorecard"], color: "var(--layer-eval)", icon: FlaskConical },
   { id: "serve", title: "Serving & MLOps", lines: ["FastAPI · WebSocket", "React front + back office", "MLflow · Docker · CI"], color: "var(--layer-serve)", icon: Server, to: "/mlops" },
 ];
 // The four agents, drawn as small chips inside the digital twin box.
@@ -94,8 +94,8 @@ export function ArchitectureMap() {
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 + i * 0.12, duration: 0.5 }}
-            style={{ cursor: "pointer" }}
-            onClick={() => navigate(layer.to)}
+            style={{ cursor: layer.to ? "pointer" : "default" }}
+            onClick={() => layer.to && navigate(layer.to)}
           >
             <rect x={x(i)} y={40} width={BOX_W} height={BOX_H} rx={18} fill="var(--surface-1)" stroke="var(--hairline)" />
             <rect x={x(i) + 22} y={40} width={BOX_W - 44} height={3} rx={1.5} fill={layer.color} />

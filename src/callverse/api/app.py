@@ -6,14 +6,15 @@ Run with ``callverse serve`` (or ``uvicorn callverse.api.app:app``).
   Advisor agent and the advisor desk -> ``/api/portal``, ``/api/kb``, ``/api/desk``,
   ``/ws/session``.
 - Back office (``frontend/back-office``): the managers' control room -> every
-  other route (forecast, workforce, twin, agents, quality, evaluation, MLOps).
+  other route (forecast, workforce, twin, agents, quality, evaluation, MLOps), and
+  the contact centre page -> ``/api/centre``, ``/ws/centre``.
 """
 
 # How to read this file: one Python function per URL. The decorator gives the HTTP method and the path:
 # @app.get("/api/forecast") answers GET requests on that path, and FastAPI turns the returned dictionary into
 # JSON. Sections: overview, data, forecast, twin, workforce, agents, quality, evaluation, MLOps, system
-# (LLMs), MCP, front office (portal, desk), help centre, and the live WebSocket at the end. The MCP server
-# itself answers at /mcp (see callverse/mcp/desk.py).
+# (LLMs), MCP, front office (portal, desk), help centre, the live WebSocket, and the contact centre page at
+# the end. The MCP server itself answers at /mcp (see callverse/mcp/desk.py).
 import asyncio
 import json
 import threading
@@ -29,6 +30,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 
 from callverse.api.schemas import (
+    CentreArrival,
     ConversationRequest,
     HumanLabel,
     NewCustomerRequest,
@@ -1045,6 +1047,7 @@ def _ready_payload(session: Any, profile: Any) -> dict[str, Any]:
         "provider": advisor.llm.backend() if llm and advisor.llm else "off",
         "retriever": type(advisor.retriever).__name__,
         "autopilot": session.advisor == "agent",
+        "customer": session.customer,  # "human" (a person) or "agent" (the Client agent)
         "channel": session.channel,
     }
 
@@ -1052,7 +1055,7 @@ def _ready_payload(session: Any, profile: Any) -> dict[str, Any]:
 async def _shared_call(websocket: WebSocket, start: dict[str, Any], deliver: Any) -> None:
     """A phone call (orchestration/calls.py): the phone starts it as the customer; the desk joins as the
     advisor. Every screen receives the same events; a screen that joins late first gets the story so far."""
-    from callverse.orchestration.calls import HUB
+    from callverse.orchestration.calls import HUB, PHONE_GRACE_SECONDS
 
     if start.get("type") == "join":
         call = HUB.get(start.get("session_id"))
@@ -1082,6 +1085,10 @@ async def _shared_call(websocket: WebSocket, start: dict[str, Any], deliver: Any
         call.unsubscribe(token)
         if role == "customer":
             call.customer_connected = False
+            if not call.live.finished:
+                # The phone may only have locked its screen: if it is not back in 2 minutes, the customer
+                # leaves the contact centre page.
+                asyncio.get_running_loop().call_later(PHONE_GRACE_SECONDS, call.close_if_abandoned)
 
 
 @app.get("/api/phone/calls")
@@ -1117,6 +1124,7 @@ async def ws_session(websocket: WebSocket) -> None:
     and receives ``ready``, ``message``, ``token``, ``stage``, ``routing``,
     ``suggestion``, ``review`` and ``done`` events.
     """
+    from callverse.orchestration.centre import CENTRE, ChatFeed, centre_channel
     from callverse.orchestration.live import LiveSession
 
     await websocket.accept()
@@ -1124,9 +1132,12 @@ async def ws_session(websocket: WebSocket) -> None:
     # Bridge between the agents' thread and this async function: emit() puts events in the outbox, sender()
     # sends them to the browser, in order.
     outbox: asyncio.Queue = asyncio.Queue()
+    feed: ChatFeed | None = None  # the same chat, copied to the contact centre page (/ws/centre)
 
     def emit(kind: str, data: dict[str, Any]) -> None:
         loop.call_soon_threadsafe(outbox.put_nowait, {"type": kind, **clean(data)})
+        if feed is not None:
+            feed.emit(kind, data)
 
     async def sender() -> None:
         while (message := await outbox.get()) is not None:
@@ -1160,8 +1171,11 @@ async def ws_session(websocket: WebSocket) -> None:
             start.get("customer", "human"),
             start.get("advisor", "agent"),
             _seconds(start.get("waited_seconds")),
+            # "visitor": a person speaking into the contact centre page's microphone; else a web chat
+            channel="visitor" if start.get("channel") == "visitor" else "web",
         )
-        # 2) Tell the browser which provider and model answer.
+        # 2) The contact centre page follows the chat too; tell the browser which provider and model answer.
+        feed = CENTRE.open(centre_channel(session.channel, session.customer), _customer_name(profile))
         emit("ready", _ready_payload(session, profile))
         # 3) The Client agent opens (when it plays the customer); then each browser message is handled until
         # the chat ends.
@@ -1173,10 +1187,120 @@ async def ws_session(websocket: WebSocket) -> None:
         pass
     except Exception as error:  # surfaced to the UI
         emit("error", {"message": str(error)})
-    # 4) Always: stop the sender and close the socket.
+    # 4) Always: end the story on the centre page (a tab closed before the end: the customer leaves), stop the
+    # sender and close the socket.
     finally:
+        if feed is not None:
+            feed.close()
         outbox.put_nowait(None)
         await sending
+        try:
+            await websocket.close()
+        except (RuntimeError, WebSocketDisconnect):
+            pass  # the browser already closed it
+
+
+# ---------------------------------------------------------- contact centre (back office /centre)
+def _saved_customer_name(chat: dict[str, Any]) -> str:
+    """The customer's name in the advisor history: the typed name of a new customer, else the demo name."""
+    from callverse.data.new_customers import get_new_customer
+
+    record = get_new_customer(chat.get("contact_id") or "")
+    if record:
+        return record["name"]
+    try:
+        return _display_name(chat.get("customer_unique_id") or "")
+    except ValueError:  # not a hexadecimal Olist id
+        return "Customer"
+
+
+@app.get("/api/centre/advisors")
+def centre_advisors() -> dict[str, Any]:
+    """The centre's KPI wall (totals) and one line per advisor desk, from the finished live chats."""
+    from callverse.orchestration.centre import advisors_summary, saved_chats
+
+    return clean(advisors_summary(saved_chats()))
+
+
+@app.get("/api/centre/advisors/{advisor_id}")
+def centre_advisor(advisor_id: str) -> dict[str, Any]:
+    """One advisor's finished chats, newest first, each with the Quality agent's scorecard."""
+    from callverse.orchestration.centre import advisors_summary, saved_chats
+
+    chats = [chat for chat in saved_chats() if chat["advisor"] == advisor_id]
+    for chat in chats:
+        chat["customer"] = _saved_customer_name(chat)
+    lines = advisors_summary(chats)["advisors"]
+    return clean({"id": advisor_id, "summary": lines[0] if lines else None, "chats": chats})
+
+
+@app.post("/api/centre/arrivals")
+async def centre_arrival(request: CentreArrival) -> dict[str, Any]:
+    """A customer walks into the centre: the Client agent plays the customer, the Advisor agent answers,
+    and every step goes to the centre screens (/ws/centre). One of the centre's own customers at a time."""
+    from callverse.orchestration.centre import CENTRE, CentreBusy
+    from callverse.orchestration.live import LiveSession
+
+    if CENTRE.running("centre"):
+        raise HTTPException(409, "A customer is already being served: wait until the story ends.")
+    try:
+        profile = await asyncio.to_thread(_profile, request.contact_id, request.seed)
+    except KeyError as error:
+        raise HTTPException(404, str(error)) from error
+    try:
+        feed = CENTRE.open("centre", _customer_name(profile), limit=1)
+    except CentreBusy as error:  # two clicks at the same moment
+        raise HTTPException(409, str(error)) from error
+    try:
+        # The same agents as every chat; feed.emit sends each step to the centre screens.
+        session = await asyncio.to_thread(
+            LiveSession,
+            profile,
+            feed.emit,
+            request.mode,
+            request.seed,
+            request.variant,
+            customer="agent",
+            advisor="agent",
+            channel="centre",
+        )
+    except Exception:
+        feed.close()
+        raise
+    feed.emit("ready", _ready_payload(session, profile))
+    # The whole chat runs in its own thread: this request answers at once, and the centre follows the events.
+    threading.Thread(target=feed.run, args=(session.begin,), name=f"centre-{feed.id}", daemon=True).start()
+    return {"chat": feed.id, "name": feed.name, "contact_id": profile.contact_id}
+
+
+@app.websocket("/ws/centre")
+async def ws_centre(websocket: WebSocket) -> None:
+    """The centre page's live feed: ``{"chat", "channel", "event"}`` for every step of every running chat
+    (first the story so far of the chats already running). The page only listens; it sends nothing."""
+    from callverse.orchestration.centre import CENTRE
+
+    await websocket.accept()
+    loop = asyncio.get_running_loop()
+    outbox: asyncio.Queue = asyncio.Queue()
+    # Called by the agents' threads: hand the event over to this async function (same bridge as /ws/session).
+    token = CENTRE.subscribe(lambda message: loop.call_soon_threadsafe(outbox.put_nowait, clean(message)))
+
+    async def sender() -> None:
+        while True:
+            await websocket.send_json(await outbox.get())
+
+    async def listener() -> None:
+        while True:
+            await websocket.receive_text()  # nothing is expected: this only notices when the page closes
+
+    tasks = [asyncio.create_task(sender()), asyncio.create_task(listener())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        CENTRE.unsubscribe(token)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         try:
             await websocket.close()
         except (RuntimeError, WebSocketDisconnect):

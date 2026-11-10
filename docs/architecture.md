@@ -61,7 +61,7 @@ Two React apps share one API and one design system (`frontend/shared`):
 | App | Users | Talks to |
 |---|---|---|
 | Front office (`frontend/front-office`) | customers, advisors | `/api/portal`, `/api/kb`, `/api/desk`, `/ws/session` (live chat, copilot, autopilot) |
-| Back office (`frontend/back-office`) | managers | `/api/overview`, `/api/forecast`, `/api/twin/*` (incl. the live-floor replay), `/api/workforce`, `/api/agents`, `/api/quality`, `/api/evaluation`, `/api/mlops`, `/api/system` |
+| Back office (`frontend/back-office`) | managers | `/api/overview`, `/api/forecast`, `/api/twin/*` (incl. the live-floor replay), `/api/workforce`, `/api/agents`, `/api/mcp`, `/api/mlops`, `/api/system` |
 
 `/ws/session` drives `orchestration/live.py`: the same agents as the LangGraph run, one step at a
 time, with a human on either side; tokens, tool calls and pipeline stages stream to the UI.

@@ -25,6 +25,13 @@ requires_data = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def live_chats_in_a_temp_folder(tmp_path, monkeypatch):
+    """Every test saves its finished live chats in a temporary folder (autouse: applied to all tests), so
+    the tests never add test chats to the contact centre's real advisor history (artifacts/traces)."""
+    monkeypatch.setenv("CALLVERSE_LIVE_DIR", str(tmp_path / "live_sessions"))
+
+
 @pytest.fixture
 def daily_counts() -> pd.DataFrame:
     """60 days x 4 groups of Poisson daily contacts with a weekly pattern."""

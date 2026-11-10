@@ -540,7 +540,7 @@ function ScenarioLab({ simple }: { simple: boolean }) {
                     <XAxis dataKey="label" minTickGap={60} tickLine={false} axisLine={{ stroke: "var(--baseline)" }} />
                     <YAxis width={32} tickLine={false} axisLine={false} />
                     <Tooltip content={<ChartTooltip format={(v: number) => num(v, 1)} />} />
-                    <Line dataKey="on_duty" name="On duty" stroke="var(--series-1)" strokeWidth={2} dot={false} type="stepAfter" />
+                    <Line dataKey="on_duty" name="Available" stroke="var(--series-1)" strokeWidth={2} dot={false} type="stepAfter" />
                     <Line dataKey="busy" name="Busy" stroke="var(--series-3)" strokeWidth={2} dot={false} />
                   </LineChart>
                 </ResponsiveContainer>

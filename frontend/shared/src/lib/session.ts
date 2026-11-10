@@ -36,7 +36,7 @@ export interface LiveState {
     retriever?: string;
     name?: string; // the customer's display name
     session_id?: string; // phone calls: the id other screens use to join (orchestration/calls.py)
-    channel?: "web" | "phone";
+    channel?: "web" | "phone" | "visitor";
   } | null;
   messages: ChatMessage[];
   streaming: { kind: string; text: string } | null;
@@ -54,7 +54,9 @@ export interface LiveState {
 }
 
 export interface StartOptions {
-  channel?: "web" | "phone"; // "phone": a call the advisor desk can join (orchestration/calls.py)
+  // "phone": a call the advisor desk can join (orchestration/calls.py); "visitor": a person speaking into the
+  // contact centre page's microphone (back office /centre)
+  channel?: "web" | "phone" | "visitor";
   contact_id?: string | null;
   customer: "human" | "agent";
   advisor: "human" | "agent";

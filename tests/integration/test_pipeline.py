@@ -3,6 +3,8 @@
 # knowledge base). Skipped when the data is not built (requires_data). TestClient calls the FastAPI app in-
 # process, without starting a server. Run: pytest tests/integration -v
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -319,3 +321,126 @@ def test_historical_week_unprepared_copies_a_normal_week():
     assert peak.reference_week is not None and peak.reference_week.dayofweek == peak.week_start.dayofweek
     assert twin.requirement(peak, prepared=False).sum() < twin.requirement(peak, prepared=True).sum()
     assert twin.describe()["scenarios"]["black_friday_aftermath_2017"]["reference_week"] == "2017-11-06"
+
+
+@requires_data
+def test_centre_customer_is_watched_live_and_lands_in_the_advisor_history(keyword_runtime):
+    """The contact centre page: a customer walks in (offline agents), the centre feed shows every step of the
+    chat, and the finished chat appears in its advisor's history with the Quality agent's score."""
+    from callverse.api.app import app
+    from callverse.orchestration.live import live_chats_dir
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws/centre") as ws:
+        answer = client.post("/api/centre/arrivals", json={"mode": "template", "seed": 3})
+        assert answer.status_code == 200, answer.text
+        chat = answer.json()["chat"]
+        kinds: list[str] = []
+        while "done" not in kinds:
+            message = ws.receive_json()
+            if message["chat"] == chat:
+                kinds.append(message["event"]["type"])
+    assert kinds[0] == "ready" and {"routing", "message", "stage", "review"} <= set(kinds)
+    assert "token" not in kinds
+    assert len(list(live_chats_dir().glob("*.json"))) == 1  # saved in the test folder, not in artifacts/
+    wall = client.get("/api/centre/advisors").json()
+    assert wall["totals"]["chats"] == 1 and wall["totals"]["by_ai"] == 1
+    advisor = wall["advisors"][0]["id"]
+    history = client.get(f"/api/centre/advisors/{advisor}").json()
+    first = history["chats"][0]
+    assert first["customer"] and first["quality"] is not None and first["channel"] == "centre"
+    assert history["summary"]["chats"] == 1
+
+
+@requires_data
+def test_centre_sees_portal_chats_and_a_customer_who_closes_the_tab(keyword_runtime):
+    """A real person writing on the customer portal appears on the centre page; when the tab closes before
+    the end, the centre's story ends (the customer leaves the floor)."""
+    from callverse.api.app import app
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws/centre") as centre:
+        with client.websocket_connect("/ws/session") as chat:
+            chat.send_json({"type": "start", "customer": "human", "advisor": "agent", "mode": "template"})
+            assert chat.receive_json()["customer"] == "human"
+            chat.send_json({"type": "customer_message", "text": "Where is my parcel?"})
+            kinds: list[str] = []
+            while "advisor_state" not in kinds:
+                kinds.append(chat.receive_json()["type"])
+        # The tab closed here, before the chat ended.
+        seen: list[dict] = []
+        while not seen or seen[-1]["event"]["type"] != "done":
+            message = centre.receive_json()
+            if message["channel"] == "web":
+                seen.append(message)
+    types = [m["event"]["type"] for m in seen]
+    assert types[0] == "ready" and {"message", "routing", "stage"} <= set(types)
+    assert seen[-1]["event"] == {"type": "done", "reviewed": False} and len({m["chat"] for m in seen}) == 1
+
+
+@requires_data
+def test_phone_calls_reach_the_centre_and_a_phone_that_hangs_up_leaves(keyword_runtime):
+    """Every phone call is copied to the centre page; a phone that does not come back ends the story there
+    (the call itself stays in the desk's list)."""
+    from callverse.agents.client.profiles import profile_by_contact_id
+    from callverse.data import loaders
+    from callverse.orchestration.calls import CallHub
+    from callverse.orchestration.centre import CENTRE
+
+    contacts = loaders.contacts()
+    profile = profile_by_contact_id(contacts, contacts.iloc[0]["contact_id"], 0)
+    seen: list[dict] = []
+    token = CENTRE.subscribe(seen.append)
+    try:
+        hub = CallHub()
+        call = hub.open(profile, "Amira", mode="template")
+        call.emit("ready", {"name": "Amira", "customer": "human"})
+        call.customer_connected = True
+        call.handle({"type": "customer_message", "text": "Where is my order?", "via": "voice"}, "customer")
+        call.customer_connected = False  # the phone hung up
+        call.close_if_abandoned()
+    finally:
+        CENTRE.unsubscribe(token)
+    mine = [m for m in seen if m["chat"] == call.feed.id]
+    assert {m["channel"] for m in mine} == {"phone"}
+    assert "routing" in [m["event"]["type"] for m in mine] and mine[-1]["event"]["type"] == "done"
+    assert hub.calls()[0]["status"] == "talking"  # the desk still sees the call
+
+
+@requires_data
+def test_a_visitor_speaking_at_the_centre_is_labelled_as_a_visitor(keyword_runtime):
+    """A person speaking into the centre page's microphone: the chat is labelled "visitor" on the floor and in
+    the saved transcript (the advisor history)."""
+    from callverse.api.app import app
+    from callverse.orchestration.live import live_chats_dir
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws/centre") as centre:
+        with client.websocket_connect("/ws/session") as chat:
+            chat.send_json(
+                {
+                    "type": "start",
+                    "customer": "human",
+                    "advisor": "agent",
+                    "mode": "template",
+                    "channel": "visitor",
+                }
+            )
+            assert chat.receive_json()["channel"] == "visitor"
+            chat.send_json({"type": "customer_message", "text": "Where is my parcel?", "via": "voice"})
+            kinds: list[str] = []
+            while "advisor_state" not in kinds:
+                kinds.append(chat.receive_json()["type"])
+            chat.send_json({"type": "end", "csat": 4})
+            while "done" not in kinds:
+                kinds.append(chat.receive_json()["type"])
+        # (Other tests' phone calls may still be on the floor: they wait 2 minutes for the phone.)
+        seen: list[dict] = []
+        while len(seen) < 3:
+            message = centre.receive_json()
+            if message["channel"] == "visitor":
+                seen.append(message)
+    assert seen[0]["event"]["type"] == "ready" and seen[0]["event"]["channel"] == "visitor"
+    assert len({m["chat"] for m in seen}) == 1
+    saved = json.loads(next(live_chats_dir().glob("*.json")).read_text(encoding="utf-8"))
+    assert saved["live"]["channel"] == "visitor" and saved["messages"][0]["meta"]["input"] == "voice"

@@ -20,13 +20,12 @@ import {
 import {
   Activity,
   Bot,
+  Building2,
   ChevronsLeft,
-  ClipboardCheck,
   Cloud,
   Cpu,
   Database,
   ExternalLink,
-  FlaskConical,
   LayoutDashboard,
   Menu,
   Server,
@@ -66,10 +65,10 @@ export const SECTIONS: { title: string; color: string; items: NavItem[] }[] = [
     items: [
       { to: "/agents", label: "Agent theater", icon: Bot },
       { to: "/workforce", label: "Workforce agent", icon: Users },
-      { to: "/quality", label: "Quality & labeling", icon: ClipboardCheck },
+      // Opens full screen (no sidebar): the live contact centre, for the projector.
+      { to: "/centre", label: "Contact centre (live)", icon: Building2 },
     ],
   },
-  { title: "Evaluation", color: "var(--layer-eval)", items: [{ to: "/evaluation", label: "BO / DSO scorecard", icon: FlaskConical }] },
   { title: "Serving & MLOps", color: "var(--layer-serve)", items: [{ to: "/mlops", label: "Models & MLOps", icon: Server }] },
 ];
 

@@ -2,7 +2,9 @@
  * The "simple view" of the digital twin: what happens to the CUSTOMERS, in pictures anyone understands, for a
  * jury that has never seen a queueing model.
  *
- * - agents are headsets (lit = talking to a customer), the waiting line is people (red = waiting too long);
+ * - every agent has a desk: its border = the agent's speciality, its colour = the case it is handling now;
+ * - the waiting line is people coloured by their problem; when an agent takes a customer, that person slides
+ *   from the line to the agent's desk (routing); a customer who gives up drops out in red;
  * - two counters grow live: customers helped and customers who gave up;
  * - race bars compare the lost customers and the cost so far;
  * - a caption tells the story by itself, written from the simulation's own numbers (no AI involved);
@@ -11,9 +13,9 @@
  * Everything is computed from the same data as the detailed view (GET /api/twin/floor, POST /api/twin/run and
  * /api/twin/compare): only the way it is shown changes.
  */
-import { clsx, num } from "@callverse/shared";
-import { AnimatePresence, motion } from "framer-motion";
-import { Headset, MessageCircle, Trophy, User, UserCheck, UserX } from "lucide-react";
+import { GROUPS, GROUP_LABEL, clsx, num } from "@callverse/shared";
+import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
+import { Headset, Mail, MessageCircle, Trophy, User, UserCheck, UserX } from "lucide-react";
 import { type ReactNode, useEffect, useMemo } from "react";
 import {
   type Floor,
@@ -75,6 +77,16 @@ export interface FloorStats {
   arrived: number;
   onTime: number | null; // share answered within the threshold, among the customers already due
   cost: number | null;
+  desks: Desk[]; // the agents at work, in a fixed order, with the case each one is handling
+  queue: number[]; // the waiting customers (contact positions), the longest waiting first
+}
+
+/** One agent at work: its speciality, and the contact it is handling now (null = free). */
+export interface Desk {
+  agentId: number;
+  skill: string;
+  serving: number | null;
+  live: boolean; // a live customer (false: a message left overnight)
 }
 
 /** Count everything at time T, from the contacts and agents of the floor. */
@@ -84,6 +96,8 @@ export function floorStats(floor: Floor, T: number): FloorStats {
   const hour = Math.min(23, Math.max(0, Math.floor(T / 3600)));
   const talking = new Set<number>();
   const onMessages = new Set<number>();
+  const servingBy = new Map<number, number>(); // agent id -> contact being handled
+  const queue: number[] = [];
   let waiting = 0;
   let waitingLong = 0;
   let helped = 0;
@@ -99,12 +113,14 @@ export function floorStats(floor: Floor, T: number): FloorStats {
     // An agent is busy while a conversation (or an overnight message) is in progress.
     if (start !== null && start <= T && T < (c.end[i] ?? Infinity) && c.agent[i] !== null) {
       (live ? talking : onMessages).add(c.agent[i] as number);
+      servingBy.set(c.agent[i] as number, i);
     }
     if (!live) continue; // overnight messages never stand in the live line
     arrived++;
     const leave = start ?? c.abandon_at[i] ?? Infinity;
     if (T < leave) {
       waiting++;
+      queue.push(i);
       if (T - arrival > threshold) waitingLong++;
     }
     if (start !== null && start <= T) helped++;
@@ -114,11 +130,20 @@ export function floorStats(floor: Floor, T: number): FloorStats {
       if (start !== null && start - arrival <= threshold) inTime++;
     }
   }
-  const scheduled = floor.agents.filter((a) => (a.duty ? a.duty[hour] : false)).length;
+  // The desks: every agent whose shift covers this hour, or who is still finishing a conversation.
+  const desks: Desk[] = floor.agents
+    .filter((a) => (a.duty ? a.duty[hour] : false) || servingBy.has(a.agent_id))
+    .map((a) => {
+      const serving = servingBy.get(a.agent_id) ?? null;
+      return { agentId: a.agent_id, skill: a.primary_group, serving, live: serving !== null && (!c.live || c.live[serving]) };
+    });
+  queue.sort((x, y) => c.arrival[x] - c.arrival[y]);
   const busy = talking.size + onMessages.size;
   return {
     t: T,
-    onDuty: Math.max(scheduled, busy), // an agent finishing a call after the shift still counts
+    desks,
+    queue,
+    onDuty: desks.length,
     busy,
     busyLive: talking.size,
     busyMessages: onMessages.size,
@@ -249,66 +274,102 @@ export function ClockBar({ clock, peakT }: { clock: FloorClock; peakT: number })
   );
 }
 
-const MAX_ICONS = 24; // more than this becomes "+N"
+const MAX_QUEUE = 30; // more waiting customers than this becomes "+N"
+
+/** The colour of a problem group: the same fixed colours as everywhere in CallVerse. */
+export const groupColor = (group: string | null | undefined) =>
+  `var(--series-${Math.max(0, (GROUPS as readonly string[]).indexOf(group ?? "")) + 1})`;
+// Exit colours (an animation cannot start from a CSS variable): gave up = red, helped and done = green.
+const GONE_RED = "#dc2626";
+const DONE_GREEN = "#16a34a";
+const SLIDE = { type: "spring", stiffness: 320, damping: 32 } as const;
 
 /**
- * One floor in pictures: the team (headsets), the waiting line (people), helped vs gave up, on time and cost.
+ * One floor in pictures: the waiting line (people coloured by problem), the desks (border = speciality,
+ * colour = the case being handled), helped vs gave up, on time and cost. Each customer has a layoutId, so the
+ * same person slides from the line to the desk of the agent who takes it.
  */
 export function SimpleFloorCard({
+  floor,
+  floorKey,
   stats,
   title,
   decision,
-  threshold,
   highlight = false,
 }: {
+  floor: Floor;
+  floorKey: string;
   stats: FloorStats;
   title?: ReactNode;
   decision: string;
-  threshold: number;
   highlight?: boolean;
 }) {
-  const agents = Math.min(stats.onDuty, MAX_ICONS);
-  const people = Math.min(stats.waiting, MAX_ICONS);
+  const c = floor.contacts;
+  const threshold = floor.threshold_seconds;
+  const shown = stats.queue.slice(0, MAX_QUEUE);
   return (
     <div className={clsx("card space-y-4 p-5", highlight && "ring-2 ring-[var(--good)]")}>
       <div>
         {title && <div className="text-xs font-semibold uppercase tracking-wider text-muted">{title}</div>}
         <div className="font-display text-lg font-semibold text-ink">{decision}</div>
       </div>
-      {/* The team: one headset per agent on duty: lit while talking to a customer, amber while answering one of
-         last night's messages, faded when free. */}
-      <div>
-        <div className="mb-1.5 text-sm text-ink2">
-          <b className="text-ink">{stats.onDuty}</b> agents on duty · <b className="text-ink">{stats.busyLive}</b> talking to a customer
-          {stats.busyMessages > 0 && (
-            <>
-              {" "}· <b style={{ color: "var(--warning)" }}>{stats.busyMessages}</b> answering last night's messages
-            </>
-          )}
+      {/* layoutId names are local to this floor (two floors side by side share contact positions). */}
+      <LayoutGroup id={floorKey}>
+        {/* The waiting line, the longest waiting first; a red bar = waiting longer than the threshold. */}
+        <div>
+          <div className="mb-1.5 text-sm text-ink2">
+            Waiting line: <b className="text-ink">{stats.waiting}</b> {stats.waiting === 1 ? "customer" : "customers"}
+            {stats.waitingLong > 0 && <span style={{ color: "var(--critical)" }}> · {stats.waitingLong} waiting more than {threshold} s</span>}
+          </div>
+          <div className="flex min-h-[34px] flex-wrap items-start gap-1">
+            <AnimatePresence initial={false} mode="popLayout">
+              {shown.map((i) => {
+                const late = stats.t - c.arrival[i] > threshold;
+                // The simulation knows the end: a customer who will be answered leaves at once (the same
+                // person then slides to the desk); one who gives up drops out in red.
+                const exit = c.abandoned[i]
+                  ? { opacity: 0, y: 24, color: GONE_RED, transition: { duration: 0.6 } }
+                  : { opacity: 0, transition: { duration: 0 } };
+                return (
+                  <motion.div
+                    key={i}
+                    layoutId={`c${i}`}
+                    className="flex flex-col items-center"
+                    style={{ color: groupColor(c.group[i]) }}
+                    initial={{ opacity: 0, x: -14 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={exit}
+                    transition={SLIDE}
+                    title={`${GROUP_LABEL[c.group[i]] ?? c.group[i]}: waiting for ${Math.round(stats.t - c.arrival[i])} s`}
+                  >
+                    <User size={22} aria-hidden />
+                    <span className="mt-0.5 h-1 w-4 rounded-full" style={{ background: late ? "var(--critical)" : "transparent" }} />
+                  </motion.div>
+                );
+              })}
+            </AnimatePresence>
+            {stats.waiting > MAX_QUEUE && <span className="self-center text-sm text-muted">+{stats.waiting - MAX_QUEUE}</span>}
+            {stats.waiting === 0 && <span className="self-center text-sm text-muted">Nobody is waiting</span>}
+          </div>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {Array.from({ length: agents }, (_, i) => {
-            const color = i < stats.busyLive ? "var(--brand)" : i < stats.busy ? "var(--warning)" : "var(--text-muted)";
-            return <Headset key={i} size={24} className="transition-colors duration-300" style={{ color, opacity: i < stats.busy ? 1 : 0.45 }} aria-hidden />;
-          })}
-          {stats.onDuty > MAX_ICONS && <span className="self-center text-sm text-muted">+{stats.onDuty - MAX_ICONS}</span>}
-          {stats.onDuty === 0 && <span className="text-sm text-muted">Nobody on duty</span>}
+        {/* The desks: one per agent at work. */}
+        <div>
+          <div className="mb-1.5 text-sm text-ink2">
+            <b className="text-ink">{stats.onDuty}</b> agents at work · <b className="text-ink">{stats.busyLive}</b> talking to a customer
+            {stats.busyMessages > 0 && (
+              <>
+                {" "}· <b className="text-ink">{stats.busyMessages}</b> answering last night's messages
+              </>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {stats.desks.map((desk) => (
+              <DeskTile key={desk.agentId} desk={desk} floor={floor} />
+            ))}
+            {stats.desks.length === 0 && <span className="text-sm text-muted">No agent at work</span>}
+          </div>
         </div>
-      </div>
-      {/* The waiting line: the people who waited too long stand at the front, in red. */}
-      <div>
-        <div className="mb-1.5 text-sm text-ink2">
-          Waiting line: <b className="text-ink">{stats.waiting}</b> {stats.waiting === 1 ? "customer" : "customers"}
-          {stats.waitingLong > 0 && <span style={{ color: "var(--critical)" }}> · {stats.waitingLong} waiting more than {threshold} s</span>}
-        </div>
-        <div className="flex min-h-[26px] flex-wrap gap-0.5">
-          {Array.from({ length: people }, (_, i) => (
-            <User key={i} size={22} style={{ color: i < stats.waitingLong ? "var(--critical)" : "var(--text-secondary)" }} aria-hidden />
-          ))}
-          {stats.waiting > MAX_ICONS && <span className="self-center text-sm text-muted">+{stats.waiting - MAX_ICONS}</span>}
-          {stats.waiting === 0 && <span className="self-center text-sm text-muted">Nobody is waiting</span>}
-        </div>
-      </div>
+      </LayoutGroup>
       {/* The two numbers that matter. */}
       <div className="grid grid-cols-2 gap-3">
         <BigCount icon={<UserCheck size={16} aria-hidden />} label="Helped" value={stats.helped} color="var(--good-text)" />
@@ -321,6 +382,51 @@ export function SimpleFloorCard({
         <span>
           Cost so far: <b className="text-ink">{euros(stats.cost)}</b>
         </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One agent's desk: the border is the agent's speciality, the fill is the problem of the case being handled;
+ * inside, the customer (who slid here from the line) or an envelope for a message left overnight.
+ */
+function DeskTile({ desk, floor }: { desk: Desk; floor: Floor }) {
+  const c = floor.contacts;
+  const busy = desk.serving !== null;
+  const caseGroup = busy ? c.group[desk.serving as number] : null;
+  const now = busy
+    ? `now: ${desk.live ? "a customer" : "a message left overnight"} about "${GROUP_LABEL[caseGroup ?? ""] ?? caseGroup}"`
+    : "free";
+  return (
+    <div
+      className="flex h-[60px] w-[60px] flex-col items-center justify-center gap-0.5 rounded-xl border-2 transition-colors duration-300"
+      style={{
+        borderColor: groupColor(desk.skill),
+        background: busy ? `color-mix(in srgb, ${groupColor(caseGroup)} 26%, transparent)` : "transparent",
+      }}
+      title={`Agent ${desk.agentId} · speciality: ${GROUP_LABEL[desk.skill] ?? desk.skill} · ${now}`}
+    >
+      <Headset size={15} style={{ color: busy ? "var(--text-primary)" : "var(--text-muted)" }} aria-hidden />
+      <div className="flex h-[22px] items-center justify-center">
+        <AnimatePresence initial={false} mode="popLayout">
+          {busy && desk.live && (
+            <motion.div
+              key={desk.serving}
+              layoutId={`c${desk.serving}`}
+              style={{ color: groupColor(caseGroup) }}
+              exit={{ opacity: 0, y: -16, color: DONE_GREEN, transition: { duration: 0.5 } }}
+              transition={SLIDE}
+            >
+              <User size={20} aria-hidden />
+            </motion.div>
+          )}
+          {busy && !desk.live && (
+            <motion.div key={`m${desk.serving}`} initial={{ opacity: 0, scale: 0.6 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}>
+              <Mail size={18} style={{ color: groupColor(caseGroup) }} aria-hidden />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -369,16 +475,26 @@ export function RaceBars({ title, rows }: { title: string; rows: BarRow[] }) {
   );
 }
 
-/** What the pictures mean, in one line. */
+/** What the pictures mean: the four problem colours, then the desks and the waiting line. */
 export function SimpleLegend({ threshold }: { threshold: number }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-ink2">
-      <span className="inline-flex items-center gap-1.5"><Headset size={16} style={{ color: "var(--brand)" }} aria-hidden /> agent talking to a customer</span>
-      <span className="inline-flex items-center gap-1.5"><Headset size={16} style={{ color: "var(--warning)" }} aria-hidden /> answering a message left overnight</span>
-      <span className="inline-flex items-center gap-1.5"><Headset size={16} style={{ color: "var(--text-muted)", opacity: 0.45 }} aria-hidden /> agent free</span>
-      <span className="inline-flex items-center gap-1.5"><User size={16} style={{ color: "var(--text-secondary)" }} aria-hidden /> customer waiting</span>
-      <span className="inline-flex items-center gap-1.5"><User size={16} style={{ color: "var(--critical)" }} aria-hidden /> waiting more than {threshold} s</span>
-      <span>Customers who wait about 3 minutes give up and leave.</span>
+    <div className="space-y-1.5 text-xs text-ink2">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+        <span className="font-semibold text-ink">Customer problem:</span>
+        {GROUPS.map((g) => (
+          <span key={g} className="inline-flex items-center gap-1">
+            <User size={15} style={{ color: groupColor(g) }} aria-hidden /> {GROUP_LABEL[g]}
+          </span>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+        <span>Desk border = the agent's speciality · desk colour = the problem being handled</span>
+        <span className="inline-flex items-center gap-1"><Mail size={14} aria-hidden /> a message left overnight</span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-1 w-4 rounded-full" style={{ background: "var(--critical)" }} /> waiting more than {threshold} s
+        </span>
+        <span>Customers who wait about 3 minutes give up and leave.</span>
+      </div>
     </div>
   );
 }
@@ -400,7 +516,7 @@ export function SimpleSingleFloor({ floor, decision }: { floor: Floor; decision:
       <ClockBar clock={clock} peakT={peakT} />
       <StoryLine story={storyOne(floor, stats, peakT)} />
       <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
-        <SimpleFloorCard stats={stats} decision={decision} threshold={floor.threshold_seconds} />
+        <SimpleFloorCard floor={floor} floorKey="floor" stats={stats} decision={decision} />
         <div className="card space-y-5 p-5">
           <RaceBars
             title="Customers so far today"
@@ -446,8 +562,8 @@ export function SimpleSideBySide({
       <ClockBar clock={clock} peakT={peakT} />
       <StoryLine story={storyTwo(left, a, b)} />
       <div className="grid gap-5 lg:grid-cols-2">
-        <SimpleFloorCard stats={a} title="Left" decision={leftName} threshold={left.threshold_seconds} highlight={over && a.gaveUp < b.gaveUp} />
-        <SimpleFloorCard stats={b} title="Right" decision={rightName} threshold={right.threshold_seconds} highlight={over && b.gaveUp < a.gaveUp} />
+        <SimpleFloorCard floor={left} floorKey="left" stats={a} title="Left" decision={leftName} highlight={over && a.gaveUp < b.gaveUp} />
+        <SimpleFloorCard floor={right} floorKey="right" stats={b} title="Right" decision={rightName} highlight={over && b.gaveUp < a.gaveUp} />
       </div>
       <div className="card grid gap-6 p-5 md:grid-cols-2">
         <RaceBars

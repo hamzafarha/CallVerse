@@ -168,10 +168,57 @@ instead of waiting ~20 s for the models to load.
 | App | Pages |
 |---|---|
 | Front office :5173 | Home + semantic help search · Help centre · My orders (demo customers) · Live chat with the AI advisor · Advisor desk (queue, copilot drafts, autopilot, customer 360, quality review) |
-| Back office :5174 | Overview · Data & contracts · Demand forecast · Digital twin (live floor + scenario lab) · Agent theater · Workforce agent · Quality & labeling · BO/DSO scorecard · Models & MLOps |
+| Back office :5174 | Overview · Data & contracts · Demand forecast · Digital twin (live floor, side by side, scenario lab; simple and detailed views) · Agent theater · Workforce agent · Contact centre (live, full screen) · Models & MLOps |
 
 Both apps: `Ctrl+K` opens the command palette; the theme toggle is top right. Add
 `?snapshot` to a URL to render every animation in its final state (screenshots).
+
+### The contact centre page (for the projector)
+
+Open **http://localhost:5174/centre** (or *Agents → Contact centre (live)* in the sidebar).
+It fills the whole screen, without the sidebar; press `F11` for full screen.
+
+1. Choose **LLMs** (the real demo) or **Offline backups** (rehearsals: no OpenRouter
+   request is used).
+2. Press **A customer walks in**. The Client agent plays a real customer from the history,
+   and the floor shows the real chat: the customer explains the problem at the reception
+   (Workforce agent), walks to the chosen desk (Advisor agent; its tools pop up), the
+   supervisor comes if the chat is escalated, and the quality lead shows the Quality
+   agent's score. The KPI wall then counts the chat.
+3. Click a **desk** to see that advisor's finished chats and the Quality agent's score of
+   each one (the whole conversation opens with a click).
+4. Real chats walk in too: every chat of the server appears on the floor, with a label that
+   says who plays the customer: a person on the customer portal (*web chat*), a person on a
+   phone (*phone call*), or the Client agent (Agent theater, advisor desk). Customers take
+   turns like in a real centre: one at a time at the reception (the others wait in the
+   waiting area), at most two chats per advisor, and the supervisor and the quality lead
+   go to one desk at a time. A customer who closes the tab leaves the floor; a phone that
+   hangs up leaves after 2 minutes (it may only have locked its screen).
+5. **Voices on** reads every bubble aloud, each person with their own voice (the browser's
+   speech engine: no server, no cost), plus three short announcements: the receptionist
+   names the desk, the supervisor says which desk they join, the quality lead reads the
+   score. A bubble stays until its voice ends. Voices start off: browsers only play sound
+   after a click. Edge has the most natural voices.
+6. **Talk as a customer** lets a visitor become a real customer from the history: click the
+   microphone, speak, pause (speech to text in the browser: Chrome or Edge, on
+   `localhost`). The advisor answers out loud on the floor. Quick replies give the order
+   number (nobody can read a 32-character id aloud); end with a 1-5 star rating. The chat
+   is labelled *visitor at the centre* on the floor and in the advisor's history.
+7. **Crowd** replays one hour of a real day simulated by the digital twin (the same day as
+   the Twin page's live floor), starting just before its busiest half hour: simulated
+   customers walk in, wait in line (a red bar: more than 20 s), are served at the desks or
+   give up and walk out in red; an envelope means an advisor is answering last night's
+   messages. The twin's own screen on the wall counts the hour (waiting, helped, gave up,
+   on time). No AI and no LLM cost; real chats keep walking in on top and are never slowed
+   down by the crowd. Presets: *Normal day* (calm), *After Black Friday* (Monday
+   18 Dec 2017: the advisors start with last night's messages, most morning customers give
+   up), *Promo spike, unprepared* (the longest line). The first time a preset is chosen
+   after `callverse serve` starts, the twin plans that week (up to a minute): choose each
+   preset once before presenting.
+
+Every move comes from a real event of the server (`/ws/centre`); the page only slows the
+pace so each step can be read (**2×** speeds it up). Finished chats are saved in
+`artifacts/traces/live_sessions/` (one file per chat); that folder is the advisors' history.
 
 ---
 

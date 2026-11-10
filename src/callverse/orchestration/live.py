@@ -16,7 +16,11 @@ the same helpers as the automatic graph, so live chats count like simulated ones
 # "advisor_message", "text": ...}. handle() sends each message to a step; each step calls the agents and
 # reports progress with emit(kind, data), which the server sends back to the browser as JSON events (message,
 # token, stage, routing, suggestion, review, done).
+import os
+import time
+import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from callverse.agents.client.chat_clock import queue_wait_from_twin
@@ -35,6 +39,12 @@ from callverse.orchestration.graph import (
 # Emit = the callback that sends one event to the browser.
 Emit = Callable[[str, dict[str, Any]], None]
 SIDES = {"customer": ("human", "agent"), "advisor": ("human", "agent")}
+
+
+def live_chats_dir() -> Path:
+    """Folder of the finished live chats (the contact centre's advisor history). The tests point it to a
+    temporary folder (CALLVERSE_LIVE_DIR), so they never add test chats to the real history."""
+    return Path(os.environ.get("CALLVERSE_LIVE_DIR") or TRACE_DIR / "live_sessions")
 
 
 def _input_meta(via: str) -> dict[str, str]:
@@ -232,9 +242,12 @@ class LiveSession:
             "csat": self.csat,
             "live": {"customer": self.customer, "advisor": self.advisor, "channel": self.channel},
             "events": [],
+            "ended_at": time.time(),
         }
-        # Own folder: live chats must not mix with the evaluation batches (per-variant metrics).
-        save_transcript(state, TRACE_DIR / "live_sessions")  # type: ignore[arg-type]
+        # Own folder: live chats must not mix with the evaluation batches (per-variant metrics). The time in
+        # the file name keeps every chat: a customer can come back, and the old chat stays in the history.
+        stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+        save_transcript(state, live_chats_dir(), suffix=stamp)  # type: ignore[arg-type]
         self.emit("review", {"scorecard": scorecard, "reference": reference, "kpis": kpis})
         self.emit("done", {"reviewed": True})
 

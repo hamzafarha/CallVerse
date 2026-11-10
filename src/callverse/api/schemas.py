@@ -40,6 +40,15 @@ class ConversationRequest(BaseModel):
     seed: int = 0
 
 
+class CentreArrival(BaseModel):
+    """A customer walks into the contact centre page: the Client agent plays the customer."""
+
+    contact_id: str | None = None  # None: a random contact from the history (picked by the seed)
+    mode: Literal["auto", "llm", "template"] = "auto"
+    variant: Literal["rag_policy", "rag", "agentic"] = "rag_policy"
+    seed: int = 0
+
+
 class HumanLabel(BaseModel):
     """Human grades of one conversation (1-5) for judge calibration."""
 
