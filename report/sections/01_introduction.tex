@@ -1,0 +1,82 @@
+\section{Introduction and problem statement}
+\label{sec:intro}
+
+\subsection{Context: an e-commerce customer service centre}
+Most contacts to an online shop's customer service are caused by orders: a parcel is late (``where is my
+order?''), a customer wants to cancel or get a refund, an item arrives damaged or wrong, or an invoice or
+address must be changed. These causes are largely \emph{predictable}: the number of orders, the promotion
+calendar and the carriers' delays are known days in advance. Yet many centres still plan from last year's
+averages and react to peaks when they happen. This status quo has four costs:
+\begin{itemize}
+  \item \textbf{Peaks hurt customers}: long waits, abandoned chats, repeat contacts and bad reviews.
+  \item \textbf{Quiet periods waste money}: staffing is the largest cost of a contact centre, and paid advisors
+        sit idle.
+  \item \textbf{Decisions are tested on real customers}: there is no safe place to ask ``what if a promotion
+        doubles the tracking questions?'' or ``what if 20\% of the advisors are sick?''.
+  \item \textbf{AI assistants are adopted without measurement}: chatbots answer customers, but few companies
+        check whether the answers follow the company policy, or whether an automatic grader agrees with humans.
+\end{itemize}
+
+\subsection{Our answer: a digital twin with four agents}
+CallVerse is a \emph{digital twin} of such a centre: a virtual copy that behaves like the real one, so that
+a decision can be tested in seconds before customers feel it. The twin is driven by real e-commerce data
+(the Olist marketplace) and is used by four cooperating \emph{agents}, programs that observe a situation and
+act on it:
+\begin{itemize}
+  \item the \textbf{Client agent} plays customers, each with a real order, a problem and a personality;
+  \item the \textbf{Workforce agent} recognises each customer's problem, sends the chat to the right advisor,
+        and plans the advisors' shifts;
+  \item the \textbf{Advisor agent} answers, using the company's policy documents and business tools (order
+        lookup, refund eligibility, tickets);
+  \item the \textbf{Quality agent} grades every conversation on a five-criterion scorecard.
+\end{itemize}
+
+\subsection{Business and data science objectives}
+We framed the project as four \emph{business objectives} (BO), each measured by business KPIs, and four
+\emph{data science objectives} (DSO), each measured by a model metric (Table~\ref{tab:bodso}). A KPI tells
+whether the centre is doing better; a DSO metric tells whether the AI component works. Three rules apply to
+every objective: (1) the main idea must beat a \emph{simple baseline}; (2) a \emph{backup} covers the whole
+objective with less effort; (3) a \emph{switch rule}, fixed before the experiments, decides whether the main
+idea or the backup goes to production. DSO4 is the foundation: DSO1 and DSO3 are trained and tested inside
+its simulation.
+
+\begin{table}[h]
+\centering\small
+\caption{From business objectives to data science objectives. ``Rule'' is the switch rule decided in advance.}
+\label{tab:bodso}
+\begin{tabularx}{\textwidth}{@{}p{2.5cm}YYYp{3.1cm}@{}}
+\toprule
+\textbf{Business objective} & \textbf{DSO and main idea} & \textbf{Baseline} & \textbf{Backup} & \textbf{Rule} \\
+\midrule
+BO1 Customers wait less & DSO1: real-time routing learned by reinforcement learning (MaskablePPO) &
+  First come, first served (FIFO) with skill matching & Priority score with tuned weights &
+  $\geq$10\% less waiting in the twin's peak weeks \\
+BO2 Problems solved correctly, higher satisfaction & DSO2: advisor with retrieval-augmented generation and
+  tools, plus an LLM judge & Keyword FAQ search; templates & Intent classifier + approved templates +
+  checklist reviewer & $\leq$10\% wrong answers; judge--human kappa $\geq$ 0.4 \\
+BO3 Lower cost, same service & DSO3: forecast + constraint-programming shift planning (CP-SAT) &
+  Fixed schedule sized for the peak & Erlang C + shift templates + overtime rule &
+  $\geq$5\% cheaper while meeting the service target and the labour rules \\
+BO4 Prepare for peaks by testing first & DSO4: contact forecast per reason + discrete-event simulation &
+  Same day last week; Erlang C queueing formula & Statistical forecast + queueing model &
+  Beat the naive forecast; the twin passes its fidelity checks \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{What success means.} The centre's service target is the industry's ``80/20'' rule: 80\% of chats
+answered within 20 seconds. A good plan meets it at the lowest labour cost and respects labour law (at most
+5 days and 40 hours a week, at least 11 hours of rest between two shifts). A good answer applies the company
+policy (for example: a parcel more than 7 days late triggers a carrier investigation) and leaves the customer
+satisfied. Every claimed gain must be measured against its baseline on the same simulated customers, with a
+95\% confidence interval.
+
+\subsection{Contributions and structure of the report}
+We deliver (1) a reproducible data pipeline from raw Olist and Bitext files to a relational store and a
+knowledge base; (2) a forecast and a validated simulation engine; (3) four agents combining machine learning,
+reinforcement learning, optimisation and language models; (4) an evaluation framework with paired
+experiments, a scorecard and live monitoring of every AI component; and (5) a deployed application.
+Section~\ref{sec:data} presents the data, Section~\ref{sec:method} the methods and architecture,
+Section~\ref{sec:experiments} the experimental protocol and Section~\ref{sec:results} the results.
+Section~\ref{sec:analysis} discusses limitations, Section~\ref{sec:deployment} deployment and
+reproducibility, and Section~\ref{sec:aiuse} declares our use of generative AI tools.

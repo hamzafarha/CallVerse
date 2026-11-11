@@ -133,7 +133,6 @@ function Tie({ x, top, length, width, color }: { x: number; top: number; length:
 /**
  * A full-body figure (style A), drawn in a 100 x 200 box, `height` pixels tall. `walking` swings the legs and
  * the arms; `pose` raises the right arm (the receptionist points to a desk, the quality lead shows a score).
- * `color` replaces the role's colour (the twin crowd wears the colour of its problem).
  */
 export function Person({
   role,
@@ -141,7 +140,6 @@ export function Person({
   height = 150,
   walking = false,
   pose = "stand",
-  color,
   style,
   title,
 }: {
@@ -150,11 +148,10 @@ export function Person({
   height?: number;
   walking?: boolean;
   pose?: Pose;
-  color?: string;
   style?: CSSProperties;
   title?: string;
 }) {
-  const r = { ...ROLE[role], ...(color ? { color } : {}) };
+  const r = ROLE[role];
   const armTurn = pose === "point" ? -120 : pose === "raise" ? -165 : 0;
   return (
     <svg viewBox="0 0 100 200" width={height / 2} height={height} className={walking ? "cv-person cv-walking" : "cv-person"} style={style} role="img" aria-label={title ?? r.title}>

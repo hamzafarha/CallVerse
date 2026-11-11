@@ -1,0 +1,161 @@
+\section{Methodology and architecture}
+\label{sec:method}
+
+\subsection{Process and architecture}
+We followed CRISP-DM~\cite{crispdm}: business understanding (the BO/DSO framework), data understanding and
+preparation (Section~\ref{sec:data}), modelling (forecast, twin, agents), evaluation (Section~\ref{sec:experiments})
+and deployment (Section~\ref{sec:deployment}). The code is organised in five layers (Figure~\ref{fig:arch}). A
+lower layer never imports a higher one; six \code{import-linter} contracts enforce this in the test suite.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  layer/.style={draw=cvline, fill=cvsoft, rounded corners=3pt, anchor=north, inner sep=4pt,
+                font=\scriptsize, text=cvmuted},
+  arrow/.style={-{Stealth[length=2mm]}, thick, draw=cvblue}]
+  \foreach \i/\t/\body in {
+    0/{Data}/{Olist orders, Bitext messages\\Pandera contracts\\SQLite store\\bge-m3 + FAISS knowledge base},
+    1/{Forecast \& simulation}/{LightGBM per intent, rolling backtest\\Erlang C\\SimPy engine: skills, routers, duty, costs},
+    2/{Agents \& twin}/{Client agent\\Workforce: PPO or skill score; CP-SAT shifts\\Advisor: RAG + tools\\Quality: LLM judge},
+    3/{Evaluation}/{KPI engine\\paired experiments (10 seeds, 95\% CI)\\component metrics\\scorecard, monitoring},
+    4/{Serving \& MLOps}/{FastAPI, WebSockets\\front and back office\\MCP server\\MLflow, tracing\\Docker}}{
+    \node[layer] (L\i) at (\i*3.3, 0)
+      {\parbox[t][2.9cm][t]{2.7cm}{\raggedright\hyphenpenalty=10000
+        {\footnotesize\bfseries\color{cvink}\t}\\[3pt]\body}};
+  }
+  \foreach \a/\b in {0/1,1/2,2/3,3/4} { \draw[arrow] (L\a.east |- 0,-1.6) -- (L\b.west |- 0,-1.6); }
+  \node[font=\scriptsize, text=cvmuted, align=center] at (6.6,-3.55)
+    {LangGraph: client\_open $\rightarrow$ workforce\_route $\rightarrow$ advisor $\leftrightarrows$ client\_reply
+     $\rightarrow$ quality $\rightarrow$ kpi};
+\end{tikzpicture}
+\caption{The five layers of CallVerse. Arrows show the only allowed direction of dependencies.}
+\label{fig:arch}
+\end{figure}
+
+\subsection{DSO4, part 1: forecasting the contacts}
+\textbf{Target.} Daily contacts per intent family (four series) and their total, 1 to 7 days ahead.
+\textbf{Features.} Every feature is lagged by at least 7 days, so the model never sees the future (a unit test
+checks it): the series' own history (lags 7, 14, 21 and 28 days, same-weekday mean, 7- and 28-day means),
+\emph{order drivers} (orders purchased, handed to carriers, delivered and delivered late, orders promised for
+the day, overdue backlog) and the calendar (weekday, holidays, promotion windows, days since the last major
+sale). \textbf{Models.} The DSO baseline ``same day last week'' (seasonal naive), a 4-week weekday mean,
+SARIMA(1,1,1)(0,1,1)$_7$~\cite{hyndman}, Prophet with holidays and promotions~\cite{prophet}, and one global
+LightGBM~\cite{lightgbm} with a Poisson objective and the family as a categorical feature. The error measure
+is the weighted mean absolute percentage error, which stays defined on days with few contacts:
+\begin{equation}
+\text{wMAPE} = \frac{\sum_t |y_t - \hat{y}_t|}{\sum_t y_t}.
+\end{equation}
+
+\subsection{DSO4, part 2: the digital twin}
+The twin is a discrete-event simulation written with SimPy~\cite{simpy}. Customers arrive as a
+non-homogeneous Poisson process: the daily volume (history or forecast) is spread over the hours with the
+observed hourly profile, and scaled $\times$25 to represent a mid-size centre. Each customer has an intent
+family, a lognormal handle time (means 3, 4, 6 and 7 minutes by family, coefficient of variation 0.6) and a
+persona that sets its patience (impatient 25\%, normal 55\%, patient 20\%; mean patience 90, 180 and 360 s).
+Advisors have skills: 0.75$\times$ the handle time on their main family, 1.3$\times$ on a weak one. A duty
+matrix says who works each hour (regular or overtime) and a \emph{router} decides who serves whom. Chats that
+arrive while the centre is closed (22:00--08:00) wait as an overnight backlog. Costs are €12 per hour, overtime
+$\times$1.5, and €8 per abandoned customer. The engine has two modes: a full run for evaluation, and a
+step-by-step mode that pauses at every routing decision for reinforcement learning.
+
+\textbf{Validation against queueing theory.} With one skill and FIFO routing, the twin must reproduce the
+\emph{Erlang C} model~\cite{gans}, which gives the probability that a customer waits when $c$ advisors serve
+an offered load $A = \lambda \cdot \text{AHT}$:
+\begin{equation}
+P_{\text{wait}} = \frac{\frac{A^c}{c!}\frac{c}{c-A}}{\sum_{k=0}^{c-1}\frac{A^k}{k!} + \frac{A^c}{c!}\frac{c}{c-A}},
+\qquad
+\text{SL}(t) = 1 - P_{\text{wait}}\, e^{-(c-A)\,t/\text{AHT}}.
+\end{equation}
+\textbf{Scenarios} change a real week of history: a promotion spike (all families $\times$1.4--1.8), delivery
+delays (wismo $\times$2.5, handle time +10\%), a staff shortage (20\% absent), and the real busiest week after
+Black Friday 2017 (18 December 2017, about three times a normal November week, no multiplier).
+
+\subsection{DSO3: shift and overtime planning}
+From the forecast, Erlang C gives the number of advisors needed each hour to answer 80\% of chats within
+20 s with an occupancy of at most 90\%. A two-stage model solved with OR-Tools CP-SAT~\cite{ortools} turns this
+requirement into a roster.
+\emph{Stage 1, cheapest coverage}: integer variables $x_{d,t}$ (advisors on shift template $t$ on day $d$;
+27 templates of 4, 6 or 8 hours inside 08:00--22:00), $o_{d,h}$ (overtime advisors, at most 4 per hour and 60
+hours per week) and $s_{d,h}$ (shortfall), with
+\begin{equation}
+\min \sum 12\,x\,\ell_t + 18\,o + 200\,s \quad \text{s.t.} \quad \sum_{t \ni h} x_{d,t} + o_{d,h} + s_{d,h}
+\geq r_{d,h}\;\; \forall d,h,
+\end{equation}
+where $\ell_t$ is the template length and $r_{d,h}$ the requirement. \emph{Stage 2, legal roster}: Boolean
+variables assign the chosen shifts to named advisors with one shift per day, at most 5 days and 40 hours per
+week, and at least 11 hours of rest; the headcount grows until a solution exists. Both stages solve to
+optimality in under a second; the solver runs on one thread so that the roster is reproducible.
+
+\subsection{DSO1: real-time routing}
+Routing is a sequential decision problem, written as a Markov decision process. \emph{Decision point}: an
+advisor becomes free while at least two customers wait. \emph{State}: the 10 oldest waiting customers (time
+waited, family, persona, live chat or overnight message, expected handle time with \emph{this} advisor), the
+queue length, the backlog, free and on-duty advisors and the time of day. \emph{Action}: which waiting
+customer to serve; empty slots are masked. \emph{Reward}: minus the customer-seconds of waiting since the last
+decision (overnight messages weighted 0.1), minus 600 per abandonment. By Little's law~\cite{little},
+minimising total waiting minimises the mean wait.
+We train MaskablePPO~\cite{ppo,masking} (Stable-Baselines3~\cite{sb3}, Gymnasium~\cite{gymnasium}) on single
+days of February 2017--March 2018 made busier than planned (load $\times$1.0--1.8, each family surging
+$\times$1.0--1.6, 5--30\% absences): 2,394 episodes, 300,000 decisions, a 128$\times$128 network.
+\textbf{Backup}: a priority score $w_1\,\text{wait} + w_2\,\text{skill match} + w_3\,\text{short job} +
+w_4\,\text{impatient}$, whose weights are tuned by random search in the twin (best: 0.19, 1.80, 2.69, 0.08).
+
+\subsection{DSO2: the language agents}
+\textbf{Workforce agent (routing a chat).} A TF-IDF + logistic-regression classifier~\cite{sklearn} predicts the
+intent of the first message (99.0\% accuracy, macro-F1 0.991 on 1,602 held-out Bitext messages) and sends the
+chat to an advisor of that family, with the expected wait from Erlang C.
+
+\textbf{Advisor agent.} The loop is: understand the request, retrieve the relevant policy, call tools, write
+the reply. \emph{Retrieval}: bge-m3~\cite{bgem3} embeddings (multilingual, 1,024 dimensions) of the 58
+knowledge-base sections in an exact FAISS index~\cite{faiss}; the top 3 sections are kept, with a ``no answer''
+threshold at a cosine of 0.57. This is retrieval-augmented generation (RAG)~\cite{rag}: the model writes from
+retrieved evidence instead of from memory. \emph{Tools} work on the SQLite store, ``as of'' the moment the
+customer writes: \code{lookup\_order}, \code{get\_ticket\_history}, \code{check\_refund\_eligibility},
+\code{open\_ticket}, \code{search\_knowledge\_base} and the company rules engine \code{recommend\_resolution}. We
+compare four variants:
+\begin{itemize}
+  \item \textbf{template} (backup): the classifier's intent selects an approved answer filled with order facts;
+  \item \textbf{rag} (pure idea A): the LLM decides which tools to call and writes freely;
+  \item \textbf{rag\_policy} (hybrid): once the order number is known, the pipeline itself calls
+        \code{lookup\_order} and the rules engine; the LLM receives the decision and only \emph{writes} it;
+  \item \textbf{agentic}: the hybrid plus tools the LLM chooses itself, in a ReAct-style loop~\cite{react}: a
+        reflection step that fact-checks the draft against the data (\code{check\_draft\_reply}), a hand-off
+        to a human (\code{escalate\_to\_human}), a check of bank codes against a public list
+        (\code{validate\_bank\_code}) and a memory of earlier contacts (\code{get\_customer\_history}).
+\end{itemize}
+The first LLM runs exposed failure modes that we turned into guardrails: the model called \code{lookup\_order}
+with invented ids (9 of 20 calls failed), so order tools are only offered once an order number appears in the
+chat (\emph{tool gating}); it sometimes answered before checking the order, so a reply given before
+verification always ends with the order-number request. LLM-chosen tool calls go through our
+\textbf{Model Context Protocol} (MCP)~\cite{mcp} server, which outside applications can also use.
+
+\textbf{Client agent.} It plays the customer of a real contact (opening message, persona, knowledge of its
+order) and ends with a 1--5 satisfaction score. It has three tools of its own: \code{view\_my\_order\_page} (to
+check a status or date the advisor states), \code{check\_my\_waiting\_time} (its patience budget) and
+\code{send\_evidence} (photos or a payment statement, built from the real order, never written by the LLM).
+
+\textbf{Quality agent.} A scorecard of five criteria rated 1--5 (compliance, relevance, satisfaction,
+sentiment, resolution), filled by an LLM judge~\cite{llmjudge} from a \emph{different model family} than the
+advisor, to avoid a model grading its own style. The judge receives the policy-correct reference. A
+rule-based checklist is the offline backup. Correctness is also measured \emph{deterministically}: the action
+chosen by the advisor must equal the action the rules give for the true intent.
+
+The agents are chained with LangGraph~\cite{langgraph}, whose state (messages, routing decision, reference,
+scorecard, KPIs) is streamed step by step to the user interface.
+
+\subsection{LLM setup: three tiers}
+\label{sec:llmsetup}
+Every agent works at three levels, so the twin never stops:
+\begin{enumerate}
+  \item \textbf{Hosted open models through OpenRouter (main, since 3 November 2026)}, free tier: NVIDIA
+        Nemotron 3.5 Super for the advisor, Nemotron 3.5 Lightning for the client, and Xing 4.0 (another
+        family) for the judge, each with a fallback model. Reasoning mode is switched off: these models
+        otherwise returned empty answers. The free tier allows 20 requests per minute and 50 per day; when the
+        daily quota is used, OpenRouter is skipped until 00:00 UTC.
+  \item \textbf{Local Hugging Face models (backup)}: SmolLM3-3B (advisor, client) and IBM Granite-4.0-1B
+        (judge), quantised to 4 bits so that both fit the 4 GB laptop GPU (GTX 1650). Model commits are pinned.
+  \item \textbf{Offline templates and rules}: the template advisor, the rule-based customer and the checklist.
+\end{enumerate}
+We moved from local to hosted models after measuring them: a local advisor call took 16 s at the median
+because the 4 GB GPU overflowed into shared memory, against about 2 s on OpenRouter (Section~\ref{sec:monitoring}).
+All calls are cached (SQLite) and traced (one JSON line per call: model, tokens, latency, tools, cost).

@@ -101,6 +101,15 @@ function shorten(text: string, max = 280): string {
 /** What the voice reads: the bubble's words, without the "…" of a cut message. */
 const spoken = (bubbleText: string) => bubbleText.replace(/\s*…$/, "");
 
+/** The tools used for a message (its meta.tools), with the help-centre search first when the answer cites
+ * policy sections. They are shown inside the message's bubble. */
+function toolsOf(meta: Record<string, any> | undefined): { name: string; ok: boolean }[] {
+  const tools = (meta?.tools ?? []).map((t: any) => ({ name: String(t.name), ok: t.ok !== false }));
+  if ((meta?.sources ?? []).length && !tools.some((t: { name: string }) => t.name === "search_knowledge_base"))
+    tools.unshift({ name: "search_knowledge_base", ok: true });
+  return tools;
+}
+
 /** Who plays the customer, by where the chat comes from. */
 const WHO: Record<string, string> = {
   centre: "Client agent (AI customer)",
@@ -241,11 +250,6 @@ export class Director {
       void this.play(chat, message.channel, queue);
     }
     queue.push(event);
-  }
-
-  /** A line in the caption from the page itself (for example when the twin crowd starts). */
-  announce(text: string) {
-    this.caption(text);
   }
 
   /** The page closes: every story stops, and the voices go quiet. */
@@ -535,6 +539,9 @@ export class Director {
     const text = words + (files ? `  📎 ${files} file${files === 1 ? "" : "s"} attached` : "");
     const saidAloud = message.meta?.input === "voice"; // the person already said it: not read again
     const voice = saidAloud ? " · spoken" : "";
+    // The customer's phone tools of this turn move into the message's bubble.
+    const { [s.chat]: _used, ...walkerTools } = this.scene.walkerTools;
+    this.commit({ walkerTools });
     this.say({
       owner: s.chat,
       chat: s.chat,
@@ -546,6 +553,7 @@ export class Director {
       kind: "say",
       title: `${s.name} · ${s.who}${voice}`,
       text,
+      tools: toolsOf(message.meta),
     });
     this.caption(s.at === "desk" ? `${s.name} answers ${advisorName(s.advisor ?? "")}.` : `${s.name} explains the problem at the reception.`);
     // A visitor knows what they just said: their bubble does not hold the story for reading.
@@ -565,6 +573,9 @@ export class Director {
     const c = deskCentre(slot);
     const words = shorten(message.text);
     this.think(`desk-${slot}`, false);
+    // The tool badges of this turn move into the answer's bubble.
+    const { [slot]: _used, ...deskTools } = this.scene.deskTools;
+    this.commit({ deskTools });
     this.say({
       owner: `desk-${slot}`,
       chat: s.chat,
@@ -576,6 +587,7 @@ export class Director {
       kind: "say",
       title: `${name} · ${human ? "a person at the desk" : "Advisor agent (AI)"} · to ${s.name}`,
       text: words,
+      tools: toolsOf(message.meta),
     });
     this.caption(`${name} answers ${s.name}${tools ? ` after ${tools} tool call${tools === 1 ? "" : "s"}` : ""}.`);
     // A person at the desk who typed: still read aloud (the room cannot hear the keyboard).
@@ -607,8 +619,10 @@ export class Director {
     const slot = s.slot;
     const name = advisorName(s.advisor ?? "");
     if (e.step === "start") {
-      const { [slot]: _old, ...deskTools } = this.scene.deskTools; // a new turn: new tool badges
+      // A new turn: the advisor's previous answer goes, so the new tool badges never sit under a bubble.
+      const { [slot]: _old, ...deskTools } = this.scene.deskTools;
       this.commit({ deskTools });
+      this.unsay(`desk-${slot}`);
       this.think(`desk-${slot}`, true);
     } else if (e.step === "generation") {
       this.think(`desk-${slot}`, true);
@@ -919,6 +933,5 @@ export function useCentre(onReview: () => void) {
   }, [speed]);
 
   const voices = { on: voicesOn && cast.current.supported, set: setVoicesOn, supported: cast.current.supported };
-  const announce = (text: string) => director.current?.announce(text);
-  return { scene, connected, stories, speed, setSpeed, voices, announce };
+  return { scene, connected, stories, speed, setSpeed, voices };
 }

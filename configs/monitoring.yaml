@@ -1,0 +1,19 @@
+# AI monitoring page (back office /monitoring, callverse/evaluation/monitoring.py)
+
+# The "if we paid" estimate. CallVerse itself pays nothing: OpenRouter's free tier and a local GPU.
+# To show what the same traffic would cost on a paid model, the page multiplies the tokens by a yardstick
+# price. It is only an estimate: change the model and the prices here to compare with another one.
+reference_price:
+  name: gpt-4o-mini list price (OpenAI, 2024)
+  input_per_million_usd: 0.15   # prompt tokens
+  output_per_million_usd: 0.60  # generated tokens
+
+# Alerts: a tile turns orange past "warn" and red past "alert". For the metrics where higher is better
+# (success, quality, accuracy), it turns orange below "warn" and red below "alert".
+thresholds:
+  llm_p95_latency_seconds: { warn: 10, alert: 20, better: lower }
+  llm_error_rate: { warn: 0.05, alert: 0.15, better: lower }
+  fallback_rate: { warn: 0.20, alert: 0.40, better: lower }
+  tool_success_rate: { warn: 0.95, alert: 0.85, better: higher }
+  quality_overall: { warn: 3.5, alert: 3.0, better: higher }
+  routing_accuracy: { warn: 0.85, alert: 0.70, better: higher }

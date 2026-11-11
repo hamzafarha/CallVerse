@@ -1,0 +1,122 @@
+% CallVerse - technical report (Advanced Data Science Project, ESPRIT, 5DS3).
+% Build:  latexmk -pdf main.tex   (or pdflatex, bibtex, pdflatex, pdflatex). Figures: python report/make_figures.py
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=2.2cm,headheight=14pt]{geometry}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{booktabs,tabularx,array,multirow}
+\usepackage[table]{xcolor}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{amsmath,amssymb}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds,calc}
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+
+% ---------------------------------------------------------------- settings
+\definecolor{cvblue}{HTML}{2A78D6}
+\definecolor{cvink}{HTML}{1F2430}
+\definecolor{cvmuted}{HTML}{5B6475}
+\definecolor{cvline}{HTML}{E3E6EC}
+\definecolor{cvsoft}{HTML}{F3F6FB}
+\captionsetup{font=small,labelfont=bf,margin=0.5cm}
+\setlist{itemsep=1pt,topsep=3pt,parsep=0pt}
+\setlength{\parskip}{3pt}
+\setlength{\emergencystretch}{2.5em} % lets lines with long code words break instead of overflowing
+\renewcommand{\arraystretch}{1.12}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\keyfig}[1]{\textbf{#1}}
+% Fill in, then rebuild.
+\newcommand{\tutor}{[Tutor's name]}
+\newcommand{\demourl}{[public address, added once the Azure VM is online]}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{cvmuted}CallVerse --- Technical report}
+\fancyhead[R]{\small\color{cvmuted}5DS3 · ESPRIT}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\begin{document}
+
+% ---------------------------------------------------------------- cover
+\begin{titlepage}
+  \centering
+  \vspace*{0.6cm}
+  {\large\textsc{ESPRIT School of Engineering}\par}
+  \vspace{0.2cm}
+  {\normalsize Advanced Data Science Project · Final assessment\par}
+  \vspace{2.6cm}
+  {\color{cvblue}\rule{\linewidth}{1.2pt}\par}
+  \vspace{0.6cm}
+  {\fontsize{40}{46}\selectfont\bfseries CallVerse\par}
+  \vspace{0.4cm}
+  {\Large A multi-agent digital twin of an\\[2pt] e-commerce customer service centre\par}
+  \vspace{0.6cm}
+  {\color{cvblue}\rule{\linewidth}{1.2pt}\par}
+  \vspace{0.5cm}
+  {\large Technical report\par}
+  \vspace{2.4cm}
+  \begin{tabular}{@{}l@{\hspace{1.2cm}}l@{}}
+    \textbf{Group members} & Hamza Farhani \\
+                           & Jihed Hmila \\
+                           & Abdellaoui Woujoud \\
+                           & Mohamed Aziz Kadri \\
+                           & Mohamed Yessine El Ichi \\[8pt]
+    \textbf{Class}         & 5DS3 \\[4pt]
+    \textbf{Tutor}         & \tutor \\[4pt]
+    \textbf{Date}          & 11 November 2026 \\
+  \end{tabular}
+  \vfill
+  {\small\color{cvmuted} Academic year 2026--2027\par}
+\end{titlepage}
+
+% ---------------------------------------------------------------- abstract + contents
+\section*{Abstract}
+A customer service centre fails in two expensive ways: too few advisors when contacts spike, and too many
+when it is quiet. Decisions about staffing and routing are usually tested directly on real customers.
+\textbf{CallVerse} is a \emph{digital twin} of an e-commerce support centre: a virtual copy in which a manager
+can test a decision before applying it. It forecasts contacts per reason from real order events (Olist, 99,441
+orders), replays them in a discrete-event simulation, and lets four cooperating agents act inside it: a
+\emph{Client} agent plays customers, a \emph{Workforce} agent routes chats and plans shifts, an
+\emph{Advisor} agent answers with a retrieval-augmented language model and business tools, and a
+\emph{Quality} agent grades every conversation. Each of our four data science objectives has a simple
+baseline to beat, a backup, and a switch rule fixed in advance.
+The forecast reduces the error of the naive baseline from 31.6\% to \keyfig{25.3\%} wMAPE, and the twin passes
+every fidelity check. Shift planning with constraint programming cuts labour cost by \keyfig{40\%} while 92.4\%
+of chats are still answered within 20 seconds (target 80\%). Testing a plan in the twin before a peak week cuts
+understaffed hours by \keyfig{60--84\%}. Reinforcement-learning routing reduces the speed of answer by 13.9\% on
+unseen stressed days but is not robust in full peak weeks, so a tuned rule stays in production.
+Semantic retrieval raises recall@4 from 80.4\% to \keyfig{96.9\%}; the advisor that lets a rules engine decide and the
+language model write gives 12/12 verified policy-correct actions, while the automatic judge is not yet
+trusted (kappa below 0.4). The application (two web apps, an API, an MCP server and a live contact-centre
+view) ships as one Docker container, with 200 automated tests and one command to reproduce every result.
+
+\vspace{0.3cm}
+\setcounter{tocdepth}{1}
+{\small\tableofcontents}
+\clearpage
+
+\input{sections/01_introduction}
+\input{sections/02_data}
+\input{sections/03_method}
+\input{sections/04_experiments}
+\input{sections/05_results}
+\input{sections/06_analysis}
+\input{sections/07_deployment}
+\input{sections/08_conclusion}
+\input{sections/09_ai_use}
+
+{\small
+\bibliographystyle{plain}
+\bibliography{references}
+}
+
+\end{document}

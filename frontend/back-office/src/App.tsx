@@ -6,6 +6,7 @@ import CentrePage from "./pages/Centre";
 import DataPage from "./pages/Data";
 import ForecastPage from "./pages/Forecast";
 import MlopsPage from "./pages/Mlops";
+import MonitoringPage from "./pages/Monitoring";
 import OverviewPage from "./pages/Overview";
 import TwinPage from "./pages/Twin";
 import WorkforcePage from "./pages/Workforce";
@@ -39,6 +40,7 @@ export default function App() {
               <Route path="/workforce" element={<WorkforcePage />} />
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/mlops" element={<MlopsPage />} />
+              <Route path="/monitoring" element={<MonitoringPage />} />
               <Route path="*" element={<OverviewPage />} />
             </Routes>
           </ErrorBoundary>

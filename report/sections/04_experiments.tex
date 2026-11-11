@@ -1,0 +1,80 @@
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Principles}
+Every experiment runs from one command (\code{callverse evaluate}) and writes its tables to
+\code{artifacts/evaluations/}, with a summary run in MLflow~\cite{mlflow}. Four principles apply throughout:
+\begin{itemize}
+  \item \textbf{A baseline and a backup for every idea}, and a switch rule fixed \emph{before} the results are
+        known (Table~\ref{tab:bodso}). The scorecard (\code{scorecard.json}) applies these rules automatically.
+  \item \textbf{Common random numbers}~\cite{law}: every option is simulated on exactly the same random
+        customers (arrivals, handle times, patience), so a difference comes from the decision only.
+  \item \textbf{Paired differences with 95\% Student-t confidence intervals} over seeds; a difference is called
+        \emph{significant} only when its interval excludes zero.
+  \item \textbf{No leakage}: models are trained on the past only (rolling origins for the forecast, a training
+        period before a test period for routing).
+\end{itemize}
+
+\subsection{Experiments and protocols}
+Table~\ref{tab:experiments} lists the experiments. Simulated weeks use 10 seeds; the routing study on stressed
+days uses 20 unseen days with 2 seeds each (40 pairs).
+
+\begin{table}[h]
+\centering\small
+\caption{Experiments, their question and their design.}
+\label{tab:experiments}
+\begin{tabularx}{\textwidth}{@{}p{2.6cm}Yp{6.4cm}@{}}
+\toprule
+\textbf{Experiment} & \textbf{Question} & \textbf{Design} \\
+\midrule
+Forecast backtest & Does LightGBM beat ``same day last week''? &
+  46 weekly origins (Sundays, Oct 2017--Aug 2018), 7-day horizon, 5 models, each trained only on data before
+  its origin \\
+Twin fidelity & Does the twin behave like queueing theory and like the history? &
+  Erlang C check (5 replications $\times$ 400 h); KS tests and total variation distance on 4 weeks \\
+BO4: testing first & Does testing a plan before a peak help? &
+  Unprepared plan (built from the normal forecast) vs prepared plan (from the scenario's forecast), 4 peak
+  weeks $\times$ 10 seeds, FIFO routing \\
+DSO3: planning & Is CP-SAT cheaper than a fixed schedule at the service target? &
+  4 planners $\times$ 2 weeks (normal, promotion) $\times$ 10 seeds, FIFO routing \\
+DSO1: routing & Do the learned and tuned routers beat FIFO? &
+  (a) 20 unseen stressed days (Apr--Aug 2018, load $\times$1.6, 15\% absent) $\times$ 2 seeds;
+  (b) 3 peak weeks $\times$ 10 seeds with the unprepared plan \\
+DSO2: retrieval & Does bge-m3 beat keyword search? & 255 Bitext questions (15 per intent), 58 sections \\
+DSO2: conversations & How good are the advisor variants? &
+  The same 12 sampled customers answered by each variant (paired); the template variant also on 40 \\
+DSO2: judge & Can the automatic judge be trusted? &
+  Judge scores vs labels on 60 historical chats; quadratic kappa and Spearman correlation \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Metrics}
+\textbf{Service.} \emph{ASA} (average speed of answer) is the mean wait of answered customers; the
+\emph{mean wait of all live customers} also counts those who leave. The \emph{service level} is the share
+answered within 20 s; the \emph{abandonment rate} the share who leave before an answer; the
+\emph{90th-percentile wait} describes the long waits that the mean hides. An \emph{understaffed hour} is an open
+hour with at least 3 live contacts whose service level is under the 80\% target.
+\textbf{Cost.} Labour and overtime cost, cost per handled contact, and labour plus lost-customer cost
+(€8 per abandonment). \textbf{Forecast.} wMAPE (Section~\ref{sec:method}) and RMSE. \textbf{Retrieval.}
+Recall@$k$, the share of questions whose correct section is among the first $k$ results, and MRR, the mean of
+$1/\text{rank}$ of the correct section. \textbf{Answers.} The \emph{verified policy-correct action} (the
+advisor's action equals the rules' action for the true intent); \emph{faithfulness}, the share of an answer's
+sentences supported by its evidence (a sentence counts as supported when its best bge-m3 cosine with a
+sentence of a tool result or cited policy passes a threshold; a local, cheaper stand-in for an LLM-graded
+RAGAS~\cite{ragas}); similarity to the approved answer; CSAT (the simulated customer's 1--5 score) and
+first-contact resolution (FCR). \textbf{Judge.} Quadratic weighted Cohen's kappa~\cite{cohen} between the
+judge's 1--5 scores and the labels, ``trusted'' from 0.4 upwards; it corrects for chance agreement and
+penalises large disagreements more than small ones.
+
+\subsection{Monitoring the AI components}
+\label{sec:monitoringmethod}
+Offline experiments are complemented by a monitoring page in the back office, computed from what the system
+already records: the trace of every LLM call, the saved chats (live and evaluation) and the result tables. It
+reports, per agent and model, call volume, errors, cache hits, median (p50) and 95th-percentile (p95)
+latency and tokens per second; tokens and cost, with an ``if we paid'' estimate at a reference list price
+(gpt-4o-mini, \$0.15/\$0.60 per million input/output tokens), clearly labelled as an estimate since the
+real cost is zero; the RAG citations; tool calls, with \emph{who chose them} (the LLM, a fixed pipeline step or a
+safety net); the quality scores; routing accuracy by confidence; and the agreement between the judge and the
+customer. Six indicators turn amber or red past thresholds kept in \code{configs/monitoring.yaml} (for example,
+p95 LLM latency: warn above 10 s, alert above 20 s; routing accuracy: warn below 85\%).

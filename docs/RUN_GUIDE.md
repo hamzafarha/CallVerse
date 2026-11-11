@@ -168,7 +168,7 @@ instead of waiting ~20 s for the models to load.
 | App | Pages |
 |---|---|
 | Front office :5173 | Home + semantic help search · Help centre · My orders (demo customers) · Live chat with the AI advisor · Advisor desk (queue, copilot drafts, autopilot, customer 360, quality review) |
-| Back office :5174 | Overview · Data & contracts · Demand forecast · Digital twin (live floor, side by side, scenario lab; simple and detailed views) · Agent theater · Workforce agent · Contact centre (live, full screen) · Models & MLOps |
+| Back office :5174 | Overview · Data & contracts · Demand forecast · Digital twin (live floor, side by side, scenario lab; simple and detailed views) · Agent theater · Workforce agent · Contact centre (live, full screen) · Models & MLOps · AI monitoring |
 
 Both apps: `Ctrl+K` opens the command palette; the theme toggle is top right. Add
 `?snapshot` to a URL to render every animation in its final state (screenshots).
@@ -176,15 +176,21 @@ Both apps: `Ctrl+K` opens the command palette; the theme toggle is top right. Ad
 ### The contact centre page (for the projector)
 
 Open **http://localhost:5174/centre** (or *Agents → Contact centre (live)* in the sidebar).
-It fills the whole screen, without the sidebar; press `F11` for full screen.
+It fills the window, without the sidebar; the **full-screen** button (top right) or the
+`F` key hides the browser too.
 
 1. Choose **LLMs** (the real demo) or **Offline backups** (rehearsals: no OpenRouter
    request is used).
-2. Press **A customer walks in**. The Client agent plays a real customer from the history,
-   and the floor shows the real chat: the customer explains the problem at the reception
-   (Workforce agent), walks to the chosen desk (Advisor agent; its tools pop up), the
-   supervisor comes if the chat is escalated, and the quality lead shows the Quality
-   agent's score. The KPI wall then counts the chat.
+2. Press **A customer walks in** and choose who: **Random** (a real customer from the
+   history), **A customer** (the portal's demo customers and the new customers created
+   before), or **New customer** (a name, a persona, one of the 17 problems, a first
+   message — a real one for that problem, editable — and a real Olist order or a new order
+   with its dates and status; the same rules as the portal's form, and the customer is
+   saved like a portal customer). The Client agent plays that customer, and the floor shows
+   the real chat: the customer explains the problem at the reception (Workforce agent),
+   walks to the chosen desk (Advisor agent: its tool badges pop up while it works, then
+   move into its answer's bubble), the supervisor comes if the chat is escalated, and the
+   quality lead shows the Quality agent's score. The KPI wall then counts the chat.
 3. Click a **desk** to see that advisor's finished chats and the Quality agent's score of
    each one (the whole conversation opens with a click).
 4. Real chats walk in too: every chat of the server appears on the floor, with a label that
@@ -204,21 +210,26 @@ It fills the whole screen, without the sidebar; press `F11` for full screen.
    `localhost`). The advisor answers out loud on the floor. Quick replies give the order
    number (nobody can read a 32-character id aloud); end with a 1-5 star rating. The chat
    is labelled *visitor at the centre* on the floor and in the advisor's history.
-7. **Crowd** replays one hour of a real day simulated by the digital twin (the same day as
-   the Twin page's live floor), starting just before its busiest half hour: simulated
-   customers walk in, wait in line (a red bar: more than 20 s), are served at the desks or
-   give up and walk out in red; an envelope means an advisor is answering last night's
-   messages. The twin's own screen on the wall counts the hour (waiting, helped, gave up,
-   on time). No AI and no LLM cost; real chats keep walking in on top and are never slowed
-   down by the crowd. Presets: *Normal day* (calm), *After Black Friday* (Monday
-   18 Dec 2017: the advisors start with last night's messages, most morning customers give
-   up), *Promo spike, unprepared* (the longest line). The first time a preset is chosen
-   after `callverse serve` starts, the twin plans that week (up to a minute): choose each
-   preset once before presenting.
 
 Every move comes from a real event of the server (`/ws/centre`); the page only slows the
 pace so each step can be read (**2×** speeds it up). Finished chats are saved in
 `artifacts/traces/live_sessions/` (one file per chat); that folder is the advisors' history.
+
+### The AI monitoring page
+
+Open **http://localhost:5174/monitoring** (*Serving & MLOps → AI monitoring*). It reads
+what CallVerse already records — the trace of every LLM call
+(`artifacts/traces/llm_calls.jsonl`), the saved chats (live and evaluation runs) and the
+evaluation's result tables — and shows: the LLMs (calls, errors, cache, providers),
+latency (median and p95), tokens and cost (real cost, plus an "if we paid" estimate at the
+yardstick price of `configs/monitoring.yaml`), the RAG (offline benchmark, live
+citations), tool calling (who chose each tool: the AI, a pipeline step or a safety net;
+MCP use), quality (the judge's scores, FCR, CSAT, and the judge's agreement with human
+labels), routing (accuracy, the problems it mixes up, accuracy by confidence),
+grounding, the engines and advisor variants side by side, the judge against the
+customer's rating, and the numbers per resolved chat. Headline tiles turn orange or red
+past the thresholds of `configs/monitoring.yaml`. Filters: last 24 hours / 7 days /
+everything, and live chats / evaluation runs / all. API: `GET /api/monitoring?period=24h|7d|all&source=live|eval|all`.
 
 ---
 
@@ -247,7 +258,82 @@ docker compose exec api callverse llm-pull     # once: models go to the hf-cache
 
 ---
 
-## 7. Troubleshooting
+## 7. Put the app online (Azure for Students)
+
+The online demo runs **one Docker container**
+([deploy/huggingface/Dockerfile](../deploy/huggingface/Dockerfile)) that serves the API and both apps from one
+address: the front office at `/`, the back office at `/back-office/`, the API documentation at `/docs`. On
+Azure it runs on a small Linux virtual machine (VM), behind Caddy, which gets a free HTTPS certificate.
+Nothing needs to be installed on your PC: the VM is made in the Azure Portal (your browser), and the script
+talks to it with SSH, which comes with Windows.
+
+**Once: create the VM in the Azure Portal.** First print the public key the VM will trust (the script makes a
+key pair just for this VM, in `~\.ssh\callverse_azure`):
+
+```powershell
+.venv\Scripts\python scripts\deploy_azure.py --public-key
+```
+
+Then on [portal.azure.com](https://portal.azure.com): *Virtual machines* → *Create* → *Azure virtual machine*.
+
+| Tab | Setting | Value |
+|---|---|---|
+| Basics | Subscription · Resource group | Azure for Students · *Create new*: `callverse-rg` |
+| Basics | Virtual machine name · Region | `callverse-vm` · (Europe) France Central (if *Review + create* refuses the region, pick another: Italy North, Spain Central, Sweden Central...) |
+| Basics | Availability options | No infrastructure redundancy required |
+| Basics | Image · Size | Ubuntu Server 24.04 LTS - x64 Gen2 · `Standard_B2ms` (2 vCPU, 8 GiB; or any other size with 8 GiB) |
+| Basics | Authentication | SSH public key · username `azureuser` · *Use existing public key* · paste the line printed above |
+| Basics | Public inbound ports | Allow selected ports: **SSH (22), HTTP (80), HTTPS (443)** |
+| Disks | OS disk size · type | 64 GiB · Standard SSD |
+
+*Review + create* → *Create* (2-3 minutes) → *Go to resource*. On the VM's *Overview*, click
+**DNS name: Not configured**, type a label (e.g. `callverse-demo`), *Save*, and copy the full name it shows,
+e.g. `callverse-demo.francecentral.cloudapp.azure.com`.
+
+**Each deployment** (the first one takes 20-30 minutes; later ones update the app):
+
+```powershell
+.venv\Scripts\python scripts\deploy_azure.py --host callverse-demo.francecentral.cloudapp.azure.com --send-openrouter-key
+```
+
+It builds the cleaned folder (below), installs Docker on the VM, sends the folder (~120 MB compressed), builds
+the image on the VM (the Python packages and the bge-m3 model download there, not on your connection), starts
+the app and Caddy, and waits until `https://<name>/` answers. `--send-openrouter-key` copies the key from your
+`.env` to a file on the VM that only its user can read (once is enough). Without it, or when the free daily
+quota is used up (until 00:00 UTC), the agents answer with their offline templates and rules.
+
+With the Azure CLI installed (`az login`), the script can also create the VM itself: run it without `--host`.
+
+**Cost:** the VM uses your student credit while it runs (a few dollars a day; see *Cost Management* in the
+Portal). On the VM's page, *Stop* pauses it (start it again before a demo: same address, the app restarts by
+itself); deleting the resource group `callverse-rg` removes everything.
+
+**Hugging Face Spaces (alternative):** `scripts\deploy_space.py` publishes the same container as a Space
+(`hf auth login` first, then add `OPENROUTER_API_KEY` as a Space secret). Hugging Face now asks for a PRO
+subscription to host Docker Spaces (error 402 when we tried, 2026-11-11), which is why the demo runs on Azure.
+
+What the scripts upload, and what stays on your PC:
+
+| Uploaded | Stays on your PC |
+|---|---|
+| the code (`src`, `configs`, `frontend` without `node_modules`), `pyproject.toml` | `.env`, the TLS keys (`frontend/certs`), caches |
+| `data/callverse.db` **without the new customers you created** (their names) | `data/raw` (the CSVs: not needed online) |
+| `data/processed`, `data/knowledge_base`, `data/external` | `artifacts/traces/live_sessions` (your real chats) |
+| `artifacts/` (evaluations, forecasts, trained models), the LLM trace **without its texts** | `artifacts/traces/llm_cache.sqlite` |
+| `mlflow.db`, `mlruns` | |
+
+The script stops before the upload if it finds a key, a token or one of the removed names. It also writes
+`space/constraints.txt` with this environment's library versions, so the Space loads the saved models with the
+versions that made them. `--private` makes the Space visible only to you; `--keep-private-data` also uploads
+the removed data (not recommended).
+
+Good to know: the online app has no login, so anyone with the link can use it (do not type real personal
+data). What visitors add (chats, customers) stays until the next deployment, which starts again from the
+cleaned data.
+
+---
+
+## 8. Troubleshooting
 
 | Symptom | Fix |
 |---|---|

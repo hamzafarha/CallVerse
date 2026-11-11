@@ -33,7 +33,7 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import type { CSSProperties } from "react";
+import { type CSSProperties, useLayoutEffect, useRef, useState } from "react";
 import { Person, Portrait, ROLE, STAFF_LOOK, advisorName, lookFor, type Look, type Pose, type Role } from "./people";
 
 // -------------------------------------------------------------------------- the stage
@@ -73,13 +73,6 @@ export const deskFront = (slot: number, place = 0): Point =>
 export const deskSupport = (slot: number): Point => ({ x: deskCentre(slot).x - 62, y: deskCentre(slot).y + 42 });
 /** The waiting area: the three chairs, then a line of people standing next to them. */
 export const WAITING_SPOTS: Point[] = [68, 140, 212, 284, 356, 428].map((x) => ({ x, y: 872 }));
-/** The twin crowd's waiting line: two rows behind the real customers of the waiting area (24 places). */
-export const CROWD_LINE: Point[] = [
-  ...Array.from({ length: 12 }, (_, i) => ({ x: 52 + 40 * i, y: 822 })),
-  ...Array.from({ length: 12 }, (_, i) => ({ x: 72 + 40 * i, y: 784 })),
-];
-/** Where a simulated customer (twin crowd) is served: just in front of the desk, behind the real customers. */
-export const crowdSpot = (slot: number): Point => ({ x: deskCentre(slot).x + 2, y: deskCentre(slot).y + 128 });
 
 // ---------------------------------------------------------------------------- room
 /** Walls, floor and the areas of the centre (one SVG, behind everything). */
@@ -145,7 +138,7 @@ export function Room() {
       <rect x={1524} y={676} width={26} height={20} rx={2} fill="#fef9c3" stroke="#a16207" strokeWidth={1.5} />
 
       {/* Waiting area: three chairs. */}
-      <text x={40} y={690} fill="var(--text-secondary)" {...label}>
+      <text x={40} y={716} fill="var(--text-secondary)" {...label}>
         WAITING AREA
       </text>
       {[40, 112, 184].map((x) => (
@@ -377,6 +370,7 @@ export interface Bubble {
   score?: { overall: number; scores: Record<string, number>; resolved?: boolean | null; correct?: boolean | null };
   dim?: boolean; // an older message of the same chat
   speaking?: boolean; // its person is saying it now (voices on)
+  tools?: { name: string; ok: boolean }[]; // the tools used for this message (shown inside the bubble)
 }
 
 const BUBBLE_W = 310;
@@ -388,17 +382,27 @@ const clamp = (v: number, low: number, high: number) => Math.min(high, Math.max(
 export function BubbleView({ bubble }: { bubble: Bubble }) {
   const role = ROLE[bubble.role];
   const border = (bubble.tone && TONE[bubble.tone]) || role.color;
+  // A bubble above a head on the first row can be taller than the room above it (a long answer with its tool
+  // chips): it is then pushed down just enough to stay inside the stage (offsetHeight ignores the stage's
+  // scale, so it is in stage pixels).
+  const box = useRef<HTMLDivElement>(null);
+  const [push, setPush] = useState(0);
+  useLayoutEffect(() => {
+    if (bubble.placement !== "above" || !box.current) return;
+    const top = bubble.y - 12 - box.current.offsetHeight;
+    setPush(top < 8 ? 8 - top : 0);
+  }, [bubble.key, bubble.placement, bubble.y, bubble.text, bubble.tools?.length]);
   // Placement: centred above the head, or beside it; always kept inside the stage.
   const position: CSSProperties =
     bubble.placement === "above"
-      ? { left: clamp(bubble.x - BUBBLE_W / 2, 8, STAGE_W - BUBBLE_W - 8), top: bubble.y - 12, transform: "translateY(-100%)" }
+      ? { left: clamp(bubble.x - BUBBLE_W / 2, 8, STAGE_W - BUBBLE_W - 8), top: bubble.y - 12 + push, transform: "translateY(-100%)" }
       : {
           left: clamp(bubble.placement === "left" ? bubble.x - 42 - BUBBLE_W : bubble.x + 42, 8, STAGE_W - BUBBLE_W - 8),
           top: clamp(bubble.y + 34, 130, STAGE_H - 90),
           transform: "translateY(-50%)",
         };
   return (
-    <div className="pointer-events-none absolute" style={{ ...position, width: BUBBLE_W, zIndex: 2000 + bubble.z }}>
+    <div ref={box} className="pointer-events-none absolute" style={{ ...position, width: BUBBLE_W, zIndex: 2000 + bubble.z }}>
       {/* An older message stays solid (nothing shows through it) but greyed: the newest one is the one to read. */}
       <motion.div
         initial={{ opacity: 0, scale: 0.92, y: 6 }}
@@ -418,6 +422,7 @@ export function BubbleView({ bubble }: { bubble: Bubble }) {
           )}
         </div>
         {bubble.kind === "say" && <p className="cv-clamp mt-2 text-[15px] leading-snug">{bubble.text}</p>}
+        {bubble.kind === "say" && !!bubble.tools?.length && <ToolChips tools={bubble.tools} />}
         {bubble.kind === "card" && (
           <ul className="mt-2 space-y-1 text-[14px] leading-snug">
             {bubble.lines?.map((line, i) => (
@@ -429,6 +434,24 @@ export function BubbleView({ bubble }: { bubble: Bubble }) {
         )}
         {bubble.kind === "score" && bubble.score && <ScoreCard score={bubble.score} note={bubble.text} />}
       </motion.div>
+    </div>
+  );
+}
+
+/** The tools used for a message, inside its bubble: the badges that popped up while the person worked move
+ * here when the message arrives, so they never sit under the bubble. */
+function ToolChips({ tools }: { tools: { name: string; ok: boolean }[] }) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-1 border-t border-line pt-2">
+      {tools.map((tool, i) => {
+        const Icon = TOOL_ICON[tool.name] ?? Wrench;
+        return (
+          <span key={i} className="inline-flex items-center gap-1 rounded-full border bg-raised px-1.5 py-0.5 text-[11px] font-medium text-ink2" style={{ borderColor: tool.ok ? "var(--good)" : "var(--critical)" }}>
+            <Icon size={11} aria-hidden /> {TOOL_LABEL[tool.name] ?? tool.name}
+            {tool.ok ? <CheckCircle2 size={10} color="var(--good)" aria-hidden /> : <XCircle size={10} color="var(--critical)" aria-hidden />}
+          </span>
+        );
+      })}
     </div>
   );
 }

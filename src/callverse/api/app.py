@@ -38,6 +38,7 @@ from callverse.api.schemas import (
     TwinRunRequest,
 )
 from callverse.api.services import clean, read_eval, records, twin
+from callverse.api.web import mount_web_apps
 from callverse.config import (
     EVALUATION_DIR,
     FORECAST_DIR,
@@ -562,6 +563,22 @@ def evaluation() -> dict[str, Any]:
             },
         }
     )
+
+
+# ------------------------------------------------------------------- AI monitoring
+@app.get("/api/monitoring")
+def monitoring(period: str = "all", source: str = "all") -> dict[str, Any]:
+    """The AI monitoring page: LLMs, latency, cost, RAG, tool calling, quality, routing and the alerts.
+
+    ``period``: ``24h``, ``7d`` or ``all``; ``source``: ``live`` (the apps' chats), ``eval`` (the evaluation
+    runs) or ``all``. The LLM calls cover every source (the trace does not say which chat a call belongs to).
+    """
+    from callverse.evaluation.monitoring import monitoring_report
+
+    hours = {"24h": 24.0, "7d": 24.0 * 7, "all": None}
+    if period not in hours or source not in ("live", "eval", "all"):
+        raise HTTPException(422, "period must be 24h, 7d or all; source must be live, eval or all")
+    return clean(monitoring_report(hours[period], source))
 
 
 # ------------------------------------------------------------------------ mlops
@@ -1305,3 +1322,8 @@ async def ws_centre(websocket: WebSocket) -> None:
             await websocket.close()
         except (RuntimeError, WebSocketDisconnect):
             pass  # the browser already closed it
+
+
+# Online (the Hugging Face Space), the API also serves the two built web apps (callverse/api/web.py). It stays
+# LAST: the front office is mounted at "/", which would hide any route added after it.
+mount_web_apps(app)

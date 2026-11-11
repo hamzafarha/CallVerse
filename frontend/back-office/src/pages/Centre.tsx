@@ -1,24 +1,25 @@
 /**
  * CallVerse Centre (back office, /centre): the whole contact centre on one screen, without the sidebar, so it
- * looks like its own app on a projector.
+ * looks like its own app on a projector ("Full screen", or the F key, hides the browser too).
  *
- * Press "A customer walks in": the Client agent plays a real historical customer, and the page shows the real
- * chat as people in an office. Every other chat of the server walks in too: people writing on the customer
- * portal, phone calls, the advisor desk and the Agent theater. The customer comes in, explains the problem at the reception (the Workforce
- * agent routes it), walks to the chosen advisor's desk (the Advisor agent answers, its tools pop up), the
- * supervisor comes if the chat is escalated, the quality lead shows the Quality agent's score, and the KPI wall
- * counts the chat. Every move comes from an event of the server (components/centre/director.ts). Click a desk
- * to see that advisor's past chats and how the Quality agent scored each one.
+ * Press "A customer walks in" and choose who: a random customer from the history, an existing customer (the
+ * portal's demo customers and the new customers created before), or a new customer (a problem, a first
+ * message, and a real Olist order or a new one). The Client agent plays that customer, and the page shows the
+ * real chat as people in an office. Every other chat of the server walks in too: people writing on the
+ * customer portal, phone calls, the advisor desk and the Agent theater.
+ *
+ * The customer comes in, explains the problem at the reception (the Workforce agent routes it), walks to the
+ * chosen advisor's desk (the Advisor agent answers; its tools pop up while it works, then show inside its
+ * answer), the supervisor comes if the chat is escalated, the quality lead shows the Quality agent's score,
+ * and the KPI wall counts the chat. Every move comes from an event of the server (components/centre/
+ * director.ts). Click a desk to see that advisor's past chats and how the Quality agent scored each one.
  *
  * Voice: "Voices on" reads every bubble aloud, each person with their own voice (components/centre/voices.ts);
  * "Talk as a customer" lets a visitor speak into the microphone as a real customer (VisitorPanel.tsx).
- *
- * Crowd: the digital twin's simulated customers of a real day walk in, queue, are served or give up
- * (components/centre/crowd.tsx), beside the real chats.
  */
 import { LogoMark, Segmented, ThemeToggle, postJson, useApi, useTheme } from "@callverse/shared";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, Cpu, DoorOpen, Mic, Volume2, VolumeX } from "lucide-react";
+import { ArrowLeft, Cpu, DoorOpen, Maximize2, Mic, Minimize2, Volume2, VolumeX } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Toaster, toast } from "sonner";
@@ -38,9 +39,7 @@ import {
 } from "../components/centre/floor";
 import { CentreStyles, Portrait, ROLE, STAFF_LOOK, lookFor, type Look, type Role } from "../components/centre/people";
 import { VisitorPanel } from "../components/centre/VisitorPanel";
-import { CROWD_PRESETS, CrowdLegend, CrowdLayer, TwinBoard, useCrowd } from "../components/centre/crowd";
-import { hhmm } from "../components/LiveFloor";
-import { dayLabel } from "../components/SimpleTwin";
+import { WalkInDialog } from "../components/centre/WalkInDialog";
 
 type Engine = "auto" | "template";
 
@@ -61,6 +60,31 @@ function useEngine() {
     }
   }, [engine]);
   return [engine, setEngine] as const;
+}
+
+/** Full screen (the browser's own mode: no tabs, no address bar), switched by the button or the F key. */
+function useFullScreen() {
+  const [full, setFull] = useState(() => typeof document !== "undefined" && !!document.fullscreenElement);
+  useEffect(() => {
+    const update = () => setFull(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
+  }, []);
+  const toggle = useCallback(() => {
+    const change = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+    change.catch(() => toast.error("This browser did not allow full screen here."));
+  }, []);
+  // The F key, except while typing (a name, a message...).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing = target && (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable);
+      if (!typing && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "f") toggle();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggle]);
+  return { full, toggle, supported: typeof document !== "undefined" && !!document.fullscreenEnabled };
 }
 
 /** The 1600 x 900 stage, scaled to fill the space it has (keeping its shape) and centred. */
@@ -113,20 +137,13 @@ export default function CentrePage() {
   const [tick, setTick] = useState(0);
   const wall = useApi<any>(`/api/centre/advisors?t=${tick}`);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
-  const { scene, connected, stories, speed, setSpeed, voices, announce } = useCentre(refresh);
+  const { scene, connected, stories, speed, setSpeed, voices } = useCentre(refresh);
   const [engine, setEngine] = useEngine();
+  const screen = useFullScreen();
   const [sending, setSending] = useState(false);
+  const [choosing, setChoosing] = useState(false);
   const [history, setHistory] = useState<string | null>(null);
   const [visitor, setVisitor] = useState(false);
-  // The twin crowd: simulated customers of a real day, replayed beside the real chats (components/centre/crowd).
-  const [crowdId, setCrowdId] = useState("off");
-  const preset = CROWD_PRESETS.find((p) => p.id === crowdId) ?? null;
-  const crowd = useCrowd(preset, speed);
-  useEffect(() => {
-    if (preset && crowd.span && crowd.floor)
-      announce(`Twin crowd: simulated customers of ${dayLabel(crowd.floor.date)} from ${hhmm(crowd.span.from)} (no AI). Real chats keep walking in on top.`);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [crowd.span]);
   // A visitor hears the advisor's answers: talking switches the voices on.
   const talk = () => {
     voices.set(true);
@@ -151,17 +168,20 @@ export default function CentrePage() {
   const busy = sending || stories.centre > 0;
   const stats: Record<string, DeskStats> = Object.fromEntries((wall.data?.advisors ?? []).map((a: any) => [a.id, { chats: a.chats, quality: a.quality }]));
 
-  // A random customer from the history walks in; the server runs the chat and streams it on /ws/centre.
-  const send = async () => {
+  // The chosen customer walks in (null: a random one from the history); the server runs the chat and streams
+  // it on /ws/centre. Returns false when the server refused, so the chooser stays open.
+  const walkIn = async (contactId: string | null): Promise<boolean> => {
     setSending(true);
     try {
-      await postJson("/api/centre/arrivals", { mode, seed: Math.floor(Math.random() * 1000) });
+      await postJson("/api/centre/arrivals", { contact_id: contactId, mode, seed: Math.floor(Math.random() * 1000) });
       window.setTimeout(() => setSending(false), 15000); // in case the story never starts
+      return true;
     } catch (error) {
       setSending(false);
       const text = String((error as Error)?.message ?? error);
       if (text.startsWith("409")) toast.info("A customer is already being served: wait until the story ends.");
       else toast.error(`The customer could not come in: ${text}`);
+      return false;
     }
   };
 
@@ -186,17 +206,6 @@ export default function CentrePage() {
           {connected ? "Live" : "Connecting…"}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs text-muted" title="Simulated customers of a real day, from the digital twin (no AI)">
-            Crowd
-            <select className="field h-9 w-auto py-0 pr-8 text-sm" value={crowdId} onChange={(event) => setCrowdId(event.target.value)} aria-label="Twin crowd">
-              <option value="off">Off</option>
-              {CROWD_PRESETS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
           <Segmented
             id="centre-engine"
             size="sm"
@@ -229,9 +238,20 @@ export default function CentrePage() {
           <button className="btn btn-soft" onClick={talk} disabled={visitor || !connected} title="Speak into the microphone as a real customer">
             <Mic size={16} /> Talk as a customer
           </button>
-          <button className="btn btn-primary" onClick={send} disabled={busy || !connected}>
+          <button className="btn btn-primary" onClick={() => setChoosing(true)} disabled={busy || !connected}>
             <DoorOpen size={16} /> {busy ? "A customer is being served…" : "A customer walks in"}
           </button>
+          {screen.supported && (
+            <button
+              className="btn btn-ghost btn-icon"
+              onClick={screen.toggle}
+              aria-pressed={screen.full}
+              title={screen.full ? "Leave full screen (F)" : "Full screen (F)"}
+              aria-label={screen.full ? "Leave full screen" : "Full screen"}
+            >
+              {screen.full ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+            </button>
+          )}
           <ThemeToggle dark={dark} toggle={toggle} />
         </div>
       </header>
@@ -241,8 +261,6 @@ export default function CentrePage() {
         <Stage>
           <Room />
           <KpiWall totals={wall.data?.totals ?? null} />
-          {preset && <TwinBoard crowd={crowd} preset={preset} />}
-          {preset && crowd.view && <CrowdLayer view={crowd.view} />}
           <Manager />
           <ReceptionUnit pose={scene.receptionPose} thinking={!!scene.thinking.reception} />
           {scene.slots.map((advisorId, slot) => (
@@ -251,7 +269,7 @@ export default function CentrePage() {
               slot={slot}
               advisorId={advisorId}
               stats={stats[advisorId] ?? null}
-              busy={(scene.serving[slot] ?? []).length > 0 || (!!preset && !!crowd.view?.busy.has(slot))}
+              busy={(scene.serving[slot] ?? []).length > 0}
               thinking={!!scene.thinking[`desk-${slot}`]}
               tools={scene.deskTools[slot] ?? []}
               onOpen={setHistory}
@@ -299,15 +317,11 @@ export default function CentrePage() {
             </span>
           ))}
         </div>
-        {preset && (
-          <div className="flex justify-center text-xs text-ink2">
-            <CrowdLegend />
-          </div>
-        )}
       </footer>
 
       <AdvisorHistory advisorId={history} desk={history ? scene.slots.indexOf(history) : null} onClose={closeHistory} />
       <AnimatePresence>{visitor && <VisitorPanel mode={mode} onClose={() => setVisitor(false)} />}</AnimatePresence>
+      <WalkInDialog open={choosing} onClose={() => setChoosing(false)} onWalkIn={walkIn} />
     </div>
   );
 }

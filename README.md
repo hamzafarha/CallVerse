@@ -14,6 +14,7 @@ CallVerse is a **multi-agent digital twin of an e-commerce customer-service cent
 - [Run the demo](#run-the-demo)
 - [Configure the models](#configure-the-models)
 - [Deploy with Docker Compose](#deploy-with-docker-compose)
+- [Deploy online (Azure)](#deploy-online-azure)
 - [Reproduce the experiments](#reproduce-the-experiments)
 - [Results and limitations](#results-and-limitations)
 - [Architecture and repository layout](#architecture-and-repository-layout)
@@ -209,6 +210,25 @@ docker compose exec api callverse llm-pull
 ```
 
 This is a local demo deployment. Keep it on a trusted machine/network. The sample Compose password is for local use. A hosted deployment needs TLS, application authentication, role-based access and protected storage.
+
+## Deploy online (Azure)
+
+The public demo is one Docker container, [deploy/huggingface/Dockerfile](deploy/huggingface/Dockerfile). It builds both React apps and serves them with the API from one address on port 7860. On Azure for Students it runs on a small Ubuntu VM, behind a Caddy container that obtains a Let's Encrypt HTTPS certificate. HTTPS is needed for the microphone and for `wss://` WebSockets.
+
+| Path | Content |
+| --- | --- |
+| `/` | Front office |
+| `/back-office/` | Back office |
+| `/api`, `/ws`, `/docs`, `/mcp` | REST API, WebSockets, Swagger, MCP |
+
+Azure for Students does not run cloud image builds (ACR Tasks), so the image is built on the VM. Only the cleaned build folder (about 120 MB compressed) is uploaded. The VM can be created in the Azure Portal, with no local tooling beyond the SSH client included in Windows. [scripts/deploy_azure.py](scripts/deploy_azure.py) then deploys or updates the app over SSH.
+
+```bash
+python scripts/deploy_azure.py --public-key
+python scripts/deploy_azure.py --host NAME.REGION.cloudapp.azure.com --send-openrouter-key
+```
+
+The build folder is made from an explicit list of files ([scripts/deploy_space.py](scripts/deploy_space.py), shared by both deployments). It leaves out `.env`, keys, caches, the raw CSVs, the local live-chat history, the customers created locally and the text previews of the LLM trace. The script stops if it finds a secret or one of those customer names. It pins the key libraries to the local versions (`space/constraints.txt`), so the saved models load with the versions that trained them. The image downloads bge-m3 at build time and checks that it loads offline. Without `OPENROUTER_API_KEY`, or once the free daily quota is used up, the agents answer with their offline templates and rules. The deployment has no login, and visitor data is reset at each deployment, so it is a demo and not a production deployment. `scripts/deploy_space.py` can publish the same container as a Hugging Face Space, which now requires a PRO subscription for Docker Spaces. See [docs/RUN_GUIDE.md](docs/RUN_GUIDE.md#7-put-the-app-online-azure-for-students) for the step-by-step guide.
 
 ## Reproduce the experiments
 

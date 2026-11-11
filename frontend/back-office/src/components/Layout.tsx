@@ -26,6 +26,7 @@ import {
   Cpu,
   Database,
   ExternalLink,
+  Gauge,
   LayoutDashboard,
   Menu,
   Server,
@@ -69,7 +70,14 @@ export const SECTIONS: { title: string; color: string; items: NavItem[] }[] = [
       { to: "/centre", label: "Contact centre (live)", icon: Building2 },
     ],
   },
-  { title: "Serving & MLOps", color: "var(--layer-serve)", items: [{ to: "/mlops", label: "Models & MLOps", icon: Server }] },
+  {
+    title: "Serving & MLOps",
+    color: "var(--layer-serve)",
+    items: [
+      { to: "/mlops", label: "Models & MLOps", icon: Server },
+      { to: "/monitoring", label: "AI monitoring", icon: Gauge },
+    ],
+  },
 ];
 
 /**

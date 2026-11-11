@@ -1,0 +1,18 @@
+\section{Declaration of the use of generative AI tools}
+\label{sec:aiuse}
+
+As required by the assessment rules, we declare the generative AI tools used in this project.
+
+\begin{itemize}
+  \item \textbf{Claude (Anthropic), through Claude Code}, was used as a programming and writing assistant
+        throughout the project: to write and refactor code and tests, to build the web interfaces, to write the
+        documentation and the deployment scripts, and to draft this report from our documentation and result
+        files. The figures of this report are drawn by a script (\code{report/make\_figures.py}) directly from
+        the result tables, and every number comes from those tables or from the project's reports.
+  \item \textbf{Our own responsibility.} We chose the problem, the objectives and the switch rules, made the
+        design decisions, ran the experiments, checked the results and reviewed every section. Every result can
+        be reproduced with the commands of Section~\ref{sec:deployment}.
+  \item \textbf{Language models inside the product} are part of the system studied, not tools used to write it:
+        NVIDIA Nemotron 3.5 and Xing 4.0 (through OpenRouter), SmolLM3-3B and IBM Granite-4.0-1B (local), and,
+        in the first experiments, Qwen2.5 and Llama 3.2. They are described in Section~\ref{sec:llmsetup}.
+\end{itemize}

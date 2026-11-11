@@ -1,0 +1,28 @@
+\section{Conclusion and future work}
+\label{sec:conclusion}
+
+CallVerse shows that forecasting, discrete-event simulation, optimisation, reinforcement learning and
+language-model agents can work together on one business problem: running a customer service centre well.
+The foundation clearly beats its baselines: the forecast lowers the error from 31.6\% to 25.3\%, and the twin
+reproduces queueing theory and the history. On top of it, CP-SAT planning cuts labour cost by 40\% at the
+service target, and testing a plan before a peak cuts understaffed hours by 60--84\%. Routing and AI answering
+bring measurable gains, but our own switch rules sent a tuned rule and a hybrid advisor (the rules engine
+decides, the LLM writes) to production, while the pure-AI versions remain research tracks. The automatic judge
+is not yet trusted, and we say so. The application, from the customer portal to the live contact-centre view
+and the monitoring of every AI component, is tested, documented and packaged as one container, ready for online deployment.
+
+\paragraph{Future work.}
+\begin{itemize}
+  \item \textbf{Real data}: calibrate contact rates, handle times and patience on a partner's logs, and turn the
+        fidelity checks into a real calibration.
+  \item \textbf{Human labels}: grade 60 real conversations to calibrate the judge, then try a stronger hosted
+        judge from another model family.
+  \item \textbf{Routing}: train PPO on multi-day episodes matching the peak scenarios, and compare it with the
+        skill score behind an A/B test.
+  \item \textbf{Agents}: re-run the paired DSO2 batch on the hosted models with a larger sample, and widen the
+        LLM's own tool choices step by step, each with its measurement.
+  \item \textbf{Monitoring}: add a chat inspector timeline, drift detection on the incoming intents, a safety
+        test set, and a one-click regression run before each deployment.
+  \item \textbf{Product}: more channels in the twin (voice, e-mail), connectors to help-desk tools, and
+        authentication for the online application.
+\end{itemize}

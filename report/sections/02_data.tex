@@ -1,0 +1,104 @@
+\section{Data}
+\label{sec:data}
+
+\subsection{Sources}
+No public contact-centre logs exist, so we combine two public datasets with real behaviour and a documented
+generation step (Table~\ref{tab:sources}).
+\begin{itemize}
+  \item \textbf{Olist Brazilian e-commerce dataset}~\cite{olist}: 99,441 real, anonymised orders placed
+        between 4 September 2016 and 17 October 2018, with items, payments, reviews, customers, sellers,
+        products and every delivery timestamp (purchase, approval, carrier hand-off, delivery, estimate).
+        Licence CC BY-NC-SA 4.0.
+  \item \textbf{Bitext retail e-commerce customer-service dataset}~\cite{bitext}: 44,884 customer messages
+        labelled with 46 intents (a customer's goal, such as \code{track\_order}). We keep the
+        \textbf{17 intents linked to an order}, grouped into four families: \emph{where is my order}
+        (wismo, 4 intents), \emph{cancel/refund} (3), \emph{after delivery} (7) and \emph{order admin} (3).
+        Licence CDLA-Sharing 1.0.
+  \item \textbf{Knowledge base}: 10 policy documents written for the project (refunds, returns, delivery
+        delays, payments, invoices, an advisor playbook...), split into 58 sections.
+\end{itemize}
+
+\begin{table}[h]
+\centering\small
+\caption{Data used by CallVerse (SQLite store and processed tables).}
+\label{tab:sources}
+\begin{tabularx}{\textwidth}{@{}lrY@{}}
+\toprule
+\textbf{Table} & \textbf{Rows} & \textbf{Origin and use} \\
+\midrule
+Orders / customers & 99,441 & Olist; order situation, delivery dates, the advisor's order lookup \\
+Order items / payments & 112,650 / 103,886 & Olist; refund amounts, payment anomalies \\
+Products / sellers & 32,951 / 3,095 & Olist; product and seller context \\
+Reviews & 99,224 & Olist; satisfaction signal during exploration \\
+Contacts / tickets & 9,179 / 9,179 & Generated from the orders' situations (Section~\ref{sec:synthetic}) \\
+Chat messages & 60,837 & Generated, with the wording of real Bitext messages \\
+Knowledge-base sections & 58 & 10 policy documents, embedded with bge-m3 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Exploration and quality validation}
+Exploration (notebooks 01--02) confirmed that the orders are suitable: 97.0\% are delivered, 1.1\% shipped,
+0.6\% cancelled and 0.6\% unavailable. All orders have a purchase time and an estimated delivery date; the
+actual delivery time is missing for 2,965 orders, the carrier hand-off for 1,783 and the approval for 160,
+which matches their statuses (an undelivered order has no delivery time). Review comments are often empty
+(58.7\% have no message), and 610 products (1.9\%) have no category.
+
+The quality validation found five kinds of contradictions (Table~\ref{tab:quality}). One correction matters for
+the whole project: the estimated delivery dates are stored at midnight, so comparing them with a delivery
+\emph{timestamp} counted orders delivered later on the same day as ``late''. Measured by calendar date,
+\textbf{6,535 of 96,476 delivered orders (6.8\%) are late}, not the 7,826 reported in a first version.
+
+\begin{table}[h]
+\centering\small
+\caption{Data quality findings. Each anomaly becomes a Boolean flag column; no row is deleted or imputed.}
+\label{tab:quality}
+\begin{tabularx}{0.8\textwidth}{@{}Yr@{}}
+\toprule
+\textbf{Finding (flag column)} & \textbf{Orders} \\
+\midrule
+Carrier hand-off before payment approval & 1,359 \\
+Delivery before carrier hand-off & 23 \\
+Review created before the purchase date (40 of them reuse a review id) & 64 \\
+Order with more than one review & 547 \\
+Payment total differs from items + freight by more than 1 BRL & 249 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Cleaning and feature preparation}
+Cleaning (notebooks 03--04) parses types and \emph{flags} anomalies rather than deleting them, so record
+counts are preserved and no value is invented by imputation. It produces an \textbf{analytical order table of
+77 features} (delivery delay, lateness, payment anomalies, review score, product and seller context...) and a
+daily activity table (orders purchased, handed to carriers, delivered, delivered late). Six tables that later
+layers depend on are protected by \emph{data contracts}: Pandera schemas~\cite{pandera} check keys, types,
+allowed values and ranges (\code{callverse validate}); all pass.
+
+\subsection{Synthetic contacts, tickets and chats}
+\label{sec:synthetic}
+Real contact logs are private, so contacts are generated from the real orders with explicit, documented
+assumptions (\code{configs/data.yaml}, notebooks 05--08 and 12):
+\begin{enumerate}
+  \item Each order is placed in a \emph{situation}: never delivered and overdue, delivered late, cancelled,
+        problem after delivery, payment anomaly, or uneventful.
+  \item Each situation has a \emph{contact probability} (for example, 35\% of late deliveries contact
+        support), an \emph{intent mix}, and a \emph{timing rule} relative to an order event (a delay-related
+        contact comes after the estimated date has passed). Contact hours follow the hour-of-day profile of
+        Olist purchases, and a promotion calendar adds known retail events.
+  \item The customer's opening message is a real Bitext message of the chosen intent.
+\end{enumerate}
+The result is \textbf{9,179 contacts} from January 2017 to August 2018. We cross-checked the volume against a
+public benchmark (``where is my order'' contacts at 3--10\% of orders). Each contact then becomes a ticket with
+an outcome decided by the company rules (resolved in the chat 53.4\%, follow-up needed 43.4\%, escalated
+3.2\%), a handle time drawn from the simulation's assumptions, and a satisfaction survey answered 30\% of the
+time (mean 3.93/5). The \textbf{60,837 chat messages} use approved answer templates. All generated records carry
+an \code{is\_synthetic} flag. Generation is seeded, so it is reproducible.
+
+\subsection{Ethics, licences and confidentiality}
+Olist identifiers are already anonymised, and no personal data is collected. Synthetic records are flagged
+and the rates behind them are written in one configuration file, so they can be replaced by a client's real
+logs without code changes. We respect the licences: non-commercial, share-alike use of Olist (CC BY-NC-SA 4.0)
+and Bitext (CDLA-Sharing 1.0). The advisor never asks for card numbers or passwords (a prompt rule and a
+checklist item), customers are told they talk to an AI, and staffing recommendations remain human decisions.
+For the public deployment, a script removes the customers we created while testing (our own names) and the
+transcripts of our test chats before anything leaves the laptop (Section~\ref{sec:deployment}).

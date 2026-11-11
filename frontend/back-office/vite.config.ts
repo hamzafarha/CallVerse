@@ -10,6 +10,9 @@ const api = process.env.VITE_API_TARGET ?? "http://127.0.0.1:8000";
 
 export default defineConfig({
   plugins: [react()],
+  // Where the app lives on the server: "/" in development; "/back-office/" online, where one address serves
+  // both apps (BACK_OFFICE_BASE is set by the Hugging Face Space build, deploy/huggingface/Dockerfile).
+  base: process.env.BACK_OFFICE_BASE ?? "/",
   // Allow bigger JavaScript files before warning (the chart and animation libraries are large).
   build: { chunkSizeWarningLimit: 1200 },
   server: {

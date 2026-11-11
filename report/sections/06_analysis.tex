@@ -1,0 +1,58 @@
+\section{Critical analysis and limitations}
+\label{sec:analysis}
+
+\paragraph{What the evidence supports.} The strongest results are the ones with the most data and the simplest
+claims: the forecast beats its baseline over 46 origins, the engine reproduces queueing theory, and planning
+and testing first show large, significant effects over 10 seeds. Where the AI ideas did not meet their own
+rule (routing in peak weeks, the judge), the project shipped the backup or a hybrid instead of hiding the
+result. We see this discipline (a baseline, a confidence interval and a fallback for every claim) as the main
+methodological result.
+
+\paragraph{1. Synthetic contacts.} Contacts, tickets and chats are generated from real orders with assumed
+rates, handle times and patience. The twin's agreement with the ``history'' is therefore partly circular: it
+shows consistency with its inputs, not with a real centre. The euro amounts depend on our cost assumptions
+(€12 per hour, €8 per lost customer); this is why we report break-even values. The pipeline accepts a client's
+real logs unchanged, and the fidelity checks would then become a real calibration.
+
+\paragraph{2. Reinforcement learning does not transfer.} PPO was trained on single busy days, but peak weeks
+carry a backlog over several days and use planned overtime. It wins on the conditions it was trained for and
+loses its mean-wait advantage elsewhere. Its policy is also hard to explain to a planner, while the skill score
+has four readable weights. Training on multi-day episodes that match the scenarios is the obvious next step.
+
+\paragraph{3. Small language models invent facts.} The 3B models invented order ids, narrated tool calls they
+never made, and the simulated customer sometimes swapped roles with the advisor. Our answer was architectural: \emph{the rules engine
+decides, the LLM writes}, tool gating, and safety nets. This works (12/12 verified actions), but it also means
+that the system is mostly a workflow: only 13 of the 145 tool calls with a recorded caller were chosen by the
+LLM. Larger hosted models call tools correctly, so autonomy can grow as models improve, but every new
+autonomous step needs its own measurement.
+
+\paragraph{4. The automatic judge is not trusted.} Kappa stays below 0.4 for both judges, and the judge's score
+correlates only weakly with the customer's (0.21). Part of the problem is the judge (a 3B model), part is the
+labels (proxies from the generator). The calibration code switches to real human grades as soon as 20 exist
+(target 60); collecting them is the main open item, and until then the deterministic action check is the
+quality signal.
+
+\paragraph{5. The DSO2 sample is small and dated.} The paired conversation batch covers 12 customers, too few
+for tight intervals, and it was run with our first local models (Qwen2.5-3B, Llama-3.2-3B), which the project
+no longer uses. Re-running it on the hosted models is limited by the free tier (50 requests per day, while one
+conversation takes a few dozen calls). The monitoring numbers cover the current models, but not as a paired
+experiment.
+
+\paragraph{6. Dependence on a free hosted service.} OpenRouter's free models are fast and cost nothing, but they
+are rate-limited, their availability varies, and, unlike local models, the conversation text leaves the
+machine. Our three-tier design (hosted, local, templates) keeps the twin working when the quota runs out, at
+the price of simpler answers.
+
+\paragraph{7. Scope of the twin.} One channel (chat), one queue per family, four problem families and Brazilian
+e-commerce only. Real centres mix voice, e-mail and chat and route by language and seniority. The phone page
+of the application is a live demonstration, not a channel modelled in the simulation.
+
+\paragraph{8. Metrics have limits too.} Our faithfulness measure is an embedding similarity, a cheap local
+stand-in for an LLM-graded RAGAS; it scores templates low only because formatted dates do not match raw JSON
+fields. In a normal week, a hand-tuned fixed schedule costs as little as CP-SAT, because the Olist hourly
+profile is flat: CP-SAT's advantage is automation and guarantees, not a lower cost in every week.
+
+\paragraph{What we would do differently.} Collect a small set of real, human-labelled chats early, to calibrate
+the judge before building on it; decide the LLM provider earlier, since the move from local to hosted models
+came late and left the DSO2 batch on old models; and train the RL router on the same multi-day episodes that
+the evaluation uses.
